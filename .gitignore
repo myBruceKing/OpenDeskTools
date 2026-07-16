@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Frontend build output and caches
+dist/
+dist-ssr/
+.vite/
+coverage/
+
+# Rust and Tauri build output
+target/
+src-tauri/target/
+src-tauri/gen/schemas/
+*.pdb
+
+# Packaged desktop artifacts copied outside target/
+*.msi
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+*.zip
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local Codex/agent working material and development references
+.codex/
+.agents/
+AGENTS.md
+docs/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
