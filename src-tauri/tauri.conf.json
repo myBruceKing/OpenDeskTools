@@ -18,7 +18,8 @@
         "height": 760,
         "minWidth": 980,
         "minHeight": 680,
-        "center": true
+        "center": true,
+        "visible": false
       }
     ],
     "security": {
