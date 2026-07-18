@@ -1,7 +1,3 @@
-import edgeIcon from "../assets/app-icons/edge.png";
-import explorerIcon from "../assets/app-icons/explorer.png";
-import powershellIcon from "../assets/app-icons/powershell.png";
-import terminalIcon from "../assets/app-icons/terminal.png";
 import { useMemo, useSyncExternalStore } from "react";
 
 export type QuickLaunchApp = {
@@ -11,43 +7,9 @@ export type QuickLaunchApp = {
   iconSrc?: string | null;
 };
 
-export const PINNED_QUICK_LAUNCH_APPS: QuickLaunchApp[] = [
-  { name: "Cursor", path: "C:\\Users\\Public\\Desktop\\Cursor.lnk" },
-  { name: "Visual Studio Code", path: "C:\\Users\\Public\\Desktop\\Visual Studio Code.lnk" },
-  {
-    name: "终端",
-    path: "C:\\Users\\guo\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Terminal.lnk",
-    iconSrc: terminalIcon
-  },
-  { name: "文件资源管理器", path: "C:\\Windows\\explorer.exe", iconSrc: explorerIcon },
-  {
-    name: "Microsoft Edge",
-    path: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    iconSrc: edgeIcon
-  },
-  { name: "微信", path: "C:\\Users\\guo\\Desktop\\微信.lnk" }
-];
+export const PINNED_QUICK_LAUNCH_APPS: QuickLaunchApp[] = [];
 
-export const DISCOVERED_QUICK_LAUNCH_APPS: QuickLaunchApp[] = [
-  { name: "Notepad++", path: "C:\\Program Files\\Notepad++\\notepad++.exe", source: "桌面" },
-  {
-    name: "PowerShell",
-    path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-    source: "桌面",
-    iconSrc: powershellIcon
-  },
-  {
-    name: "GitHub Desktop",
-    path: "C:\\Users\\guo\\AppData\\Local\\GitHubDesktop\\GitHubDesktop.exe",
-    source: "开始菜单"
-  },
-  { name: "Snipaste", path: "C:\\Program Files\\Snipaste\\Snipaste.exe", source: "桌面" },
-  {
-    name: "Obsidian",
-    path: "C:\\Users\\guo\\AppData\\Local\\Obsidian\\Obsidian.exe",
-    source: "开始菜单"
-  }
-];
+export const DISCOVERED_QUICK_LAUNCH_APPS: QuickLaunchApp[] = [];
 
 export function toToolMenuPreviewItems(apps: QuickLaunchApp[]) {
   return apps.slice(0, 6).map((app) => ({
@@ -58,6 +20,7 @@ export function toToolMenuPreviewItems(apps: QuickLaunchApp[]) {
 }
 
 type QuickLaunchState = {
+  sourceAvailable: boolean;
   pinnedApps: QuickLaunchApp[];
   discoveredApps: QuickLaunchApp[];
   visibleAppNames: Set<string>;
@@ -76,6 +39,7 @@ export type QuickLaunchViewModel = QuickLaunchState & {
 };
 
 let quickLaunchState: QuickLaunchState = {
+  sourceAvailable: false,
   pinnedApps: PINNED_QUICK_LAUNCH_APPS,
   discoveredApps: DISCOVERED_QUICK_LAUNCH_APPS,
   visibleAppNames: new Set(PINNED_QUICK_LAUNCH_APPS.map((app) => app.name))
@@ -127,6 +91,10 @@ const quickLaunchActions: QuickLaunchActions = {
     }
 
     updateQuickLaunchState((current) => {
+      if (!current.sourceAvailable) {
+        return current;
+      }
+
       if (current.pinnedApps.some((pinnedApp) => pinnedApp.name === nextApp.name)) {
         return current;
       }
@@ -142,13 +110,21 @@ const quickLaunchActions: QuickLaunchActions = {
     });
   },
   reorderPinnedApp(activeName, overName) {
-    updateQuickLaunchState((current) => ({
-      ...current,
-      pinnedApps: reorderApps(current.pinnedApps, activeName, overName)
-    }));
+    updateQuickLaunchState((current) =>
+      current.sourceAvailable
+        ? {
+            ...current,
+            pinnedApps: reorderApps(current.pinnedApps, activeName, overName)
+          }
+        : current
+    );
   },
   setAppVisible(name, visible) {
     updateQuickLaunchState((current) => {
+      if (!current.sourceAvailable) {
+        return current;
+      }
+
       const visibleAppNames = new Set(current.visibleAppNames);
 
       if (visible) {

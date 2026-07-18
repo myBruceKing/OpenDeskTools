@@ -78,6 +78,17 @@
   outline: 0;
 }
 
+.emptyHistory {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  text-align: center;
+}
+
 .historyRow {
   position: relative;
   min-height: clamp(60px, 6.6406vw, 72px);
@@ -120,8 +131,7 @@
   color: #1f6ecf;
 }
 
-.itemIconimage,
-.itemIconsnipaste {
+.itemIconimage {
   background: #9ccfe8;
   color: #2a5c7d;
 }

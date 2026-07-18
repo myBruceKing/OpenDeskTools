@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
 import { ListRowDescription, ListRowTitle } from "../../components/patterns/ListRow";
 import { Toggle } from "../../components/primitives/SelectionControl";
 import styles from "./SettingsPages.module.css";
@@ -16,24 +15,23 @@ export function FieldRow({ label, children }: { label: string; children: ReactNo
 export function SwitchRow({
   title,
   description,
-  checked = true,
-  disabled = false
+  checked = null,
+  disabled = false,
+  onChange
 }: {
   title: string;
   description: string;
   checked?: boolean | null;
   disabled?: boolean;
+  onChange?: (checked: boolean) => void;
 }) {
-  const [value, setValue] = useState(checked === null ? false : checked);
-  const toggleValue = checked === null ? null : value;
-
   return (
     <div className={styles.switchRow}>
       <div>
         <ListRowTitle>{title}</ListRowTitle>
         <ListRowDescription>{description}</ListRowDescription>
       </div>
-      <Toggle checked={toggleValue} label={title} disabled={disabled || checked === null} onChange={setValue} />
+      <Toggle checked={checked} label={title} disabled={disabled || checked === null} onChange={onChange} />
     </div>
   );
 }

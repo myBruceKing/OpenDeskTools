@@ -15,8 +15,10 @@ import type { KeyboardEvent } from "react";
 import type {
   ClipboardFilter,
   ClipboardItemViewModel,
+  ClipboardMonitoringState,
   ClipboardPageViewModel
 } from "../../app/clipboardModel";
+import { getClipboardMonitoringPresentation } from "../../app/clipboardModel";
 import { SplitPane, ThreeColumn } from "../../components/layout/TwoColumn";
 import { TagBadge } from "../../components/primitives/Badge";
 import { Button } from "../../components/primitives/Button";
@@ -45,7 +47,6 @@ const iconByTone = {
   image: Image24Regular,
   excel: DocumentTable24Regular,
   word: DocumentText24Regular,
-  snipaste: Image24Regular
 } as const;
 
 function kindLabel(kind: ClipboardItemViewModel["kind"]) {
@@ -115,16 +116,20 @@ function HistoryRow({
 function Toolbar({
   query,
   filter,
+  monitoring,
   canClearHistory,
   onQueryChange,
   onFilterChange
 }: {
   query: string;
   filter: ClipboardFilter;
+  monitoring: ClipboardMonitoringState;
   canClearHistory: boolean;
   onQueryChange: (value: string) => void;
   onFilterChange: (value: ClipboardFilter) => void;
 }) {
+  const monitoringPresentation = getClipboardMonitoringPresentation(monitoring);
+
   return (
     <div className={styles.toolbar}>
       <SearchField
@@ -138,8 +143,12 @@ function Toolbar({
       />
       <SegmentedControl label="剪贴板筛选" value={filter} options={filterOptions} onChange={onFilterChange} />
       <div className={styles.monitoring}>
-        <span>监控已暂停</span>
-        <Toggle checked={false} label="剪贴板监控" disabled />
+        <span>{monitoringPresentation.label}</span>
+        <Toggle
+          checked={monitoringPresentation.checked}
+          label="剪贴板监控"
+          disabled={monitoringPresentation.disabled}
+        />
       </div>
       <span className={styles.toolbarDivider} aria-hidden="true" />
       <Button
@@ -234,18 +243,22 @@ function HistoryPanel({
         tabIndex={0}
         onKeyDown={handleKeyDown}
       >
-        {items.map((item) => (
-          <HistoryRow
-            item={item}
-            selected={item.id === selectedId}
-            key={item.id}
-            onSelect={() => {
-              onSelect(item.id);
-              listRef.current?.focus();
-            }}
-            onToggleFavorite={() => onToggleFavorite(item.id)}
-          />
-        ))}
+        {items.length === 0 ? (
+          <div className={styles.emptyHistory}>暂无剪贴板历史</div>
+        ) : (
+          items.map((item) => (
+            <HistoryRow
+              item={item}
+              selected={item.id === selectedId}
+              key={item.id}
+              onSelect={() => {
+                onSelect(item.id);
+                listRef.current?.focus();
+              }}
+              onToggleFavorite={() => onToggleFavorite(item.id)}
+            />
+          ))
+        )}
       </List>
     </Section>
   );
@@ -324,6 +337,10 @@ function DetailsPanel({
 }
 
 function SettingsPanel({ viewModel }: { viewModel: ClipboardPageViewModel }) {
+  const unavailableValue = "—";
+  const retentionDays = viewModel.settings.retentionDays ?? unavailableValue;
+  const duplicateStrategy = viewModel.settings.duplicateStrategy ?? unavailableValue;
+
   return (
     <Section className={styles.settingsPanel}>
       <ThreeColumn className={styles.settingsGrid} columns="minmax(0, 0.9fr) minmax(0, 1.15fr) minmax(0, 1.7fr)">
@@ -331,20 +348,24 @@ function SettingsPanel({ viewModel }: { viewModel: ClipboardPageViewModel }) {
           <SectionTitle>剪贴板设置</SectionTitle>
           <label className={styles.formRow}>
             <span>保留天数</span>
-            <SelectField value={viewModel.settings.retentionDays} disabled>
-              <option>{viewModel.settings.retentionDays}</option>
+            <SelectField value={retentionDays} disabled>
+              <option>{retentionDays}</option>
             </SelectField>
           </label>
           <label className={styles.formRow}>
             <span>最大历史数量</span>
-            <TextField value={viewModel.settings.maxItems} unit="项" disabled />
+            <TextField
+              value={viewModel.settings.maxItems ?? unavailableValue}
+              unit={viewModel.settings.maxItems === null ? undefined : "项"}
+              disabled
+            />
           </label>
         </div>
         <div className={styles.settingsColumn}>
           <label className={styles.formRowWide}>
             <span>忽略以下应用（进程名，逗号分隔）</span>
             <span className={styles.inlineField}>
-              <TextField value={viewModel.settings.ignoredApps} disabled />
+              <TextField value={viewModel.settings.ignoredApps ?? unavailableValue} disabled />
               <Button size="compact" disabled>
                 添加
               </Button>
@@ -352,8 +373,8 @@ function SettingsPanel({ viewModel }: { viewModel: ClipboardPageViewModel }) {
           </label>
           <label className={styles.formRowWide}>
             <span>重复内容处理</span>
-            <SelectField value={viewModel.settings.duplicateStrategy} disabled>
-              <option>{viewModel.settings.duplicateStrategy}</option>
+            <SelectField value={duplicateStrategy} disabled>
+              <option>{duplicateStrategy}</option>
             </SelectField>
           </label>
         </div>
@@ -363,7 +384,12 @@ function SettingsPanel({ viewModel }: { viewModel: ClipboardPageViewModel }) {
               敏感内容排除规则（每行一个关键词或正则）
               <HintTooltip content="示例：密码、密钥、token、正则表达式等" />
             </span>
-            <TextAreaField className={styles.sensitiveRulesArea} value={viewModel.settings.sensitiveRules} disabled />
+            <TextAreaField
+              className={styles.sensitiveRulesArea}
+              value={viewModel.settings.sensitiveRules ?? ""}
+              placeholder={viewModel.settings.sensitiveRules === null ? unavailableValue : undefined}
+              disabled
+            />
           </label>
         </div>
       </ThreeColumn>
@@ -424,6 +450,7 @@ export function ClipboardPage({ viewModel }: ClipboardPageProps) {
       <Toolbar
         query={query}
         filter={filter}
+        monitoring={viewModel.monitoring}
         canClearHistory={viewModel.actions.canClearHistory}
         onQueryChange={setQuery}
         onFilterChange={setFilter}

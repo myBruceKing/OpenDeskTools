@@ -4,10 +4,11 @@ import {
   Clock32Regular,
   Desktop32Regular
 } from "@fluentui/react-icons";
-import type {
-  OverviewHotkeyViewModel,
-  OverviewViewModel,
-  ServiceState
+import {
+  getToolWheelShortcutLabel,
+  type OverviewHotkeyViewModel,
+  type OverviewViewModel,
+  type ServiceState
 } from "../../app/overviewModel";
 import { useQuickLaunchViewModel } from "../../app/quickLaunchModel";
 import { PageScaffold } from "../../components/layout/PageScaffold";
@@ -89,15 +90,15 @@ function HotkeyPanel({ hotkeys }: { hotkeys: OverviewHotkeyViewModel[] }) {
   );
 }
 
-function ToolWheelPanel() {
+function ToolWheelPanel({ hotkeys }: { hotkeys: OverviewHotkeyViewModel[] }) {
   const { previewItems } = useQuickLaunchViewModel();
 
   return (
     <Section
       className={styles.toolPanel}
       title="工具盘预览"
-      subtitle="按住 Alt + Space 呼出"
-      action={<HintTooltip content="这是工具盘预览。真实顺序会跟随快速启动页面里的固定项变化。" />}
+      subtitle={getToolWheelShortcutLabel(hotkeys)}
+      action={<HintTooltip content="这是工具盘预览。应用服务接入后，顺序会跟随快速启动页面里的固定项变化。" />}
       aria-label="工具盘预览"
     >
       <div className={styles.toolPreviewBody}>
@@ -179,7 +180,7 @@ export function OverviewPage({ viewModel }: OverviewPageProps) {
       <Summary viewModel={viewModel} />
       <TwoColumn className={styles.middle} sideWidth="minmax(270px, 34%)">
         <HotkeyPanel hotkeys={viewModel.hotkeys} />
-        <ToolWheelPanel />
+        <ToolWheelPanel hotkeys={viewModel.hotkeys} />
       </TwoColumn>
       <StatsPanel statistics={viewModel.statistics} />
     </PageScaffold>

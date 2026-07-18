@@ -9,11 +9,10 @@ import { QuickLaunchPage } from "../pages/quick-launch/QuickLaunchPage";
 import { ThemePage } from "../pages/theme/ThemePage";
 import { overviewClient } from "./overviewClient";
 import {
-  createOverviewViewModel,
   EMPTY_OVERVIEW_VIEW_MODEL,
   type OverviewViewModel
 } from "./overviewModel";
-import { CLIPBOARD_PREVIEW_DATA, OVERVIEW_PREVIEW_DATA } from "./previewData";
+import { EMPTY_CLIPBOARD_VIEW_MODEL } from "./clipboardModel";
 import { useDesktopWebViewGuards } from "./useDesktopWebViewGuards";
 
 const routeIds: AppRoute[] = ["overview", "hotkeys", "quickLaunch", "clipboard", "captureQr", "floatingTheme", "general"];
@@ -40,13 +39,8 @@ function App() {
       })
       .catch((error: unknown) => {
         console.error("Unable to load the overview view model", error);
-        if (active && import.meta.env.DEV) {
-          setOverview(
-            createOverviewViewModel({
-              ...OVERVIEW_PREVIEW_DATA,
-              serviceState: "running"
-            })
-          );
+        if (active) {
+          setOverview(EMPTY_OVERVIEW_VIEW_MODEL);
         }
       });
 
@@ -65,9 +59,9 @@ function App() {
   const pageContent = (() => {
     switch (page) {
       case "clipboard":
-        return <ClipboardPage viewModel={CLIPBOARD_PREVIEW_DATA} />;
+        return <ClipboardPage viewModel={EMPTY_CLIPBOARD_VIEW_MODEL} />;
       case "hotkeys":
-        return <HotkeysPage />;
+        return <HotkeysPage hotkeys={overview.hotkeys} />;
       case "quickLaunch":
         return <QuickLaunchPage />;
       case "captureQr":
@@ -75,7 +69,7 @@ function App() {
       case "floatingTheme":
         return <ThemePage />;
       case "general":
-        return <GeneralPage />;
+        return <GeneralPage version={overview.version} startupEnabled={overview.startupEnabled} />;
       case "overview":
       default:
         return <OverviewPage viewModel={overview} />;

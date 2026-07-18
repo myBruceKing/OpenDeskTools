@@ -1,13 +1,13 @@
-import type { OverviewBackendSnapshot } from "./overviewModel";
-import type { ClipboardPageViewModel } from "./clipboardModel";
-import clipboardPreviewLandscape from "../assets/clipboard-preview-landscape.svg";
-import clipboardPreviewWindow from "../assets/clipboard-preview-window.svg";
+import clipboardPreviewLandscape from "../../src/assets/clipboard-preview-landscape.svg";
+import clipboardPreviewWindow from "../../src/assets/clipboard-preview-window.svg";
+import type { ClipboardPageViewModel } from "../../src/app/clipboardModel";
+import type { OverviewBackendSnapshot } from "../../src/app/overviewModel";
 
-export const OVERVIEW_PREVIEW_DATA: Pick<
-  OverviewBackendSnapshot,
-  "version" | "startupEnabled" | "hotkeys" | "statistics"
-> = {
+// This module is intentionally outside src/. Visual harnesses and tests may
+// import it; production application modules must never depend on it.
+export const OVERVIEW_PREVIEW_DATA: OverviewBackendSnapshot = {
   version: "1.3.0",
+  serviceState: "running",
   startupEnabled: true,
   hotkeys: [
     { id: "capture", binding: "F1", enabled: true, state: "normal", detail: null },
@@ -125,7 +125,7 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
       favorite: false,
       locked: false,
       privacy: "normal",
-      iconTone: "snipaste"
+      iconTone: "image"
     }
   ],
   settings: {

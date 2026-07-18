@@ -18,16 +18,30 @@ export type ClipboardItemViewModel = {
   favorite: boolean;
   locked: boolean;
   privacy: ClipboardPrivacy;
-  iconTone: "note" | "chrome" | "image" | "excel" | "word" | "snipaste";
+  iconTone: "note" | "chrome" | "image" | "excel" | "word";
 };
 
 export type ClipboardSettingsViewModel = {
-  retentionDays: string;
-  maxItems: string;
-  ignoredApps: string;
-  duplicateStrategy: string;
-  sensitiveRules: string;
+  retentionDays: string | null;
+  maxItems: string | null;
+  ignoredApps: string | null;
+  duplicateStrategy: string | null;
+  sensitiveRules: string | null;
 };
+
+export type ClipboardMonitoringState = "paused" | "running" | "unavailable";
+
+export function getClipboardMonitoringPresentation(monitoring: ClipboardMonitoringState) {
+  switch (monitoring) {
+    case "running":
+      return { label: "监控运行中", checked: true, disabled: true } as const;
+    case "paused":
+      return { label: "监控已暂停", checked: false, disabled: true } as const;
+    case "unavailable":
+    default:
+      return { label: "监控不可用", checked: null, disabled: true } as const;
+  }
+}
 
 export type ClipboardActionAvailability = {
   canCopy: boolean;
@@ -39,7 +53,7 @@ export type ClipboardActionAvailability = {
 };
 
 export type ClipboardPageViewModel = {
-  monitoring: "paused" | "running" | "unavailable";
+  monitoring: ClipboardMonitoringState;
   totalCount: number;
   items: ClipboardItemViewModel[];
   settings: ClipboardSettingsViewModel;
@@ -51,16 +65,16 @@ export const EMPTY_CLIPBOARD_VIEW_MODEL: ClipboardPageViewModel = {
   totalCount: 0,
   items: [],
   settings: {
-    retentionDays: "30 天",
-    maxItems: "1000",
-    ignoredApps: "",
-    duplicateStrategy: "合并（保留最新）",
-    sensitiveRules: ""
+    retentionDays: null,
+    maxItems: null,
+    ignoredApps: null,
+    duplicateStrategy: null,
+    sensitiveRules: null
   },
   actions: {
     canCopy: false,
     canTypeIntoTarget: false,
-    canFavorite: true,
+    canFavorite: false,
     canDelete: false,
     canOpenSource: false,
     canClearHistory: false

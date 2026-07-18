@@ -54,6 +54,11 @@ export type OverviewViewModel = {
   sourceAvailable: boolean;
 };
 
+export function getToolWheelShortcutLabel(hotkeys: OverviewHotkeyViewModel[]) {
+  const binding = hotkeys.find((hotkey) => hotkey.id === "toolWheel")?.binding?.trim();
+  return binding ? `${binding} 呼出` : "快捷键服务未接入";
+}
+
 const EMPTY_STATISTICS: OverviewViewModel["statistics"] = {
   todayTriggers: null,
   weekTriggers: null,
@@ -64,24 +69,25 @@ const EMPTY_STATISTICS: OverviewViewModel["statistics"] = {
 export function createOverviewViewModel(
   snapshot: OverviewBackendSnapshot | null
 ): OverviewViewModel {
-  const hotkeysById = new Map(snapshot?.hotkeys?.map((hotkey) => [hotkey.id, hotkey]));
+  const hotkeysById = snapshot?.hotkeys
+    ? new Map(snapshot.hotkeys.map((hotkey) => [hotkey.id, hotkey]))
+    : null;
 
   return {
     serviceState: snapshot?.serviceState ?? "unknown",
     startupEnabled: snapshot?.startupEnabled ?? null,
     version: snapshot?.version ?? null,
     hotkeys: GLOBAL_HOTKEY_DEFINITIONS.map((presentation) => {
-      const runtime = hotkeysById.get(presentation.id);
-      const fallbackConflict = presentation.id === "clipboardPanel";
+      const runtime = hotkeysById?.get(presentation.id);
 
       return {
         id: presentation.id as OverviewHotkeyId,
         title: presentation.title,
         description: presentation.description,
-        binding: runtime?.binding ?? presentation.defaultBinding,
-        enabled: runtime?.enabled ?? !fallbackConflict,
-        state: runtime?.state ?? (fallbackConflict ? "conflict" : "normal"),
-        detail: runtime?.detail ?? (fallbackConflict ? "与系统快捷键冲突" : null)
+        binding: runtime?.binding ?? null,
+        enabled: runtime?.enabled ?? null,
+        state: runtime?.state ?? "unavailable",
+        detail: runtime?.detail ?? null
       };
     }),
     statistics: snapshot?.statistics ?? EMPTY_STATISTICS,

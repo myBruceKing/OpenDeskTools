@@ -7,6 +7,7 @@
     "check:node": "node scripts/check-node.mjs",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -20,10 +21,12 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
+    "@types/node": "^26.1.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.6.3",
-    "vite": "^6.0.1"
+    "vite": "^6.0.1",
+    "vitest": "^4.1.10"
   }
 }

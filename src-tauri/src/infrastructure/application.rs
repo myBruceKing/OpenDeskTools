@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager, Runtime};
+use thiserror::Error;
+
+use super::storage::{StorageError, StorageService};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplicationStatus {
@@ -14,15 +17,21 @@ pub enum StartupMode {
 
 #[derive(Debug)]
 pub struct ApplicationRuntime {
-    // Resolved once through Tauri and retained as the future storage root.
-    #[allow(dead_code)]
-    app_data_dir: PathBuf,
+    storage: StorageService,
+}
+
+#[derive(Debug, Error)]
+pub enum ApplicationRuntimeError {
+    #[error("failed to resolve the application data directory: {0}")]
+    AppDataDirectory(#[from] tauri::Error),
+    #[error("failed to initialize application storage: {0}")]
+    Storage(#[from] StorageError),
 }
 
 impl ApplicationRuntime {
-    pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<Self, tauri::Error> {
+    pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<Self, ApplicationRuntimeError> {
         let app_data_dir = app.path().app_data_dir()?;
-        Ok(Self::from_app_data_dir(app_data_dir))
+        Self::from_app_data_dir(app_data_dir)
     }
 
     pub fn status(&self) -> ApplicationStatus {
@@ -34,27 +43,48 @@ impl ApplicationRuntime {
         StartupMode::Manual
     }
 
-    #[cfg(test)]
-    pub(crate) fn app_data_dir(&self) -> &std::path::Path {
-        &self.app_data_dir
+    #[allow(dead_code)]
+    pub(crate) fn storage(&self) -> &StorageService {
+        &self.storage
     }
 
-    pub(crate) fn from_app_data_dir(app_data_dir: PathBuf) -> Self {
-        Self { app_data_dir }
+    pub(crate) fn from_app_data_dir(
+        app_data_dir: PathBuf,
+    ) -> Result<Self, ApplicationRuntimeError> {
+        Ok(Self {
+            storage: StorageService::initialize(app_data_dir)?,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
-    fn runtime_keeps_the_resolved_app_data_directory_as_the_storage_entry() {
-        let app_data_dir = PathBuf::from("test-data");
-        let runtime = ApplicationRuntime::from_app_data_dir(app_data_dir.clone());
+    fn runtime_initializes_storage_in_the_resolved_application_data_directory() {
+        let temp = tempdir().unwrap();
+        let app_data_dir = temp.path().join("application-data");
+        let runtime = ApplicationRuntime::from_app_data_dir(app_data_dir.clone()).unwrap();
 
-        assert_eq!(runtime.app_data_dir(), app_data_dir);
+        assert_eq!(
+            runtime.storage().data_root(),
+            app_data_dir.canonicalize().unwrap()
+        );
+        assert!(runtime.storage().database_path().is_file());
         assert_eq!(runtime.status(), ApplicationStatus::Running);
         assert_eq!(runtime.startup_mode(), StartupMode::Manual);
+    }
+
+    #[test]
+    fn runtime_does_not_exist_when_storage_initialization_fails() {
+        let temp = tempdir().unwrap();
+        let blocked_root = temp.path().join("blocked-root");
+        std::fs::write(&blocked_root, b"occupied").unwrap();
+
+        let error = ApplicationRuntime::from_app_data_dir(blocked_root).unwrap_err();
+
+        assert!(matches!(error, ApplicationRuntimeError::Storage(_)));
     }
 }

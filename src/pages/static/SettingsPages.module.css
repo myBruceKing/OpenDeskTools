@@ -56,6 +56,17 @@
   overflow: auto;
 }
 
+.emptyState {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  text-align: center;
+}
+
 .discoveredToolbar {
   --toolbar-row-template: minmax(0, 1fr) auto auto;
   flex: 0 0 auto;
@@ -306,6 +317,8 @@
 }
 
 .themePreviewWindow {
+  --theme-preview-color: var(--accent-primary);
+
   min-height: 190px;
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
@@ -342,6 +355,8 @@
 }
 
 .themePreviewToast {
+  --theme-preview-color: var(--accent-primary);
+
   min-height: 120px;
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
@@ -374,6 +389,8 @@
 }
 
 .themeSurfaceGrid {
+  --theme-preview-color: var(--accent-primary);
+
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;

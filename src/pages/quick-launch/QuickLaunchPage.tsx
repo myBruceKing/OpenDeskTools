@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useQuickLaunchViewModel, type QuickLaunchApp } from "../../app/quickLaunchModel";
+import { useQuickLaunchViewModel } from "../../app/quickLaunchModel";
 import { PageScaffold } from "../../components/layout/PageScaffold";
 import { PreviewFrame } from "../../components/layout/PreviewFrame";
 import { SettingsCard } from "../../components/layout/SettingsCard";
@@ -9,7 +9,7 @@ import { SectionTitle } from "../../components/patterns/Section";
 import { AppIcon, ToolMenuPreview } from "../../components/patterns/ToolMenuPreview";
 import { TagBadge } from "../../components/primitives/Badge";
 import { Button } from "../../components/primitives/Button";
-import { DialogShell, InputDialog } from "../../components/primitives/Dialog";
+import { DialogShell } from "../../components/primitives/Dialog";
 import { SearchField } from "../../components/primitives/Field";
 import { SegmentedControl, Toggle } from "../../components/primitives/SelectionControl";
 import styles from "../static/SettingsPages.module.css";
@@ -21,8 +21,7 @@ export function QuickLaunchPage() {
   const [quickPreviewShape, setQuickPreviewShape] = useState<"wheel" | "dock" | "vertical">("wheel");
   const [draggingAppName, setDraggingAppName] = useState<string | null>(null);
   const [dragOverAppName, setDragOverAppName] = useState<string | null>(null);
-  const [manualDialogOpen, setManualDialogOpen] = useState(false);
-  const [manualApp, setManualApp] = useState({ name: "", path: "" });
+  const canManageApps = quickLaunch.sourceAvailable;
   const filteredDiscoveredApps = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase();
 
@@ -44,61 +43,72 @@ export function QuickLaunchPage() {
               <SectionTitle>已固定</SectionTitle>
               <TagBadge tone="blue">{String(quickLaunch.visiblePinnedApps.length)}</TagBadge>
             </div>
-            <Button size="inline" onClick={() => setQuickPreviewOpen(true)}>快速预览</Button>
+            <Button
+              size="inline"
+              disabled={quickLaunch.previewItems.length === 0}
+              onClick={() => setQuickPreviewOpen(true)}
+            >
+              快速预览
+            </Button>
           </div>
           <List className={styles.pinnedList}>
-            {quickLaunch.pinnedApps.map((app) => (
-              <ListRow
-                className={[
-                  styles.appRow,
-                  draggingAppName === app.name ? styles.appRowDragging : "",
-                  dragOverAppName === app.name && draggingAppName !== app.name ? styles.appRowDropTarget : ""
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                key={app.name}
-                draggable
-                onDragStart={(event) => {
-                  setDraggingAppName(app.name);
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("text/plain", app.name);
-                }}
-                onDragEnter={() => {
-                  if (draggingAppName && draggingAppName !== app.name) {
-                    setDragOverAppName(app.name);
-                  }
-                }}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                }}
-                onDragEnd={() => {
-                  setDraggingAppName(null);
-                  setDragOverAppName(null);
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const activeName = event.dataTransfer.getData("text/plain") || draggingAppName;
-                  if (activeName) {
-                    quickLaunch.actions.reorderPinnedApp(activeName, app.name);
-                  }
-                  setDraggingAppName(null);
-                  setDragOverAppName(null);
-                }}
-              >
-                <span className={styles.dragDots} aria-hidden="true">⋮⋮</span>
-                <AppIcon src={app.iconSrc} label={`${app.name} 图标`} size="row" />
-                <div className={styles.rowMain}>
-                  <ListRowTitle>{app.name}</ListRowTitle>
-                  <ListRowDescription>{app.path}</ListRowDescription>
-                </div>
-                <Toggle
-                  checked={quickLaunch.visibleAppNames.has(app.name)}
-                  label={`${app.name}显示在工具盘`}
-                  onChange={(checked) => quickLaunch.actions.setAppVisible(app.name, checked)}
-                />
-              </ListRow>
-            ))}
+            {quickLaunch.pinnedApps.length === 0 ? (
+              <div className={styles.emptyState}>尚无已固定程序，等待快速启动服务提供数据。</div>
+            ) : (
+              quickLaunch.pinnedApps.map((app) => (
+                <ListRow
+                  className={[
+                    styles.appRow,
+                    draggingAppName === app.name ? styles.appRowDragging : "",
+                    dragOverAppName === app.name && draggingAppName !== app.name ? styles.appRowDropTarget : ""
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={app.name}
+                  draggable={canManageApps}
+                  onDragStart={(event) => {
+                    setDraggingAppName(app.name);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", app.name);
+                  }}
+                  onDragEnter={() => {
+                    if (draggingAppName && draggingAppName !== app.name) {
+                      setDragOverAppName(app.name);
+                    }
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDragEnd={() => {
+                    setDraggingAppName(null);
+                    setDragOverAppName(null);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const activeName = event.dataTransfer.getData("text/plain") || draggingAppName;
+                    if (activeName) {
+                      quickLaunch.actions.reorderPinnedApp(activeName, app.name);
+                    }
+                    setDraggingAppName(null);
+                    setDragOverAppName(null);
+                  }}
+                >
+                  <span className={styles.dragDots} aria-hidden="true">⋮⋮</span>
+                  <AppIcon src={app.iconSrc} label={`${app.name} 图标`} size="row" />
+                  <div className={styles.rowMain}>
+                    <ListRowTitle>{app.name}</ListRowTitle>
+                    <ListRowDescription>{app.path}</ListRowDescription>
+                  </div>
+                  <Toggle
+                    checked={quickLaunch.visibleAppNames.has(app.name)}
+                    label={`${app.name}显示在工具盘`}
+                    disabled={!canManageApps}
+                    onChange={(checked) => quickLaunch.actions.setAppVisible(app.name, checked)}
+                  />
+                </ListRow>
+              ))
+            )}
           </List>
         </SettingsCard>
         <SettingsCard fill>
@@ -110,13 +120,16 @@ export function QuickLaunchPage() {
               className={styles.discoveredSearch}
               placeholder="搜索已发现的程序"
               value={query}
+              disabled={!canManageApps}
               onChange={(event) => setQuery(event.target.value)}
             />
             <Button disabled>重新扫描</Button>
-            <Button onClick={() => setManualDialogOpen(true)}>手动添加</Button>
+            <Button disabled>手动添加</Button>
           </ToolbarRow>
           <List className={styles.discoveredList}>
-            {filteredDiscoveredApps.map((app) => {
+            {filteredDiscoveredApps.length === 0 ? (
+              <div className={styles.emptyState}>程序发现服务不可用，尚无可添加程序。</div>
+            ) : filteredDiscoveredApps.map((app) => {
               const isPinned = quickLaunch.pinnedApps.some((pinnedApp) => pinnedApp.name === app.name);
 
               return (
@@ -127,7 +140,11 @@ export function QuickLaunchPage() {
                     <ListRowTitle>{app.name}</ListRowTitle>
                     <ListRowDescription>{app.source} · {app.path}</ListRowDescription>
                   </div>
-                  <Button size="inline" disabled={isPinned} onClick={() => quickLaunch.actions.addPinnedApp(app)}>
+                  <Button
+                    size="inline"
+                    disabled={!canManageApps || isPinned}
+                    onClick={() => quickLaunch.actions.addPinnedApp(app)}
+                  >
                     {isPinned ? "已添加" : "添加"}
                   </Button>
                 </ListRow>
@@ -164,24 +181,6 @@ export function QuickLaunchPage() {
           </PreviewFrame>
         </div>
       </DialogShell>
-      <InputDialog
-        open={manualDialogOpen}
-        title="手动添加程序"
-        description="当前只加入页面预览；真实路径校验和启动会在快速启动服务接入后生效。"
-        fields={[
-          { name: "name", label: "程序名称", value: manualApp.name, placeholder: "例如 Everything" },
-          { name: "path", label: "程序路径", value: manualApp.path, placeholder: "C:\\Program Files\\Everything\\Everything.exe" }
-        ]}
-        confirmText="添加到预览"
-        onChange={(name, value) => setManualApp((current) => ({ ...current, [name]: value }))}
-        onConfirm={() => {
-          const nextApp: QuickLaunchApp = { name: manualApp.name.trim(), path: manualApp.path.trim() };
-          quickLaunch.actions.addPinnedApp(nextApp);
-          setManualApp({ name: "", path: "" });
-          setManualDialogOpen(false);
-        }}
-        onClose={() => setManualDialogOpen(false)}
-      />
     </PageScaffold>
   );
 }

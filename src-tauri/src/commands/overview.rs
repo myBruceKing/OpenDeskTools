@@ -56,14 +56,20 @@ fn build_view_model(runtime: &ApplicationRuntime, version: String) -> OverviewVi
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
     use tauri::ipc::{InvokeResponseBody, IpcResponse};
+    use tempfile::{tempdir, TempDir};
+
+    fn test_runtime() -> (TempDir, ApplicationRuntime) {
+        let temp = tempdir().expect("temporary directory should be created");
+        let runtime = ApplicationRuntime::from_app_data_dir(temp.path().join("app-data"))
+            .expect("test runtime storage should initialize");
+        (temp, runtime)
+    }
 
     #[test]
     fn view_model_uses_runtime_state_and_supplied_package_version() {
-        let runtime = ApplicationRuntime::from_app_data_dir(PathBuf::from("test-data"));
+        let (_temp, runtime) = test_runtime();
 
         let view_model = build_view_model(&runtime, "1.2.3".to_owned());
 
@@ -81,7 +87,7 @@ mod tests {
 
     #[test]
     fn view_model_serializes_the_frontend_contract_with_null_unimplemented_data() {
-        let runtime = ApplicationRuntime::from_app_data_dir(PathBuf::from("test-data"));
+        let (_temp, runtime) = test_runtime();
         let response = build_view_model(&runtime, "0.1.0".to_owned())
             .body()
             .expect("overview view model should serialize");

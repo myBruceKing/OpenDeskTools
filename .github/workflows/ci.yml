@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -46,8 +48,32 @@ jobs:
       - name: Typecheck frontend
         run: pnpm typecheck
 
+      - name: Test frontend
+        run: pnpm test
+
       - name: Build frontend
         run: pnpm build
 
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Test Tauri backend
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Lint Tauri backend
+        run: cargo clippy --all-targets --locked --manifest-path src-tauri/Cargo.toml -- -D warnings
+
       - name: Check Tauri backend
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Check patch whitespace
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "pull_request") {
+            $base = "${{ github.event.pull_request.base.sha }}"
+          } elseif ("${{ github.event.before }}" -and "${{ github.event.before }}" -notmatch "^0+$") {
+            $base = "${{ github.event.before }}"
+          } else {
+            $base = "$(git rev-list --max-parents=0 HEAD)"
+          }
+          git diff --check "$base...${{ github.sha }}"
