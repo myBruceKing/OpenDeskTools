@@ -13,6 +13,14 @@ const INITIAL_STATE: HotkeyControllerState = {
   error: null
 };
 
+export function appendHotkeyToken(binding: string, token: string) {
+  const normalizedToken = token.trim();
+  if (normalizedToken.length === 0) {
+    return binding.trim();
+  }
+  return [...binding.trim().split(/\s+/).filter(Boolean), normalizedToken].join(" ");
+}
+
 export function canSaveHotkeyEditor(state: HotkeyControllerState) {
   const editor = state.editor;
   if (
@@ -134,6 +142,14 @@ export class HotkeyController {
       }
     });
     this.classifyBinding(binding, editor.actionId);
+  }
+
+  appendBindingToken(token: string) {
+    const editor = this.state.editor;
+    if (!this.active || editor === null || editor.saving) {
+      return;
+    }
+    this.setBinding(appendHotkeyToken(editor.binding, token));
   }
 
   setForceOverrideSystem(forceOverrideSystem: boolean) {

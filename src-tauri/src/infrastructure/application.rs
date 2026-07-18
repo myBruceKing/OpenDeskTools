@@ -5,6 +5,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use thiserror::Error;
 
 use super::hotkey::{HotkeyError, HotkeyManager};
+use super::hotkey_capture::HotkeyCaptureManager;
 use super::storage::{StorageError, StorageService};
 use super::theme::{ThemeError, ThemeService};
 
@@ -22,6 +23,7 @@ pub enum StartupMode {
 pub struct ApplicationRuntime {
     storage: Arc<StorageService>,
     hotkeys: HotkeyManager,
+    hotkey_capture: HotkeyCaptureManager,
     theme: ThemeService,
 }
 
@@ -65,6 +67,10 @@ impl ApplicationRuntime {
         &self.hotkeys
     }
 
+    pub(crate) fn hotkey_capture(&self) -> &HotkeyCaptureManager {
+        &self.hotkey_capture
+    }
+
     pub(crate) fn from_app_data_dir(
         app_data_dir: PathBuf,
     ) -> Result<Self, ApplicationRuntimeError> {
@@ -74,6 +80,7 @@ impl ApplicationRuntime {
         Ok(Self {
             storage,
             hotkeys,
+            hotkey_capture: HotkeyCaptureManager::default(),
             theme,
         })
     }

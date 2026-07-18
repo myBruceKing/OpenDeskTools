@@ -20,6 +20,7 @@ export function useHotkeyController() {
     openEditor: controller.openEditor.bind(controller),
     closeEditor: controller.closeEditor.bind(controller),
     setBinding: controller.setBinding.bind(controller),
+    appendBindingToken: controller.appendBindingToken.bind(controller),
     setForceOverrideSystem: controller.setForceOverrideSystem.bind(controller),
     save: controller.save.bind(controller)
   };

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HotkeyClient } from "../../src/app/hotkeyClient";
-import { HotkeyController, canSaveHotkeyEditor } from "../../src/app/hotkeyController";
+import {
+  HotkeyController,
+  appendHotkeyToken,
+  canSaveHotkeyEditor
+} from "../../src/app/hotkeyController";
 import type {
   HotkeyClassification,
   HotkeySnapshot,
@@ -68,6 +72,22 @@ function client(overrides: Partial<HotkeyClient> = {}): HotkeyClient {
 }
 
 describe("HotkeyController", () => {
+  it("uses one token append rule for webview and native capture", async () => {
+    expect(appendHotkeyToken("F1", "Shift+Win+S")).toBe("F1 Shift+Win+S");
+    expect(appendHotkeyToken(" F1  ", "  ")).toBe("F1");
+
+    const classify = vi.fn<HotkeyClient["classify"]>(async () => classified("ordinary"));
+    const controller = new HotkeyController(client({ classify }));
+    controller.start();
+    await flush();
+    controller.openEditor("capture");
+    await flush();
+    controller.appendBindingToken("Shift+Win+S");
+
+    expect(controller.getSnapshot().editor?.binding).toBe("F1 Shift+Win+S");
+    expect(classify).toHaveBeenLastCalledWith("F1 Shift+Win+S");
+  });
+
   it("loads a dedicated hotkey snapshot and reports unavailable truthfully", async () => {
     const controller = new HotkeyController(client());
     controller.start();

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { TextField } from "./Field";
@@ -13,9 +13,93 @@ type DialogShellProps = {
   onClose: () => void;
 };
 
+type DialogReturnFocusTarget = {
+  isConnected: boolean;
+  focus: () => void;
+};
+
+export function restoreDialogFocus(target: DialogReturnFocusTarget | null) {
+  if (target?.isConnected) {
+    target.focus();
+  }
+}
+
+const dialogFocusableSelector = [
+  "a[href]",
+  "area[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "iframe",
+  "object",
+  "embed",
+  "[contenteditable='true']",
+  "[tabindex]:not([tabindex='-1'])"
+].join(",");
+
+function getDialogFocusableElements(dialog: HTMLElement) {
+  return Array.from(dialog.querySelectorAll<HTMLElement>(dialogFocusableSelector)).filter((element) => {
+    const style = window.getComputedStyle(element);
+    return element.tabIndex >= 0
+      && !element.closest("[hidden], [aria-hidden='true']")
+      && style.display !== "none"
+      && style.visibility !== "hidden";
+  });
+}
+
 export function DialogShell({ open, title, description, children, footer, onClose }: DialogShellProps) {
   const titleId = useId();
   const descriptionId = useId();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const returnFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const overlay = overlayRef.current;
+    const backgroundStates = overlay
+      ? Array.from(document.body.children)
+        .filter((element): element is HTMLElement => element instanceof HTMLElement && element !== overlay)
+        .map((element) => ({
+          element,
+          inert: element.inert === true,
+          ariaHidden: element.getAttribute("aria-hidden")
+        }))
+      : [];
+
+    backgroundStates.forEach(({ element }) => {
+      element.inert = true;
+      element.setAttribute("aria-hidden", "true");
+    });
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      if (!dialog || dialog.contains(document.activeElement)) {
+        return;
+      }
+      const [firstFocusable] = getDialogFocusableElements(dialog);
+      (firstFocusable ?? dialog).focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      backgroundStates.forEach(({ element, inert, ariaHidden }) => {
+        element.inert = inert;
+        if (ariaHidden === null) {
+          element.removeAttribute("aria-hidden");
+        } else {
+          element.setAttribute("aria-hidden", ariaHidden);
+        }
+      });
+      restoreDialogFocus(returnFocus);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -25,7 +109,37 @@ export function DialogShell({ open, title, description, children, footer, onClos
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopPropagation();
         onClose();
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const dialog = dialogRef.current;
+      if (!dialog) {
+        return;
+      }
+
+      const focusableElements = getDialogFocusableElements(dialog);
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const firstFocusable = focusableElements[0];
+      const lastFocusable = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement;
+
+      if (event.shiftKey && (activeElement === firstFocusable || !dialog.contains(activeElement))) {
+        event.preventDefault();
+        lastFocusable.focus();
+      } else if (!event.shiftKey && (activeElement === lastFocusable || !dialog.contains(activeElement))) {
+        event.preventDefault();
+        firstFocusable.focus();
       }
     };
 
@@ -38,10 +152,12 @@ export function DialogShell({ open, title, description, children, footer, onClos
   }
 
   return createPortal(
-    <div className={styles.dialogOverlay} role="presentation" onMouseDown={onClose}>
+    <div ref={overlayRef} className={styles.dialogOverlay} role="presentation" onMouseDown={onClose}>
       <section
+        ref={dialogRef}
         className={styles.dialogSurface}
         role="dialog"
+        tabIndex={-1}
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}

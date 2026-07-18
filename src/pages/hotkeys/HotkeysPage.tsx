@@ -4,8 +4,10 @@ import {
   type HotkeyClassificationKind,
   type HotkeyControllerState
 } from "../../app/hotkeyModel";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import { hotkeyCaptureClient } from "../../app/hotkeyCaptureClient";
 import { canSaveHotkeyEditor } from "../../app/hotkeyController";
+import { useHotkeyCaptureSession } from "../../app/useHotkeyCaptureSession";
 import { useHotkeyController } from "../../app/useHotkeyController";
 import { PageScaffold } from "../../components/layout/PageScaffold";
 import { SettingsCard } from "../../components/layout/SettingsCard";
@@ -14,7 +16,10 @@ import { ListRowDescription, ListRowTitle } from "../../components/patterns/List
 import { SectionTitle } from "../../components/patterns/Section";
 import { Button } from "../../components/primitives/Button";
 import { DialogShell } from "../../components/primitives/Dialog";
-import { ShortcutCaptureField } from "../../components/primitives/Field";
+import {
+  ShortcutCaptureField,
+  type ShortcutCaptureFieldHandle
+} from "../../components/primitives/Field";
 import { HintTooltip } from "../../components/primitives/HintTooltip";
 import { SwitchRow } from "../static/SettingsRows";
 import styles from "../static/SettingsPages.module.css";
@@ -60,6 +65,14 @@ function classificationClass(classification: HotkeyClassificationKind) {
 
 export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Promise<void> }) {
   const hotkeys = useHotkeyController();
+  const captureFieldRef = useRef<ShortcutCaptureFieldHandle>(null);
+  const editorActionRef = useRef<Promise<void> | null>(null);
+  const editorActionMountedRef = useRef(true);
+  const [editorActionPending, setEditorActionPending] = useState(false);
+  const nativeCapture = useHotkeyCaptureSession({
+    client: hotkeyCaptureClient,
+    onToken: (token) => captureFieldRef.current?.acceptNativeToken(token)
+  });
   const { state } = hotkeys;
   const editor = state.editor;
   const actionDefinition = editor
@@ -79,6 +92,48 @@ export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Pr
       void onSnapshotChanged();
     }
   }, [onSnapshotChanged, state.snapshot?.revision, state.status]);
+
+  useEffect(() => {
+    editorActionMountedRef.current = true;
+    return () => {
+      editorActionMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (editor === null && nativeCapture.status !== "idle") {
+      void nativeCapture.stop();
+    }
+  }, [editor, nativeCapture.status, nativeCapture.stop]);
+
+  const runAfterCaptureStopped = (action: () => void | Promise<void>) => {
+    if (editorActionRef.current !== null) {
+      return;
+    }
+    setEditorActionPending(true);
+    let actionPromise!: Promise<void>;
+    actionPromise = (async () => {
+      if (await nativeCapture.stop()) {
+        await action();
+      }
+    })().finally(() => {
+      if (editorActionRef.current === actionPromise) {
+        editorActionRef.current = null;
+      }
+      if (editorActionMountedRef.current) {
+        setEditorActionPending(false);
+      }
+    });
+    editorActionRef.current = actionPromise;
+  };
+
+  const closeEditor = () => {
+    runAfterCaptureStopped(hotkeys.closeEditor);
+  };
+
+  const saveEditor = () => {
+    runAfterCaptureStopped(hotkeys.save);
+  };
 
   return (
     <PageScaffold title="快捷键" description={description}>
@@ -125,15 +180,21 @@ export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Pr
         open={editor !== null}
         title={actionDefinition ? `编辑${actionDefinition.title}快捷键` : "编辑快捷键"}
         description="按下新组合后会立即分类；系统占用和其他程序冲突会在实际注册时继续检查。"
-        onClose={hotkeys.closeEditor}
+        onClose={closeEditor}
         footer={
           <>
-            <Button size="inline" disabled={editor?.saving} onClick={hotkeys.closeEditor}>取消</Button>
+            <Button
+              size="inline"
+              disabled={editor?.saving || editorActionPending}
+              onClick={closeEditor}
+            >
+              取消
+            </Button>
             <Button
               size="inline"
               variant="primary"
-              disabled={!canSaveHotkeyEditor(state)}
-              onClick={() => void hotkeys.save()}
+              disabled={!canSaveHotkeyEditor(state) || editorActionPending}
+              onClick={saveEditor}
             >
               {editor?.saving ? "保存中…" : "保存"}
             </Button>
@@ -143,11 +204,31 @@ export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Pr
         {editor && (
           <div className={styles.hotkeyEditor}>
             <ShortcutCaptureField
+              ref={captureFieldRef}
               value={editor.binding}
               label={`${actionDefinition?.title ?? "当前功能"}快捷键`}
               onChange={hotkeys.setBinding}
+              onAppendToken={hotkeys.appendBindingToken}
+              onCaptureStart={nativeCapture.start}
+              onCaptureStop={nativeCapture.stop}
               autoFocus
             />
+
+            {nativeCapture.status === "starting" && (
+              <div className={styles.hotkeyClassificationPending} role="status">
+                正在准备系统组合捕获…
+              </div>
+            )}
+            {nativeCapture.status === "stopping" && (
+              <div className={styles.hotkeyClassificationPending} role="status">
+                正在停止系统组合捕获…
+              </div>
+            )}
+            {nativeCapture.message && (
+              <div className={styles.hotkeyClassificationWarning} role="status">
+                {nativeCapture.message}
+              </div>
+            )}
 
             {editor.classificationStatus === "loading" && (
               <div className={styles.hotkeyClassificationPending} role="status">正在检测快捷键组合…</div>

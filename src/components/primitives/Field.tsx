@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type FocusEvent, type KeyboardEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import styles from "./primitives.module.css";
 
 type SearchFieldProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
@@ -84,20 +84,73 @@ type ShortcutCaptureFieldProps = {
   label: string;
   placeholder?: string;
   onChange: (value: string) => void;
+  onAppendToken?: (token: string) => void;
+  onCaptureStart?: () => void;
+  onCaptureStop?: () => void;
   autoFocus?: boolean;
 };
 
-export function ShortcutCaptureField({
+export type ShortcutCaptureFieldHandle = {
+  acceptNativeToken: (token: string) => void;
+};
+
+export function shouldBypassShortcutCapture(key: string) {
+  return key === "Tab" || key === "Escape";
+}
+
+export function shouldHandleShortcutCapture(key: string, isCaptureTarget: boolean) {
+  return isCaptureTarget && !shouldBypassShortcutCapture(key);
+}
+
+export function isWindowLifecycleShortcut(key: string, altKey: boolean) {
+  return altKey && key.toUpperCase() === "F4";
+}
+
+export const ShortcutCaptureField = forwardRef<ShortcutCaptureFieldHandle, ShortcutCaptureFieldProps>(function ShortcutCaptureField({
   value,
   label,
   placeholder = "按下快捷键",
   onChange,
+  onAppendToken,
+  onCaptureStart,
+  onCaptureStop,
   autoFocus = false
-}: ShortcutCaptureFieldProps) {
+}, forwardedRef) {
   const tokens = value.trim().split(/\s+/).filter(Boolean);
   const [pendingModifiers, setPendingModifiers] = useState<string[]>([]);
+  const pendingModifiersRef = useRef<string[]>([]);
   const modifierChordConsumedRef = useRef(false);
+  const windowLifecycleF4ReleaseRef = useRef(false);
+  const windowLifecycleAltReleaseRef = useRef(false);
   const captureRef = useRef<HTMLDivElement>(null);
+
+  const setPending = (next: string[] | ((current: string[]) => string[])) => {
+    const value = typeof next === "function" ? next(pendingModifiersRef.current) : next;
+    pendingModifiersRef.current = value;
+    setPendingModifiers(value);
+  };
+
+  const appendToken = (token: string) => {
+    if (onAppendToken) {
+      onAppendToken(token);
+    } else {
+      onChange([...tokens, token].join(" "));
+    }
+  };
+
+  const consumePendingModifiers = () => {
+    if (pendingModifiersRef.current.length > 0) {
+      modifierChordConsumedRef.current = true;
+      setPending([]);
+    }
+  };
+
+  useImperativeHandle(forwardedRef, () => ({
+    acceptNativeToken(token: string) {
+      consumePendingModifiers();
+      appendToken(token);
+    }
+  }));
 
   useEffect(() => {
     if (!autoFocus) {
@@ -108,6 +161,23 @@ export function ShortcutCaptureField({
   }, [autoFocus]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!shouldHandleShortcutCapture(event.key, event.target === event.currentTarget)) {
+      return;
+    }
+
+    if (event.key === "Alt") {
+      setPending((current) => (current.includes("Alt") ? current : [...current, "Alt"]));
+      return;
+    }
+
+    if (isWindowLifecycleShortcut(event.key, event.altKey)) {
+      windowLifecycleF4ReleaseRef.current = true;
+      windowLifecycleAltReleaseRef.current = true;
+      modifierChordConsumedRef.current = true;
+      setPending([]);
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
 
@@ -121,17 +191,13 @@ export function ShortcutCaptureField({
       return;
     }
 
-    if (event.key === "Tab") {
-      return;
-    }
-
     if (event.repeat) {
       return;
     }
 
     const modifierLabel = modifierKeyLabels[event.key];
     if (modifierLabel) {
-      setPendingModifiers((current) => (current.includes(modifierLabel) ? current : [...current, modifierLabel]));
+      setPending((current) => (current.includes(modifierLabel) ? current : [...current, modifierLabel]));
       return;
     }
 
@@ -142,13 +208,32 @@ export function ShortcutCaptureField({
 
     if (pendingModifiers.length > 0 || event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) {
       modifierChordConsumedRef.current = true;
-      setPendingModifiers([]);
+      setPending([]);
     }
 
-    onChange([...tokens, nextToken].join(" "));
+    appendToken(nextToken);
   };
 
   const handleKeyUp = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!shouldHandleShortcutCapture(event.key, event.target === event.currentTarget)) {
+      return;
+    }
+
+    if (
+      isWindowLifecycleShortcut(event.key, event.altKey) ||
+      (windowLifecycleF4ReleaseRef.current && event.key.toUpperCase() === "F4")
+    ) {
+      windowLifecycleF4ReleaseRef.current = false;
+      return;
+    }
+
+    if (windowLifecycleAltReleaseRef.current && event.key === "Alt") {
+      windowLifecycleAltReleaseRef.current = false;
+      modifierChordConsumedRef.current = false;
+      setPending((current) => current.filter((label) => label !== "Alt"));
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
 
@@ -157,10 +242,11 @@ export function ShortcutCaptureField({
       return;
     }
 
-    setPendingModifiers((current) => current.filter((label) => label !== modifierLabel));
+    const wasPending = pendingModifiersRef.current.includes(modifierLabel);
+    setPending((current) => current.filter((label) => label !== modifierLabel));
 
-    if (!modifierChordConsumedRef.current) {
-      onChange([...tokens, modifierLabel].join(" "));
+    if (wasPending && !modifierChordConsumedRef.current) {
+      appendToken(modifierLabel);
     }
 
     if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
@@ -172,6 +258,24 @@ export function ShortcutCaptureField({
     onChange(tokens.filter((_, tokenIndex) => tokenIndex !== index).join(" "));
     window.requestAnimationFrame(() => captureRef.current?.focus());
   };
+  const handleCaptureFocus = (event: FocusEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) {
+      onCaptureStart?.();
+    }
+  };
+  const resetCaptureTransientState = () => {
+    pendingModifiersRef.current = [];
+    setPendingModifiers([]);
+    modifierChordConsumedRef.current = false;
+    windowLifecycleF4ReleaseRef.current = false;
+    windowLifecycleAltReleaseRef.current = false;
+  };
+  const handleCaptureBlur = (event: FocusEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) {
+      resetCaptureTransientState();
+      onCaptureStop?.();
+    }
+  };
   const visiblePendingModifiers = modifierChordConsumedRef.current ? [] : pendingModifiers;
 
   return (
@@ -181,6 +285,8 @@ export function ShortcutCaptureField({
       role="group"
       tabIndex={0}
       aria-label={label}
+      onFocus={handleCaptureFocus}
+      onBlur={handleCaptureBlur}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
       onMouseDown={(event) => {
@@ -221,4 +327,4 @@ export function ShortcutCaptureField({
       )}
     </div>
   );
-}
+});

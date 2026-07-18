@@ -85,7 +85,19 @@ describe("settings production source boundary", () => {
     expect(hotkeysPage).toContain("功能接入后生效");
     expect(hotkeysPage).toContain("当前状态不会显示为已注册");
     expect(hotkeysPage).toContain('action.actionAvailable ? toHotkeyBadgeState(action.runtimeState) : "unavailable"');
-    expect(hotkeysPage).toContain("disabled={!canSaveHotkeyEditor(state)}");
+    expect(hotkeysPage).toContain(
+      "disabled={!canSaveHotkeyEditor(state) || editorActionPending}"
+    );
+  });
+
+  it("keeps verbose runtime detail in the status tooltip instead of the list row", () => {
+    const badge = source("src/components/primitives/Badge.tsx");
+
+    expect(badge).toContain("detail && (");
+    expect(badge).toContain("<HintTooltip");
+    expect(badge).toContain("状态说明");
+    expect(badge).not.toContain("statusDetail");
+    expect(badge).not.toContain("<small");
   });
 
   it("routes the real overview version into AppShell without a fake fallback", () => {

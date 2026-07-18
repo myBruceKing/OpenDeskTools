@@ -58,14 +58,19 @@
 
 @media (max-width: 899px) {
   .hotkeyRowoverview {
-    grid-template-columns: 50px 22px minmax(92px, 1fr) 58px 32px 53px;
+    grid-template-columns: 50px 22px minmax(86px, 1fr) 64px 32px 53px;
     column-gap: 7px;
     padding-right: 8px;
     padding-left: 8px;
   }
 
   .hotkeyRowfull {
-    grid-template-columns: var(--shortcut-badge-width) 24px minmax(0, 1fr) var(--toggle-width);
+    grid-template-columns: var(--shortcut-badge-width) 24px minmax(0, 1fr) 76px;
+  }
+
+  .hotkeyRowoverview .statusCell > span > svg:first-child,
+  .hotkeyRowfull .statusCell > span > svg:first-child {
+    display: none;
   }
 
   .hotkeyRowfull > :nth-last-child(2),

@@ -1,10 +1,10 @@
 import {
   CheckmarkCircle20Regular,
-  Info16Regular,
   SubtractCircle20Regular,
   Warning20Regular
 } from "@fluentui/react-icons";
 import type { HotkeyState } from "../../app/overviewModel";
+import { HintTooltip } from "./HintTooltip";
 import styles from "./primitives.module.css";
 
 export function ShortcutBadge({ value }: { value: string | null }) {
@@ -28,11 +28,17 @@ export function StatusBadge({ state, detail }: { state: HotkeyState; detail: str
   const classes = [styles.status, styles[state]].join(" ");
 
   return (
-    <span className={classes} title={detail ?? undefined}>
+    <span className={classes}>
       <Icon aria-hidden="true" />
       <span className={styles.statusLabel}>{statusCopy[state]}</span>
-      {state === "conflict" && <Info16Regular className={styles.statusInfo} aria-hidden="true" />}
-      {detail && <small className={styles.statusDetail}>{detail}</small>}
+      {detail && (
+        <HintTooltip
+          className={styles.statusInfo}
+          symbol="i"
+          label={`${statusCopy[state]}状态说明`}
+          content={detail}
+        />
+      )}
     </span>
   );
 }

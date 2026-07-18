@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::infrastructure::application::ApplicationRuntime;
 use crate::infrastructure::hotkey::{
     classify_binding, HotkeyActionId, HotkeyBinding, HotkeyBindingClassification, HotkeyError,
     HotkeySnapshot, HotkeyValidationError, TauriHotkeyRegistrar, UpdateHotkeyBinding,
 };
+use crate::infrastructure::hotkey_capture::{
+    HotkeyCaptureError, HotkeyCaptureSession, HotkeyCaptureStopResult,
+};
+
+const HOTKEY_CAPTURE_EVENT: &str = "hotkey://capture-token";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -32,6 +37,51 @@ pub struct HotkeyCommandError {
     code: &'static str,
     message: String,
     actual_revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyCaptureCommandError {
+    code: &'static str,
+    message: String,
+}
+
+#[tauri::command]
+pub fn start_hotkey_capture<R: Runtime>(
+    app: AppHandle<R>,
+    runtime: State<'_, ApplicationRuntime>,
+) -> Result<HotkeyCaptureSession, HotkeyCaptureCommandError> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| capture_command_error("capture_window_unavailable"))?;
+    #[cfg(windows)]
+    let target_window = window
+        .hwnd()
+        .map_err(|_| capture_command_error("capture_window_unavailable"))?
+        .0 as usize;
+    #[cfg(not(windows))]
+    let target_window = {
+        let _ = window;
+        0
+    };
+    let event_app = app.clone();
+    runtime
+        .hotkey_capture()
+        .start(target_window, move |event| {
+            let _ = event_app.emit(HOTKEY_CAPTURE_EVENT, event);
+        })
+        .map_err(map_capture_error)
+}
+
+#[tauri::command]
+pub fn stop_hotkey_capture(
+    runtime: State<'_, ApplicationRuntime>,
+    session_id: String,
+) -> Result<HotkeyCaptureStopResult, HotkeyCaptureCommandError> {
+    runtime
+        .hotkey_capture()
+        .stop(&session_id)
+        .map_err(map_capture_error)
 }
 
 #[tauri::command]
@@ -147,6 +197,35 @@ fn map_validation_error(error: HotkeyValidationError) -> HotkeyCommandError {
         code,
         message,
         actual_revision: None,
+    }
+}
+
+fn map_capture_error(error: HotkeyCaptureError) -> HotkeyCaptureCommandError {
+    let code = match error {
+        #[cfg(not(windows))]
+        HotkeyCaptureError::UnsupportedPlatform => "capture_unsupported_platform",
+        HotkeyCaptureError::HookInstall(_) | HotkeyCaptureError::HookAlreadyActive => {
+            "capture_hook_unavailable"
+        }
+        HotkeyCaptureError::StateLockPoisoned
+        | HotkeyCaptureError::ThreadStart(_)
+        | HotkeyCaptureError::WorkerDisconnected
+        | HotkeyCaptureError::StopSignal(_)
+        | HotkeyCaptureError::WorkerPanicked => "capture_service_unavailable",
+    };
+    capture_command_error(code)
+}
+
+fn capture_command_error(code: &'static str) -> HotkeyCaptureCommandError {
+    let message = match code {
+        "capture_unsupported_platform" => "当前平台不支持原生快捷键捕获。",
+        "capture_window_unavailable" => "主窗口暂时不可用，无法开始快捷键捕获。",
+        "capture_hook_unavailable" => "无法启用系统快捷键捕获，请稍后重试。",
+        _ => "快捷键捕获服务暂时不可用，请关闭弹窗后重试。",
+    };
+    HotkeyCaptureCommandError {
+        code,
+        message: message.to_owned(),
     }
 }
 
