@@ -68,7 +68,37 @@
   --clipboard-settings-height: clamp(146px, 14.6484vw, 158px);
 
   --shadow-none: none;
+  --motion-duration-fast: 120ms;
+  --motion-duration-standard: 140ms;
+  --motion-duration-emphasized: 160ms;
   --breakpoint-compact-width: 900px;
+}
+
+[data-animation-speed="slow"] {
+  --motion-duration-fast: 180ms;
+  --motion-duration-standard: 220ms;
+  --motion-duration-emphasized: 260ms;
+}
+
+[data-animation-speed="fast"] {
+  --motion-duration-fast: 80ms;
+  --motion-duration-standard: 100ms;
+  --motion-duration-emphasized: 120ms;
+}
+
+[data-animation-speed="reduced"],
+[data-reduced-motion="true"] {
+  --motion-duration-fast: 0ms;
+  --motion-duration-standard: 0ms;
+  --motion-duration-emphasized: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-fast: 0ms;
+    --motion-duration-standard: 0ms;
+    --motion-duration-emphasized: 0ms;
+  }
 }
 
 @media (max-width: 899px) {

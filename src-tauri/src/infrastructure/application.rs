@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, Runtime};
 use thiserror::Error;
 
 use super::storage::{StorageError, StorageService};
+use super::theme::{ThemeError, ThemeService};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplicationStatus {
@@ -17,7 +19,8 @@ pub enum StartupMode {
 
 #[derive(Debug)]
 pub struct ApplicationRuntime {
-    storage: StorageService,
+    storage: Arc<StorageService>,
+    theme: ThemeService,
 }
 
 #[derive(Debug, Error)]
@@ -26,6 +29,8 @@ pub enum ApplicationRuntimeError {
     AppDataDirectory(#[from] tauri::Error),
     #[error("failed to initialize application storage: {0}")]
     Storage(#[from] StorageError),
+    #[error("failed to initialize theme service: {0}")]
+    Theme(#[from] ThemeError),
 }
 
 impl ApplicationRuntime {
@@ -48,12 +53,16 @@ impl ApplicationRuntime {
         &self.storage
     }
 
+    pub(crate) fn theme(&self) -> &ThemeService {
+        &self.theme
+    }
+
     pub(crate) fn from_app_data_dir(
         app_data_dir: PathBuf,
     ) -> Result<Self, ApplicationRuntimeError> {
-        Ok(Self {
-            storage: StorageService::initialize(app_data_dir)?,
-        })
+        let storage = Arc::new(StorageService::initialize(app_data_dir)?);
+        let theme = ThemeService::initialize(Arc::clone(&storage))?;
+        Ok(Self { storage, theme })
     }
 }
 
@@ -73,6 +82,10 @@ mod tests {
             app_data_dir.canonicalize().unwrap()
         );
         assert!(runtime.storage().database_path().is_file());
+        assert_eq!(
+            runtime.theme().current().unwrap(),
+            super::super::theme::ThemeSnapshot::default()
+        );
         assert_eq!(runtime.status(), ApplicationStatus::Running);
         assert_eq!(runtime.startup_mode(), StartupMode::Manual);
     }

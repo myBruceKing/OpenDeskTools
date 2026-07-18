@@ -24,15 +24,33 @@ describe("settings production source boundary", () => {
     expect(settingsRows).not.toContain("setValue");
   });
 
-  it("keeps capture and theme setting controls disabled without local change handlers", () => {
-    const settingsPages = [
-      source("src/pages/capture-qr/CaptureQrPage.tsx"),
-      source("src/pages/theme/ThemePage.tsx")
-    ].join("\n");
+  it("keeps capture setting controls disabled without local change handlers", () => {
+    const settingsPages = source("src/pages/capture-qr/CaptureQrPage.tsx");
 
     expect(settingsPages).not.toMatch(/onClick=\{\(\) => set/);
     expect(settingsPages).not.toMatch(/onChange=\{\(event\) => set/);
     expect(settingsPages).not.toMatch(/<SwitchRow[^>]*checked(?:\s|\/>)/);
+  });
+
+  it("routes ThemeService state into the controlled theme page and root shell", () => {
+    const app = source("src/app/App.tsx");
+    const shell = source("src/components/shell/AppShell.tsx");
+
+    expect(app).toContain("useThemeController");
+    expect(app).toContain("useDocumentTheme(themePresentation)");
+    expect(app).toContain("<ThemePage state={themeController.state} onUpdate={themeController.update}");
+    expect(shell).not.toContain('data-theme="light"');
+    expect(shell).toContain("data-theme={theme.resolvedTheme}");
+    expect(shell).toContain("data-accent={theme.accent}");
+    expect(shell).toContain("data-reduce-transparency={String(theme.reduceTransparency)}");
+    expect(shell).toContain("data-animation-speed={theme.animationSpeed}");
+  });
+
+  it("lets body-level dialog portals inherit the same document-root theme", () => {
+    const runtime = source("src/app/themeRuntime.ts");
+
+    expect(runtime).toContain("document.documentElement");
+    expect(runtime).toContain("applyThemeRootPresentation");
   });
 
   it("does not hardcode the tool wheel shortcut in the overview page", () => {
@@ -52,5 +70,15 @@ describe("settings production source boundary", () => {
     expect(hotkeysPage).not.toContain("EMPTY_OVERVIEW_VIEW_MODEL");
     expect(generalPage).toContain("startupEnabled: boolean | null");
     expect(generalPage).toContain("version: string | null");
+  });
+
+  it("routes the real overview version into AppShell without a fake fallback", () => {
+    const app = source("src/app/App.tsx");
+    const shell = source("src/components/shell/AppShell.tsx");
+
+    expect(app).toContain("version={overview.version}");
+    expect(shell).toContain("version: string | null");
+    expect(shell).toContain('{version ?? "—"}');
+    expect(shell).not.toContain("v1.3.0");
   });
 });

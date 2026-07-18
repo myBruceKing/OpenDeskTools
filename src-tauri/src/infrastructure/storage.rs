@@ -3,12 +3,12 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use rusqlite::{Connection, ToSql, Transaction, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior};
 use thiserror::Error;
 
 const DATABASE_FILE_NAME: &str = "opendesktools.sqlite3";
 const FILES_DIRECTORY_NAME: &str = "files";
-const LATEST_SCHEMA_VERSION: u32 = 1;
+const LATEST_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -171,6 +171,36 @@ impl StorageService {
         Ok(statement.query_row(parameters, |row| row.get(0))?)
     }
 
+    pub fn read_setting(&self, key: &str) -> Result<Option<String>, StorageError> {
+        let connection = self.lock_connection()?;
+        Ok(connection
+            .query_row(
+                "SELECT value FROM application_settings WHERE key = ?1",
+                [key],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn write_settings(&self, settings: &[(&str, &str)]) -> Result<(), StorageError> {
+        self.transaction(|transaction| {
+            let mut statement = transaction.prepare(
+                "INSERT INTO application_settings (key, value)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = CURRENT_TIMESTAMP",
+            )?;
+
+            for (key, value) in settings {
+                statement.execute((*key, *value))?;
+            }
+
+            drop(statement);
+            Ok(())
+        })
+    }
+
     fn lock_connection(&self) -> Result<MutexGuard<'_, Connection>, StorageError> {
         self.connection
             .lock()
@@ -225,6 +255,20 @@ fn run_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
     }
 
+    if current_version < 2 {
+        transaction.execute_batch(
+            "CREATE TABLE application_settings (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );",
+        )?;
+        transaction.execute(
+            "INSERT INTO schema_migrations (version) VALUES (?1)",
+            [2_u32],
+        )?;
+    }
+
     transaction.commit()?;
     Ok(())
 }
@@ -254,7 +298,7 @@ mod tests {
             storage
                 .query_i64("SELECT COUNT(*) FROM schema_migrations", &[])
                 .unwrap(),
-            1
+            i64::from(LATEST_SCHEMA_VERSION)
         );
     }
 
@@ -281,7 +325,7 @@ mod tests {
             reopened
                 .query_i64("SELECT COUNT(*) FROM schema_migrations", &[])
                 .unwrap(),
-            1
+            i64::from(LATEST_SCHEMA_VERSION)
         );
         assert_eq!(
             reopened
@@ -339,6 +383,29 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn application_settings_are_parameterized_and_atomically_updated() {
+        let temp = tempdir().unwrap();
+        let storage = StorageService::initialize(temp.path()).unwrap();
+
+        storage
+            .write_settings(&[("theme.mode", "light"), ("quote'key", "first")])
+            .unwrap();
+        storage
+            .write_settings(&[("theme.mode", "dark"), ("quote'key", "second")])
+            .unwrap();
+
+        assert_eq!(
+            storage.read_setting("theme.mode").unwrap().as_deref(),
+            Some("dark")
+        );
+        assert_eq!(
+            storage.read_setting("quote'key").unwrap().as_deref(),
+            Some("second")
+        );
+        assert_eq!(storage.read_setting("missing").unwrap(), None);
     }
 
     #[test]

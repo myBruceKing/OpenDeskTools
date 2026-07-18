@@ -14,6 +14,12 @@ import {
 } from "./overviewModel";
 import { EMPTY_CLIPBOARD_VIEW_MODEL } from "./clipboardModel";
 import { useDesktopWebViewGuards } from "./useDesktopWebViewGuards";
+import {
+  createThemeRootPresentation,
+  useDocumentTheme,
+  useSystemThemePreferences
+} from "./themeRuntime";
+import { useThemeController } from "./useThemeController";
 
 const routeIds: AppRoute[] = ["overview", "hotkeys", "quickLaunch", "clipboard", "captureQr", "floatingTheme", "general"];
 
@@ -25,6 +31,14 @@ function readInitialRoute(): AppRoute {
 function App() {
   const [overview, setOverview] = useState<OverviewViewModel>(EMPTY_OVERVIEW_VIEW_MODEL);
   const [route, setRoute] = useState<AppRoute>(readInitialRoute);
+  const themeController = useThemeController();
+  const { systemDark, systemReducedMotion } = useSystemThemePreferences();
+  const themePresentation = createThemeRootPresentation(
+    themeController.state.current,
+    systemDark,
+    systemReducedMotion
+  );
+  useDocumentTheme(themePresentation);
   useDesktopWebViewGuards();
 
   useEffect(() => {
@@ -67,7 +81,7 @@ function App() {
       case "captureQr":
         return <CaptureQrPage />;
       case "floatingTheme":
-        return <ThemePage />;
+        return <ThemePage state={themeController.state} onUpdate={themeController.update} />;
       case "general":
         return <GeneralPage version={overview.version} startupEnabled={overview.startupEnabled} />;
       case "overview":
@@ -81,6 +95,8 @@ function App() {
       serviceState={overview.serviceState}
       activeRoute={route}
       onNavigate={navigate}
+      theme={themePresentation}
+      version={overview.version}
       footerVariant={page === "clipboard" ? "clipboard" : "overview"}
     >
       {pageContent}

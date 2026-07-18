@@ -9,8 +9,9 @@ import {
   Settings20Regular,
   Settings24Regular
 } from "@fluentui/react-icons";
-import type { MouseEvent, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import type { ServiceState } from "../../app/overviewModel";
+import type { ThemeRootPresentation } from "../../app/themeRuntime";
 import brandMarkDarkUrl from "../../assets/opendesktools-mark-on-dark.svg";
 import brandMarkLightUrl from "../../assets/opendesktools-mark.svg";
 import { ClipboardWithLinesIcon } from "../icons/ClipboardWithLinesIcon";
@@ -22,6 +23,8 @@ type AppShellProps = {
   serviceState: ServiceState;
   activeRoute: AppRoute;
   onNavigate: (route: AppRoute) => void;
+  theme: ThemeRootPresentation;
+  version: string | null;
   footerVariant?: "overview" | "clipboard";
   children: ReactNode;
 };
@@ -108,8 +111,9 @@ function TopBar({ serviceState }: { serviceState: ServiceState }) {
 function Sidebar({
   activeRoute,
   onNavigate,
+  version,
   footerVariant = "overview"
-}: Pick<AppShellProps, "activeRoute" | "onNavigate" | "footerVariant">) {
+}: Pick<AppShellProps, "activeRoute" | "onNavigate" | "version" | "footerVariant">) {
   return (
     <aside className={styles.sidebar}>
       <nav className={styles.primaryNav} aria-label="主导航">
@@ -143,7 +147,7 @@ function Sidebar({
               <Settings20Regular aria-hidden="true" />
               <span className={styles.navLabel}>设置</span>
             </button>
-            <span className={styles.sidebarVersion}>v1.3.0</span>
+            <span className={styles.sidebarVersion}>{version ?? "—"}</span>
           </>
         ) : (
           <>
@@ -166,13 +170,30 @@ export function AppShell({
   serviceState,
   activeRoute,
   onNavigate,
+  theme,
+  version,
   footerVariant,
   children
 }: AppShellProps) {
+  const themeStyle = { "--accent-primary": theme.accent } as CSSProperties;
+
   return (
-    <main className={styles.shell} data-theme="light">
+    <main
+      className={styles.shell}
+      data-theme={theme.resolvedTheme}
+      data-accent={theme.accent}
+      data-reduce-transparency={String(theme.reduceTransparency)}
+      data-animation-speed={theme.animationSpeed}
+      data-reduced-motion={String(theme.reducedMotion)}
+      style={themeStyle}
+    >
       <TopBar serviceState={serviceState} />
-      <Sidebar activeRoute={activeRoute} onNavigate={onNavigate} footerVariant={footerVariant} />
+      <Sidebar
+        activeRoute={activeRoute}
+        onNavigate={onNavigate}
+        version={version}
+        footerVariant={footerVariant}
+      />
       <section className={styles.content} aria-label={navItems.find((item) => item.id === activeRoute)?.label}>
         {children}
       </section>

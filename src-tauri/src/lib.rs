@@ -17,7 +17,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::overview::get_overview_view_model
+            commands::overview::get_overview_view_model,
+            commands::theme::get_theme_preferences,
+            commands::theme::update_theme_preferences
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

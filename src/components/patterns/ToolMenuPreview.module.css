@@ -20,8 +20,8 @@
     );
   box-shadow: var(--shadow-tool-wheel);
   transition:
-    box-shadow 160ms ease,
-    border-color 160ms ease;
+    box-shadow var(--motion-duration-emphasized) ease,
+    border-color var(--motion-duration-emphasized) ease;
 }
 
 .wheel:hover {
@@ -76,8 +76,8 @@
     color-mix(in srgb, var(--surface-tool-wheel-segment) 76%, var(--surface-card-subtle));
   box-shadow: var(--shadow-tool-dock);
   transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease;
+    border-color var(--motion-duration-emphasized) ease,
+    box-shadow var(--motion-duration-emphasized) ease;
 }
 
 .vertical {
@@ -95,8 +95,8 @@
     color-mix(in srgb, var(--surface-tool-wheel-segment) 76%, var(--surface-card-subtle));
   box-shadow: var(--shadow-tool-dock);
   transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease;
+    border-color var(--motion-duration-emphasized) ease,
+    box-shadow var(--motion-duration-emphasized) ease;
 }
 
 .sizeOverview {
@@ -155,9 +155,9 @@
   background: color-mix(in srgb, var(--surface-card) 72%, transparent);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 44%);
   transition:
-    background-color 140ms ease,
-    border-color 140ms ease,
-    transform 140ms ease;
+    background-color var(--motion-duration-standard) ease,
+    border-color var(--motion-duration-standard) ease,
+    transform var(--motion-duration-standard) ease;
 }
 
 .verticalItem {
@@ -170,9 +170,9 @@
   background: color-mix(in srgb, var(--surface-card) 72%, transparent);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 44%);
   transition:
-    background-color 140ms ease,
-    border-color 140ms ease,
-    transform 140ms ease;
+    background-color var(--motion-duration-standard) ease,
+    border-color var(--motion-duration-standard) ease,
+    transform var(--motion-duration-standard) ease;
 }
 
 .dock.sizeCompact .dockItem {
