@@ -1,0 +1,87 @@
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --surface-window: #f9f8f6;
+  --surface-sidebar: #f7f6f5;
+  --surface-page: #f9f8f6;
+  --surface-card: #faf9f7;
+  --surface-card-subtle: #fcfbf9;
+  --surface-disabled: #f3f2f0;
+  --surface-titlebar-control-hover: #ebe9e6;
+  --surface-titlebar-control-active: #dfddd9;
+  --surface-selected: #d3e0f3;
+  --surface-row-selected: #edf5fb;
+  --surface-shortcut: #dfe9f7;
+  --surface-success: #eaf5ea;
+  --surface-warning: #fff4e5;
+  --surface-tool-dark: #343434;
+  --surface-tool-wheel-segment: rgb(255 255 255 / 72%);
+  --surface-tool-wheel-center: rgb(255 255 255 / 58%);
+  --surface-stat-blue: #eaf4fd;
+  --surface-stat-green: #e8f6ec;
+  --surface-stat-orange: #fff3e1;
+  --surface-stat-purple: #f1eafd;
+  --surface-toggle-off: #c9c9c9;
+  --surface-toggle-unavailable: #d4d4d4;
+  --surface-toggle-thumb: #ffffff;
+  --surface-tooltip: #242424;
+  --surface-scrollbar-track: transparent;
+  --surface-scrollbar-thumb: #cfcac4;
+  --surface-scrollbar-thumb-hover: #b8b2aa;
+  --surface-scrollbar-thumb-active: #9f978e;
+
+  --text-primary: #171717;
+  --text-secondary: #242424;
+  --text-muted: #333333;
+  --text-disabled: #3d3d3d;
+  --text-on-accent: #ffffff;
+  --text-tooltip: #ffffff;
+
+  --border-default: #e0dedc;
+  --border-subtle: #e3e1df;
+  --border-accent: #8bb9ed;
+  --border-success: #bddfc1;
+  --border-toggle-off: #b7b7b7;
+  --border-tooltip: rgb(0 0 0 / 14%);
+  --border-tool-wheel: rgb(58 68 82 / 14%);
+  --border-tool-wheel-divider: rgb(58 68 82 / 22%);
+
+  --accent-primary: #216bd9;
+  --accent-link: #0d6bd9;
+  --status-success: #3dae4c;
+  --status-warning: #f29417;
+  --status-danger: #c83c3c;
+  --status-danger-pressed: #a83232;
+  --status-neutral: #777777;
+  --stat-green: #39ad60;
+  --stat-orange: #f29417;
+  --stat-purple: #7655d4;
+  --shadow-tool-wheel: 0 10px 28px rgb(36 42 50 / 10%);
+  --shadow-tool-wheel-hover: 0 14px 34px rgb(36 42 50 / 14%);
+  --shadow-tool-dock: 0 8px 20px rgb(36 42 50 / 8%);
+  --shadow-tool-dock-hover: 0 12px 26px rgb(36 42 50 / 12%);
+  --shadow-tooltip: 0 8px 24px rgb(0 0 0 / 18%);
+  --z-tooltip: 9999;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-tooltip: #f4f2ee;
+  --text-tooltip: #171717;
+  --border-tooltip: rgb(255 255 255 / 18%);
+  --surface-tool-wheel-segment: rgb(38 40 43 / 84%);
+  --surface-tool-wheel-center: rgb(48 50 54 / 74%);
+  --border-tool-wheel: rgb(255 255 255 / 10%);
+  --border-tool-wheel-divider: rgb(255 255 255 / 26%);
+  --shadow-tool-wheel: 0 14px 30px rgb(0 0 0 / 26%);
+  --shadow-tool-wheel-hover: 0 18px 38px rgb(0 0 0 / 32%);
+  --shadow-tool-dock: 0 10px 24px rgb(0 0 0 / 22%);
+  --shadow-tool-dock-hover: 0 14px 32px rgb(0 0 0 / 28%);
+}
+
+[data-theme="accent"] {
+  --surface-tool-wheel-segment: color-mix(in srgb, var(--accent-primary) 13%, transparent);
+  --surface-tool-wheel-center: color-mix(in srgb, var(--accent-primary) 10%, white 55%);
+  --border-tool-wheel: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+  --border-tool-wheel-divider: color-mix(in srgb, var(--accent-primary) 34%, transparent);
+}

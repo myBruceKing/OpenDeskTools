@@ -1,0 +1,162 @@
+.summary {
+  height: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 388fr) minmax(0, 384fr) minmax(0, 406fr);
+  align-items: center;
+}
+
+.summaryCell {
+  min-width: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 clamp(13px, 1.3021vw, 14px);
+  border-right: var(--border-width) solid var(--border-subtle);
+}
+
+.summaryCell:last-child {
+  border-right: 0;
+}
+
+.summaryLabel {
+  margin-bottom: 2px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-body);
+}
+
+.summaryValue {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-body);
+  white-space: nowrap;
+}
+
+.summaryDot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--status-neutral);
+}
+
+.summaryDotRunning {
+  background: var(--status-success);
+}
+
+.summaryDotError {
+  background: var(--status-warning);
+}
+
+.middle {
+  min-height: 0;
+  align-items: stretch;
+}
+
+.hotkeyPanel {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.hotkeyTitle {
+  margin-bottom: 6px;
+}
+
+.toolPanel {
+  container-type: inline-size;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 16px;
+}
+
+.toolPreviewBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.wheelFrame {
+  margin-top: 0;
+}
+
+.statsPanel {
+  height: auto;
+  padding: clamp(8px, 0.8464vw, 9px) clamp(15px, 1.5625vw, 17px);
+}
+
+.statsHeader {
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: clamp(9px, calc(3.3333vw - 23px), 13px);
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(16px, 1.6927vw, 18px);
+}
+
+.statCard {
+  height: clamp(52px, 5.4036vw, 58px);
+}
+
+@media (max-width: 899px) {
+  .summary {
+    height: auto;
+  }
+
+  .toolPanel {
+    padding-top: 10px;
+    padding-right: 12px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+  }
+
+  .wheelFrame {
+    margin-top: 0;
+  }
+
+  .toolPreviewBody {
+    justify-content: center;
+  }
+
+  .hotkeyTitle {
+    margin-bottom: 4px;
+  }
+
+  .statsPanel {
+    padding: 8px 10px;
+  }
+
+  .statsHeader {
+    height: 18px;
+    margin-bottom: 4px;
+  }
+
+  .statsGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .statCard {
+    height: 52px;
+  }
+}

@@ -5,13 +5,9 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
-    port: 1420,
-    strictPort: true
+    strictPort: true,
+    host: "127.0.0.1",
+    port: 1420
   },
-  envPrefix: ["VITE_", "TAURI_"],
-  build: {
-    target: "chrome105",
-    minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
-    sourcemap: !!process.env.TAURI_ENV_DEBUG
-  }
+  envPrefix: ["VITE_", "TAURI_"]
 });

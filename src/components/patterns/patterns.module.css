@@ -1,0 +1,152 @@
+.section {
+  min-width: 0;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-none);
+}
+
+.sectionHeader {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  text-align: left;
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-section-title);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-section-title);
+}
+
+.sectionSubtitle {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-body);
+}
+
+.list {
+  min-width: 0;
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-none);
+}
+
+.listRow {
+  min-width: 0;
+  border-bottom: var(--border-width) solid var(--border-subtle);
+}
+
+.listRow:last-child {
+  border-bottom: 0;
+}
+
+.listRowTitle {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-row-title);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-row-title);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listRowDescription {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metricCard {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: clamp(9px, 0.9115vw, 10px);
+  padding: 0 clamp(9px, 0.9766vw, 11px);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-metric);
+  background: var(--surface-card-subtle);
+}
+
+.metricIcon {
+  width: clamp(33px, 3.3854vw, 37px);
+  height: clamp(33px, 3.3854vw, 37px);
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: clamp(21px, 2.0833vw, 23px);
+}
+
+.metricIconblue {
+  background: var(--surface-stat-blue);
+  color: var(--accent-primary);
+}
+
+.metricIcongreen {
+  background: var(--surface-stat-green);
+  color: var(--stat-green);
+}
+
+.metricIconorange {
+  background: var(--surface-stat-orange);
+  color: var(--stat-orange);
+}
+
+.metricIconpurple {
+  background: var(--surface-stat-purple);
+  color: var(--stat-purple);
+}
+
+.metricCopy {
+  min-width: 0;
+}
+
+.metricValue {
+  display: block;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-metric);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-metric);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metricLabel {
+  display: block;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-secondary);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 899px) {
+  .metricCard {
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  .metricIcon {
+    width: 34px;
+    height: 34px;
+    font-size: 21px;
+  }
+
+}

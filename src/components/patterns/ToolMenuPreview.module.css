@@ -1,0 +1,281 @@
+.wheel {
+  position: relative;
+  width: var(--tool-menu-wheel-size);
+  height: var(--tool-menu-wheel-size);
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-tool-wheel);
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      circle at center,
+      var(--surface-tool-wheel-center) 0 27.2%,
+      var(--border-tool-wheel-divider) 27.6% 28.4%,
+      transparent 28.8%
+    ),
+    repeating-conic-gradient(
+      from -90deg,
+      var(--surface-tool-wheel-segment) 0deg 59.15deg,
+      var(--border-tool-wheel-divider) 59.15deg 60deg
+    );
+  box-shadow: var(--shadow-tool-wheel);
+  transition:
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+
+.wheel:hover {
+  border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-tool-wheel));
+  box-shadow: var(--shadow-tool-wheel-hover);
+}
+
+.wheelCenter {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(var(--tool-menu-wheel-size) * 0.31);
+  height: calc(var(--tool-menu-wheel-size) * 0.31);
+  display: grid;
+  place-items: center;
+  border: var(--border-width) solid color-mix(in srgb, var(--border-tool-wheel-divider) 80%, transparent);
+  border-radius: 50%;
+  background: var(--surface-tool-wheel-center);
+  color: var(--text-secondary);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 42%),
+    0 2px 8px rgb(36 42 50 / 8%);
+  transform: translate(-50%, -50%);
+}
+
+.wheelCenter svg {
+  width: calc(var(--tool-menu-wheel-size) * 0.16);
+  height: calc(var(--tool-menu-wheel-size) * 0.16);
+}
+
+.wheelItem {
+  position: absolute;
+  top: var(--wheel-item-y);
+  left: var(--wheel-item-x);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+}
+
+.dock {
+  min-width: 0;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: var(--border-width) solid var(--border-tool-wheel);
+  border-radius: var(--radius-card);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 38%), transparent),
+    color-mix(in srgb, var(--surface-tool-wheel-segment) 76%, var(--surface-card-subtle));
+  box-shadow: var(--shadow-tool-dock);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.vertical {
+  min-width: 0;
+  min-height: 0;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(6px, 1.4cqw, 10px);
+  padding: clamp(10px, 2.2cqw, 14px);
+  border: var(--border-width) solid var(--border-tool-wheel);
+  border-radius: var(--radius-card);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 38%), transparent),
+    color-mix(in srgb, var(--surface-tool-wheel-segment) 76%, var(--surface-card-subtle));
+  box-shadow: var(--shadow-tool-dock);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.sizeOverview {
+  --tool-menu-wheel-size: clamp(174px, 56cqw, 260px);
+}
+
+.sizeSettings {
+  --tool-menu-wheel-size: clamp(154px, 42cqw, 224px);
+}
+
+.sizeCompact {
+  --tool-menu-wheel-size: 132px;
+}
+
+.fitContainer {
+  max-width: 100%;
+}
+
+.wheel.fitContainer {
+  width: min(var(--tool-menu-wheel-size), 100%);
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.dock.fitContainer {
+  width: 100%;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.vertical.fitContainer {
+  max-height: 100%;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.dock:hover,
+.vertical:hover {
+  border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-tool-wheel));
+  box-shadow: var(--shadow-tool-dock-hover);
+}
+
+.dock.sizeCompact {
+  min-height: 52px;
+  gap: 5px;
+  padding: 9px 10px;
+}
+
+.dockItem {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: var(--border-width) solid color-mix(in srgb, var(--border-tool-wheel-divider) 70%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-card) 72%, transparent);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 44%);
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.verticalItem {
+  width: clamp(40px, 8.5cqw, 52px);
+  height: clamp(40px, 8.5cqw, 52px);
+  display: grid;
+  place-items: center;
+  border: var(--border-width) solid color-mix(in srgb, var(--border-tool-wheel-divider) 70%, transparent);
+  border-radius: clamp(12px, 2.2cqw, 15px);
+  background: color-mix(in srgb, var(--surface-card) 72%, transparent);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 44%);
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.dock.sizeCompact .dockItem {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.dock.sizeSettings {
+  min-height: clamp(58px, 12cqw, 72px);
+  gap: clamp(8px, 1.8cqw, 12px);
+  padding: clamp(10px, 2.2cqw, 14px) clamp(12px, 2.6cqw, 18px);
+  justify-content: center;
+}
+
+.dock.sizeSettings .dockItem {
+  width: clamp(40px, 8.5cqw, 52px);
+  height: clamp(40px, 8.5cqw, 52px);
+  border-radius: clamp(12px, 2.2cqw, 15px);
+}
+
+.dock.sizeSettings .appIconpreview {
+  --tool-icon-slot: clamp(36px, 7.4cqw, 46px);
+}
+
+.dock.sizeCompact {
+  justify-content: center;
+}
+
+.dockItem:hover,
+.verticalItem:hover {
+  border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-tool-wheel-divider));
+  background: color-mix(in srgb, var(--surface-shortcut) 58%, var(--surface-card));
+  transform: translateY(-2px);
+}
+
+.appIcon {
+  width: var(--tool-icon-slot);
+  height: var(--tool-icon-slot);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 9px;
+}
+
+.appIconrow {
+  --tool-icon-slot: 34px;
+}
+
+.appIconpreview {
+  --tool-icon-slot: 36px;
+}
+
+.appIconcompact {
+  --tool-icon-slot: 30px;
+}
+
+.wheel .appIconpreview {
+  --tool-icon-slot: clamp(36px, calc(var(--tool-menu-wheel-size) * 0.18), 48px);
+}
+
+.appIcon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.appIconFallback {
+  border: var(--border-width) solid color-mix(in srgb, var(--border-tool-wheel-divider) 54%, transparent);
+  background: color-mix(in srgb, var(--surface-shortcut) 52%, var(--surface-card));
+  color: var(--accent-primary);
+}
+
+.appIconpreview,
+.appIconcompact {
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 12%));
+}
+
+.emptyText {
+  align-self: center;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-body);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wheel,
+  .dock,
+  .vertical,
+  .dockItem,
+  .verticalItem {
+    transition: none;
+  }
+
+  .wheel:hover,
+  .dock:hover,
+  .vertical:hover,
+  .dockItem:hover,
+  .verticalItem:hover {
+    transform: none;
+  }
+}

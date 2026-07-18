@@ -1,0 +1,80 @@
+.twoColumn {
+  min-width: 0;
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr)
+    var(--two-column-side-override, var(--two-column-side, 270px));
+  gap: var(--two-column-gap-override, var(--two-column-gap, 20px));
+  align-items: start;
+}
+
+.splitPane {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--split-pane-left, minmax(0, 44.3fr)) minmax(0, 54.8fr);
+  gap: var(--split-pane-gap, clamp(7px, 0.7161vw, 8px));
+}
+
+.threeColumn {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--three-column-template, minmax(0, 28.1fr) minmax(0, 35.6fr) minmax(0, 36.3fr));
+}
+
+.toolbarRow {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--toolbar-row-gap, 10px);
+}
+
+.toolbarRowWrap {
+  flex-wrap: wrap;
+}
+
+.toolbarRowGrid {
+  display: grid;
+  grid-template-columns: var(--toolbar-row-template, minmax(0, 1fr) auto auto);
+}
+
+.previewFrame {
+  container-type: inline-size;
+  min-width: 0;
+  min-height: var(--preview-frame-min-height, 180px);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--preview-frame-background, color-mix(in srgb, var(--surface-card-subtle) 78%, transparent));
+}
+
+.previewFrameInset {
+  padding: var(--preview-frame-padding, 12px);
+}
+
+.settingsCard {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--settings-card-gap, 12px);
+  padding: var(--settings-card-padding, 14px);
+  overflow: hidden;
+}
+
+.settingsCardFill {
+  flex: 1 1 auto;
+}
+
+.settingsCardFixed {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 899px) {
+  .toolbarRowGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

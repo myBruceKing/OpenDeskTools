@@ -11,10 +11,10 @@ coverage/
 # Rust and Tauri build output
 target/
 src-tauri/target/
-src-tauri/gen/schemas/
+src-tauri/gen/
 *.pdb
 
-# Packaged desktop artifacts copied outside target/
+# Packaged desktop artifacts
 *.msi
 *.exe
 *.dmg
@@ -38,11 +38,12 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Local Codex/agent working material and development references
-.codex/
+# Local agent and inspection material
 .agents/
-AGENTS.md
-docs/
+.codegraph/
+.codex/
+design-qa.md
+docs/audits/**/*.png
 
 # OS and editor files
 .DS_Store

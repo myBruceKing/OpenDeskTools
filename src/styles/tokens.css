@@ -1,0 +1,94 @@
+:root {
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+
+  --font-size-caption: 11px;
+  --line-height-caption: 16px;
+  --font-size-secondary: 11px;
+  --line-height-secondary: 15px;
+  --font-size-body: 12px;
+  --line-height-body: 18px;
+  --font-size-navigation: 13px;
+  --line-height-navigation: 20px;
+  --font-size-section-title: 14px;
+  --line-height-section-title: 20px;
+  --font-size-row-title: 12px;
+  --line-height-row-title: 18px;
+  --font-size-brand: 15px;
+  --line-height-brand: 21px;
+  --font-size-metric: 16px;
+  --line-height-metric: 20px;
+  --font-size-page-title: 20px;
+  --line-height-page-title: 27px;
+
+  --font-weight-regular: 500;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+
+  --radius-pill: 6px;
+  --radius-shortcut: 7px;
+  --radius-button: 8px;
+  --radius-metric: 9px;
+  --radius-card: 10px;
+  --radius-window: 12px;
+  --radius-round: 999px;
+
+  --border-width: 1px;
+  --topbar-height: clamp(49px, 5.0781vw, 55px);
+  --sidebar-width: clamp(188px, 19.5313vw, 211px);
+  --actionbar-height: clamp(58px, 6.0547vw, 65px);
+  --content-padding-x: clamp(18px, 1.888vw, 20px);
+  --two-column-side: clamp(221px, 23.0469vw, 249px);
+  --two-column-gap: clamp(18px, 1.8229vw, 20px);
+  --control-height-compact: clamp(32px, 3.3203vw, 36px);
+  --control-height-inline: clamp(26px, 2.6693vw, 29px);
+  --control-height-footer: clamp(32px, 3.2552vw, 35px);
+  --service-pill-height: clamp(22px, 2.2135vw, 24px);
+  --nav-row-height: clamp(34px, 3.4505vw, 37px);
+  --hotkey-row-height: clamp(58px, 6.0547vw, 65px);
+  --shortcut-badge-width: clamp(50px, 5.2083vw, 56px);
+  --shortcut-badge-height: clamp(31px, 3.1901vw, 34px);
+  --toggle-width: clamp(32px, 3.125vw, 34px);
+  --toggle-height: clamp(20px, 1.9531vw, 21px);
+  --toggle-padding: 2px;
+  --toggle-thumb-size: clamp(16px, 1.5625vw, 17px);
+  --overview-summary-height: clamp(55px, 5.7292vw, 62px);
+  --overview-middle-height: clamp(288px, 30.013vw, 324px);
+  --overview-stats-height: clamp(101px, 10.5469vw, 114px);
+  --overview-wheel-size: clamp(166px, 17.3177vw, 187px);
+  --clipboard-toolbar-height: var(--control-height-compact);
+  --clipboard-settings-height: clamp(146px, 14.6484vw, 158px);
+
+  --shadow-none: none;
+  --breakpoint-compact-width: 900px;
+}
+
+@media (max-width: 899px) {
+  :root {
+    --sidebar-width: 64px;
+    --actionbar-height: 58px;
+    --content-padding-x: 12px;
+    --two-column-side: 200px;
+    --two-column-gap: 10px;
+    --control-height-inline: 26px;
+    --control-height-footer: 32px;
+    --shortcut-badge-width: 50px;
+    --shortcut-badge-height: 31px;
+    --toggle-width: 32px;
+    --toggle-height: 20px;
+    --hotkey-row-height: 58px;
+    --overview-summary-height: 55px;
+    --overview-middle-height: 288px;
+    --overview-stats-height: 101px;
+    --overview-wheel-size: 154px;
+    --clipboard-settings-height: 146px;
+  }
+}

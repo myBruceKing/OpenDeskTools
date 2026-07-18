@@ -1,0 +1,75 @@
+.hotkeyList {
+  min-height: 0;
+}
+
+.hotkeyListoverview {
+  display: grid;
+  grid-auto-rows: minmax(var(--hotkey-row-height), auto);
+}
+
+.hotkeyListfull {
+  overflow: auto;
+}
+
+.hotkeyRow {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+}
+
+.hotkeyRowoverview {
+  min-height: var(--hotkey-row-height);
+  grid-template-columns: var(--shortcut-badge-width) 28px minmax(0, 1fr) 96px var(--toggle-width) 60px;
+  padding: 0 clamp(10px, 1.0417vw, 11px);
+}
+
+.hotkeyRowfull {
+  min-height: 58px;
+  grid-template-columns: var(--shortcut-badge-width) 26px minmax(0, 1fr) 118px var(--toggle-width) 60px;
+  padding: 8px 10px;
+}
+
+.badgeCell,
+.hotkeyCopy,
+.statusCell {
+  min-width: 0;
+}
+
+.hotkeyIcon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+}
+
+.featureIcon {
+  font-size: 24px;
+}
+
+.toggleCell {
+  display: grid;
+  place-items: center;
+}
+
+.hotkeyEdit {
+  width: 60px;
+}
+
+@media (max-width: 899px) {
+  .hotkeyRowoverview {
+    grid-template-columns: 50px 22px minmax(92px, 1fr) 58px 32px 53px;
+    column-gap: 7px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .hotkeyRowfull {
+    grid-template-columns: var(--shortcut-badge-width) 24px minmax(0, 1fr) var(--toggle-width);
+  }
+
+  .hotkeyRowfull > :nth-last-child(2),
+  .hotkeyRowfull > :last-child {
+    display: none;
+  }
+}
