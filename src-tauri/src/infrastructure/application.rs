@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::ffi::{OsStr, OsString};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, Runtime};
@@ -8,6 +9,8 @@ use super::hotkey::{HotkeyError, HotkeyManager};
 use super::hotkey_capture::HotkeyCaptureManager;
 use super::storage::{StorageError, StorageService};
 use super::theme::{ThemeError, ThemeService};
+
+const DATA_DIR_ARGUMENT: &str = "--data-dir";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplicationStatus {
@@ -31,6 +34,18 @@ pub struct ApplicationRuntime {
 pub enum ApplicationRuntimeError {
     #[error("failed to resolve the application data directory: {0}")]
     AppDataDirectory(#[from] tauri::Error),
+    #[error("--data-dir must be followed by a non-empty path")]
+    MissingDataDirectoryOverride,
+    #[error("--data-dir may only be provided once")]
+    DuplicateDataDirectoryOverride,
+    #[error("failed to resolve the executable path for a relative --data-dir: {0}")]
+    CurrentExecutable(#[source] std::io::Error),
+    #[error("the executable path has no parent directory: {0}")]
+    ExecutableDirectory(PathBuf),
+    #[error(
+        "--data-dir must be fully absolute or a plain relative path without a drive or root prefix: {0}"
+    )]
+    AmbiguousDataDirectoryOverride(PathBuf),
     #[error("failed to initialize application storage: {0}")]
     Storage(#[from] StorageError),
     #[error("failed to initialize theme service: {0}")]
@@ -41,8 +56,17 @@ pub enum ApplicationRuntimeError {
 
 impl ApplicationRuntime {
     pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<Self, ApplicationRuntimeError> {
-        let app_data_dir = app.path().app_data_dir()?;
-        Self::from_app_data_dir(app_data_dir)
+        let data_root_override = parse_data_dir_override(std::env::args_os())?;
+        let data_root = match data_root_override {
+            None => app.path().app_data_dir()?,
+            Some(path) if path.is_absolute() => path,
+            Some(path) => {
+                let executable =
+                    std::env::current_exe().map_err(ApplicationRuntimeError::CurrentExecutable)?;
+                resolve_relative_data_root(&executable, path)?
+            }
+        };
+        Self::from_app_data_dir(data_root)
     }
 
     pub fn status(&self) -> ApplicationStatus {
@@ -86,10 +110,159 @@ impl ApplicationRuntime {
     }
 }
 
+fn parse_data_dir_override(
+    arguments: impl IntoIterator<Item = OsString>,
+) -> Result<Option<PathBuf>, ApplicationRuntimeError> {
+    let mut arguments = arguments.into_iter();
+    let _executable = arguments.next();
+    let mut override_path = None;
+
+    while let Some(argument) = arguments.next() {
+        let candidate = if argument == OsStr::new(DATA_DIR_ARGUMENT) {
+            let value = arguments
+                .next()
+                .ok_or(ApplicationRuntimeError::MissingDataDirectoryOverride)?;
+            if value.is_empty() || value.to_string_lossy().starts_with("--") {
+                return Err(ApplicationRuntimeError::MissingDataDirectoryOverride);
+            }
+            Some(PathBuf::from(value))
+        } else {
+            argument
+                .to_str()
+                .and_then(|value| value.strip_prefix("--data-dir="))
+                .map(|value| {
+                    if value.is_empty() {
+                        Err(ApplicationRuntimeError::MissingDataDirectoryOverride)
+                    } else {
+                        Ok(PathBuf::from(value))
+                    }
+                })
+                .transpose()?
+        };
+
+        if let Some(candidate) = candidate {
+            if override_path.replace(candidate).is_some() {
+                return Err(ApplicationRuntimeError::DuplicateDataDirectoryOverride);
+            }
+        }
+    }
+
+    Ok(override_path)
+}
+
+fn resolve_relative_data_root(
+    executable: &Path,
+    relative_path: PathBuf,
+) -> Result<PathBuf, ApplicationRuntimeError> {
+    if relative_path
+        .components()
+        .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+    {
+        return Err(ApplicationRuntimeError::AmbiguousDataDirectoryOverride(
+            relative_path,
+        ));
+    }
+    let executable_directory = executable
+        .parent()
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .ok_or_else(|| ApplicationRuntimeError::ExecutableDirectory(executable.to_path_buf()))?;
+    Ok(executable_directory.join(relative_path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn arguments(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn data_directory_override_accepts_separate_and_equals_forms() {
+        assert_eq!(
+            parse_data_dir_override(arguments(&["OpenDeskTools.exe", "--data-dir", "data"]))
+                .unwrap(),
+            Some(PathBuf::from("data"))
+        );
+        assert_eq!(
+            parse_data_dir_override(arguments(&["OpenDeskTools.exe", "--data-dir=便携数据"]))
+                .unwrap(),
+            Some(PathBuf::from("便携数据"))
+        );
+    }
+
+    #[test]
+    fn data_directory_override_ignores_unrelated_arguments_and_preserves_default() {
+        assert_eq!(
+            parse_data_dir_override(arguments(&["OpenDeskTools.exe", "--unrelated", "value"]))
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn data_directory_override_rejects_missing_empty_and_duplicate_values() {
+        for values in [
+            vec!["OpenDeskTools.exe", "--data-dir"],
+            vec!["OpenDeskTools.exe", "--data-dir="],
+            vec!["OpenDeskTools.exe", "--data-dir", "--other"],
+        ] {
+            assert!(matches!(
+                parse_data_dir_override(arguments(&values)),
+                Err(ApplicationRuntimeError::MissingDataDirectoryOverride)
+            ));
+        }
+
+        assert!(matches!(
+            parse_data_dir_override(arguments(&[
+                "OpenDeskTools.exe",
+                "--data-dir",
+                "first",
+                "--data-dir=second"
+            ])),
+            Err(ApplicationRuntimeError::DuplicateDataDirectoryOverride)
+        ));
+    }
+
+    #[test]
+    fn relative_data_directory_is_anchored_to_the_executable_directory() {
+        let executable = Path::new("C:/Portable/OpenDeskTools/OpenDeskTools.exe");
+
+        assert_eq!(
+            resolve_relative_data_root(executable, PathBuf::from("data")).unwrap(),
+            PathBuf::from("C:/Portable/OpenDeskTools/data")
+        );
+    }
+
+    #[test]
+    fn absolute_data_directory_override_does_not_depend_on_the_executable_directory() {
+        let temp = tempdir().unwrap();
+        let absolute = temp.path().join("portable-data");
+
+        assert!(absolute.is_absolute());
+        assert_eq!(
+            parse_data_dir_override(vec![
+                OsString::from("OpenDeskTools.exe"),
+                OsString::from(format!("--data-dir={}", absolute.display()))
+            ])
+            .unwrap(),
+            Some(absolute)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drive_relative_and_root_relative_overrides_are_rejected_as_ambiguous() {
+        let executable = Path::new(r"C:\Portable\OpenDeskTools\OpenDeskTools.exe");
+
+        for path in [PathBuf::from(r"\data"), PathBuf::from(r"C:data")] {
+            assert!(matches!(
+                resolve_relative_data_root(executable, path),
+                Err(ApplicationRuntimeError::AmbiguousDataDirectoryOverride(_))
+            ));
+        }
+    }
 
     #[test]
     fn runtime_initializes_storage_in_the_resolved_application_data_directory() {

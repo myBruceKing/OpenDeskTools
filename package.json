@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "check:node": "node scripts/check-node.mjs",
+    "check:source": "node scripts/check-source-safety.mjs",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
     "test": "vitest run",
