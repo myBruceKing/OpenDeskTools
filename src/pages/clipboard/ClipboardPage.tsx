@@ -317,7 +317,13 @@ function DetailsPanel({
     <Section className={styles.detailsPanel}>
       <div className={styles.panelHeader}>
         <SectionTitle>内容预览</SectionTitle>
-        <HintTooltip className={styles.panelInfoHint} content={infoCopy} label="查看内容信息" symbol="i" />
+        <HintTooltip
+          className={styles.panelInfoHint}
+          content={infoCopy}
+          label="查看内容信息"
+          symbol="i"
+          interactive
+        />
       </div>
       <div className={[styles.previewBox, item?.kind === "image" ? styles.previewBoxImage : ""].filter(Boolean).join(" ")}>
         {item?.kind === "image" && item.previewImageUrl ? (

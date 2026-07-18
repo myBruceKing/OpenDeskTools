@@ -441,18 +441,13 @@
   position: fixed;
   z-index: var(--z-tooltip);
   width: max-content;
-  max-width: 260px;
-  padding: 7px 9px;
+  max-width: min(360px, calc(100vw - 16px));
   border: var(--border-width) solid var(--border-tooltip);
   border-radius: var(--radius-button);
   background: var(--surface-tooltip);
   color: var(--text-tooltip);
   box-shadow: var(--shadow-tooltip);
-  font-size: var(--font-size-secondary);
-  font-weight: var(--font-weight-regular);
-  line-height: var(--line-height-secondary);
-  text-align: left;
-  white-space: pre-line;
+  overflow: visible;
   pointer-events: none;
   opacity: 1;
   transition:
@@ -460,12 +455,38 @@
     transform var(--motion-duration-fast) ease;
 }
 
+.hintBubbleInteractive {
+  pointer-events: auto;
+}
+
+.hintBubbleContent {
+  box-sizing: border-box;
+  max-width: 100%;
+  max-height: calc(100vh - 16px);
+  display: block;
+  padding: 7px 9px;
+  overflow: hidden;
+  border-radius: inherit;
+  color: inherit;
+  font-size: var(--font-size-secondary);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-secondary);
+  text-align: left;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.hintBubbleContentInteractive {
+  overflow: auto;
+}
+
 .hintBubbleTop {
-  transform: translate(-100%, -100%);
+  transform: none;
 }
 
 .hintBubbleBottom {
-  transform: translate(-100%, 0);
+  transform: none;
 }
 
 .hintBubble::after {
@@ -478,7 +499,7 @@
 }
 
 .hintBubbleTop::after {
-  right: 5px;
+  left: var(--tooltip-arrow-left, calc(100% - 15px));
   bottom: -5px;
   border-right: var(--border-width) solid var(--border-tooltip);
   border-bottom: var(--border-width) solid var(--border-tooltip);
@@ -486,7 +507,7 @@
 
 .hintBubbleBottom::after {
   top: -5px;
-  right: 5px;
+  left: var(--tooltip-arrow-left, calc(100% - 15px));
   border-top: var(--border-width) solid var(--border-tooltip);
   border-left: var(--border-width) solid var(--border-tooltip);
 }

@@ -2,6 +2,7 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createClipboardLoadingState,
@@ -10,6 +11,11 @@ import {
   type ClipboardHistoryItem
 } from "../../src/app/clipboardModel";
 import { ClipboardPage } from "../../src/pages/clipboard/ClipboardPage";
+
+const primitivesCss = readFileSync(
+  "src/components/primitives/primitives.module.css",
+  "utf8"
+);
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -35,6 +41,9 @@ const rawItems: ClipboardHistoryItem[] = [
     isFavorite: true
   }
 ];
+
+const longSourceApplication = "超长应用".repeat(64);
+const longSourceProcess = `C:\\${"deep-folder\\".repeat(60)}app.exe`.slice(0, 512);
 
 function readyState(overrides: Partial<ClipboardControllerState> = {}): ClipboardControllerState {
   return {
@@ -63,11 +72,38 @@ describe("ClipboardPage", () => {
       configurable: true,
       value: vi.fn()
     });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 320 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 480 });
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get() {
+        return this.dataset.tooltipContainer === "true" ? 300 : 0;
+      }
+    });
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get() {
+        return this.dataset.tooltipContainer === "true" ? 280 : 0;
+      }
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return this.getAttribute("aria-label") === "查看内容信息详情" ? 280 : 0;
+      }
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() {
+        return this.getAttribute("aria-label") === "查看内容信息详情" ? 600 : 0;
+      }
+    });
   });
 
   afterEach(async () => {
     await act(async () => root.unmount());
     document.body.replaceChildren();
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -193,5 +229,157 @@ describe("ClipboardPage", () => {
     expect(document.body.textContent).toContain("监控不可用");
     expect(document.body.textContent).toContain("剪贴板实时更新暂时不可用");
     expect(document.body.textContent).toContain("普通内容");
+  });
+
+  it.each([
+    ["unknown", rawItems[0], "来源应用：来源不可用", "来源进程：来源不可用"],
+    ["ordinary", rawItems[1], "来源应用：记事本", "来源进程：notepad.exe"]
+  ] as const)("shows complete %s source metadata in the details tooltip", async (_label, item, appCopy, processCopy) => {
+    await render({
+      ...readyState(),
+      viewModel: createClipboardReadyViewModel({
+        items: [{ ...item }],
+        totalCount: 1,
+        monitoring: "running"
+      })
+    });
+    const hint = document.querySelector<HTMLElement>("[aria-label='查看内容信息']")!;
+    expect(hint.getAttribute("role")).toBe("button");
+    expect(hint.getAttribute("aria-expanded")).toBe("false");
+    const ordinaryHint = document.querySelector<HTMLElement>("[aria-label='查看剪贴板历史提示']")!;
+    expect(ordinaryHint.getAttribute("role")).toBe("img");
+    expect(ordinaryHint.hasAttribute("aria-expanded")).toBe(false);
+    Object.defineProperty(hint, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 292,
+        right: 310,
+        top: 420,
+        bottom: 438,
+        width: 18,
+        height: 18,
+        x: 292,
+        y: 420,
+        toJSON: () => undefined
+      })
+    });
+    await act(async () => hint.focus());
+    const tooltip = document.querySelector<HTMLElement>("[role='dialog'][aria-label='查看内容信息详情']")!;
+    expect(tooltip.textContent).toContain(appCopy);
+    expect(tooltip.textContent).toContain(processCopy);
+    expect(hint.getAttribute("aria-controls")).toBe(tooltip.id);
+    expect(hint.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("wraps and clamps maximum source metadata when opened from the keyboard", async () => {
+    const longItem: ClipboardHistoryItem = {
+      ...rawItems[0],
+      id: "3",
+      sourceApplication: longSourceApplication,
+      sourceProcess: longSourceProcess
+    };
+    await render({
+      ...readyState(),
+      viewModel: createClipboardReadyViewModel({
+        items: [longItem],
+        totalCount: 1,
+        monitoring: "running"
+      })
+    });
+    const hint = document.querySelector<HTMLElement>("[aria-label='查看内容信息']")!;
+    Object.defineProperty(hint, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 2,
+        right: 20,
+        top: 10,
+        bottom: 28,
+        width: 18,
+        height: 18,
+        x: 2,
+        y: 10,
+        toJSON: () => undefined
+      })
+    });
+
+    await act(async () => hint.focus());
+    const tooltip = document.querySelector<HTMLElement>("[role='dialog'][aria-label='查看内容信息详情']")!;
+    const tooltipContainer = tooltip.closest<HTMLElement>("[data-tooltip-container='true']")!;
+    const left = Number.parseFloat(tooltipContainer.style.left);
+    const top = Number.parseFloat(tooltipContainer.style.top);
+    expect(tooltip.textContent).toContain(longSourceApplication);
+    expect(tooltip.textContent).toContain(longSourceProcess);
+    expect(left).toBeGreaterThanOrEqual(8);
+    expect(left + tooltipContainer.offsetWidth).toBeLessThanOrEqual(window.innerWidth - 8);
+    expect(top).toBeGreaterThanOrEqual(8);
+    expect(top + tooltipContainer.offsetHeight).toBeLessThanOrEqual(window.innerHeight - 8);
+    expect(tooltipContainer.style.getPropertyValue("--tooltip-arrow-left")).not.toBe("");
+    expect(primitivesCss).toMatch(/\.hintBubble\s*\{[\s\S]*overflow:\s*visible;/);
+    expect(primitivesCss).toMatch(/\.hintBubbleContentInteractive\s*\{[\s\S]*overflow:\s*auto;/);
+    expect(primitivesCss).toMatch(/\.hintBubbleContent\s*\{[\s\S]*overflow-wrap:\s*anywhere;/);
+    expect(primitivesCss).toMatch(/\.hintBubbleInteractive\s*\{[\s\S]*pointer-events:\s*auto;/);
+    expect(tooltip.scrollHeight).toBeGreaterThan(tooltip.clientHeight);
+
+    await act(async () => {
+      hint.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(document.activeElement).toBe(tooltip);
+    tooltip.scrollTop = 120;
+    expect(tooltip.scrollTop).toBe(120);
+
+    Object.defineProperty(hint, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 292,
+        right: 310,
+        top: 420,
+        bottom: 438,
+        width: 18,
+        height: 18,
+        x: 292,
+        y: 420,
+        toJSON: () => undefined
+      })
+    });
+    await act(async () => window.dispatchEvent(new Event("scroll")));
+    expect(Number.parseFloat(tooltipContainer.style.left)).toBe(10);
+    expect(Number.parseFloat(tooltipContainer.style.top)).toBe(132);
+
+    await act(async () => {
+      tooltip.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(document.activeElement).toBe(hint);
+    expect(document.querySelector("[role='dialog'][aria-label='查看内容信息详情']")).toBeNull();
+    expect(hint.getAttribute("aria-expanded")).toBe("false");
+    expect(hint.hasAttribute("aria-controls")).toBe(false);
+  });
+
+  it("opens and closes the details tooltip on pointer hover", async () => {
+    vi.useFakeTimers();
+    await render(readyState());
+    const hint = document.querySelector<HTMLElement>("[aria-label='查看内容信息']")!;
+    Object.defineProperty(hint, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 280,
+        right: 298,
+        top: 200,
+        bottom: 218,
+        width: 18,
+        height: 18,
+        x: 280,
+        y: 200,
+        toJSON: () => undefined
+      })
+    });
+    await act(async () => {
+      hint.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    expect(document.querySelector("[role='dialog'][aria-label='查看内容信息详情']")).toBeTruthy();
+    await act(async () => {
+      hint.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }));
+      vi.advanceTimersByTime(101);
+    });
+    expect(document.querySelector("[role='dialog'][aria-label='查看内容信息详情']")).toBeNull();
   });
 });
