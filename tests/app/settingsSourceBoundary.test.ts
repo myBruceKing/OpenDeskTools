@@ -65,11 +65,27 @@ describe("settings production source boundary", () => {
     const hotkeysPage = source("src/pages/hotkeys/HotkeysPage.tsx");
     const generalPage = source("src/pages/general/GeneralPage.tsx");
 
-    expect(app).toContain("<HotkeysPage hotkeys={overview.hotkeys}");
+    expect(app).toContain("<HotkeysPage onSnapshotChanged={refreshOverview} />");
+    expect(hotkeysPage).toContain("useHotkeyController");
+    expect(hotkeysPage).toContain("onSnapshotChanged");
     expect(app).toContain("<GeneralPage version={overview.version} startupEnabled={overview.startupEnabled}");
     expect(hotkeysPage).not.toContain("EMPTY_OVERVIEW_VIEW_MODEL");
+    expect(hotkeysPage).not.toContain("OverviewHotkeyViewModel");
     expect(generalPage).toContain("startupEnabled: boolean | null");
     expect(generalPage).toContain("version: string | null");
+  });
+
+  it("renders all backend classification branches without pretending unavailable actions registered", () => {
+    const hotkeysPage = source("src/pages/hotkeys/HotkeysPage.tsx");
+
+    expect(hotkeysPage).toContain('classification === "system_reserved"');
+    expect(hotkeysPage).toContain("强制覆盖系统热键");
+    expect(hotkeysPage).toContain("该组合被系统禁止注册，不能保存");
+    expect(hotkeysPage).toContain("连续按键序列不支持注册为全局快捷键");
+    expect(hotkeysPage).toContain("功能接入后生效");
+    expect(hotkeysPage).toContain("当前状态不会显示为已注册");
+    expect(hotkeysPage).toContain('action.actionAvailable ? toHotkeyBadgeState(action.runtimeState) : "unavailable"');
+    expect(hotkeysPage).toContain("disabled={!canSaveHotkeyEditor(state)}");
   });
 
   it("routes the real overview version into AppShell without a fake fallback", () => {

@@ -143,6 +143,49 @@
   gap: 10px;
 }
 
+.hotkeyPageError,
+.hotkeyClassificationPending,
+.hotkeyClassificationSuccess,
+.hotkeyClassificationWarning,
+.hotkeyClassificationError,
+.hotkeyActionUnavailable {
+  padding: 9px 11px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-button);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+.hotkeyPageError,
+.hotkeyClassificationError {
+  border-color: color-mix(in srgb, var(--status-danger) 42%, var(--border-default));
+  background: color-mix(in srgb, var(--status-danger) 10%, var(--surface-card));
+  color: var(--status-danger);
+}
+
+.hotkeyClassificationPending,
+.hotkeyActionUnavailable {
+  background: var(--surface-card-subtle);
+  color: var(--text-secondary);
+}
+
+.hotkeyClassificationSuccess {
+  border-color: var(--border-success);
+  background: var(--surface-success);
+  color: var(--text-primary);
+}
+
+.hotkeyClassificationWarning {
+  border-color: color-mix(in srgb, var(--status-warning) 42%, var(--border-default));
+  background: var(--surface-warning);
+  color: var(--text-primary);
+}
+
+.hotkeyEditor {
+  display: grid;
+  gap: 12px;
+}
+
 .switchRow {
   min-width: 0;
   display: grid;

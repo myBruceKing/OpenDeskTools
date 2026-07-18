@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell, type AppRoute } from "../components/shell/AppShell";
 import { ClipboardPage } from "../pages/clipboard/ClipboardPage";
 import { CaptureQrPage } from "../pages/capture-qr/CaptureQrPage";
@@ -31,6 +31,7 @@ function readInitialRoute(): AppRoute {
 function App() {
   const [overview, setOverview] = useState<OverviewViewModel>(EMPTY_OVERVIEW_VIEW_MODEL);
   const [route, setRoute] = useState<AppRoute>(readInitialRoute);
+  const overviewRequest = useRef(0);
   const themeController = useThemeController();
   const { systemDark, systemReducedMotion } = useSystemThemePreferences();
   const themePresentation = createThemeRootPresentation(
@@ -41,27 +42,28 @@ function App() {
   useDocumentTheme(themePresentation);
   useDesktopWebViewGuards();
 
-  useEffect(() => {
-    let active = true;
+  const refreshOverview = useCallback(async () => {
+    const request = ++overviewRequest.current;
+    try {
+      const viewModel = await overviewClient.load();
+      if (request === overviewRequest.current) {
+        setOverview(viewModel);
+      }
+    } catch (error: unknown) {
+      console.error("Unable to load the overview view model", error);
+      if (request === overviewRequest.current) {
+        setOverview(EMPTY_OVERVIEW_VIEW_MODEL);
+      }
+    }
+  }, []);
 
-    void overviewClient
-      .load()
-      .then((viewModel) => {
-        if (active) {
-          setOverview(viewModel);
-        }
-      })
-      .catch((error: unknown) => {
-        console.error("Unable to load the overview view model", error);
-        if (active) {
-          setOverview(EMPTY_OVERVIEW_VIEW_MODEL);
-        }
-      });
+  useEffect(() => {
+    void refreshOverview();
 
     return () => {
-      active = false;
+      overviewRequest.current += 1;
     };
-  }, []);
+  }, [refreshOverview]);
 
   function navigate(routeId: AppRoute) {
     setRoute(routeId);
@@ -75,7 +77,7 @@ function App() {
       case "clipboard":
         return <ClipboardPage viewModel={EMPTY_CLIPBOARD_VIEW_MODEL} />;
       case "hotkeys":
-        return <HotkeysPage hotkeys={overview.hotkeys} />;
+        return <HotkeysPage onSnapshotChanged={refreshOverview} />;
       case "quickLaunch":
         return <QuickLaunchPage />;
       case "captureQr":

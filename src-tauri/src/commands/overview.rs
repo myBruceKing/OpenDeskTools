@@ -2,6 +2,7 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::infrastructure::application::{ApplicationRuntime, ApplicationStatus, StartupMode};
+use crate::infrastructure::hotkey::HotkeyRuntimeState;
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +42,39 @@ pub fn get_overview_view_model(
 }
 
 fn build_view_model(runtime: &ApplicationRuntime, version: String) -> OverviewViewModel {
+    let hotkeys = runtime.hotkeys().snapshot().ok().map(|snapshot| {
+        snapshot
+            .actions
+            .into_iter()
+            .map(|hotkey| OverviewHotkeyViewModel {
+                id: match hotkey.action_id {
+                    crate::infrastructure::hotkey::HotkeyActionId::ScreenshotCapture => "capture",
+                    crate::infrastructure::hotkey::HotkeyActionId::ClipboardPinImage => "pinImage",
+                    crate::infrastructure::hotkey::HotkeyActionId::ClipboardQrConvert => {
+                        "clipboardQr"
+                    }
+                    crate::infrastructure::hotkey::HotkeyActionId::LauncherOpen => "toolWheel",
+                    crate::infrastructure::hotkey::HotkeyActionId::ClipboardOpenPanel => {
+                        "clipboardPanel"
+                    }
+                }
+                .to_owned(),
+                binding: Some(hotkey.binding),
+                enabled: Some(hotkey.configured_enabled),
+                state: Some(
+                    match hotkey.runtime_state {
+                        HotkeyRuntimeState::Registered => "normal",
+                        HotkeyRuntimeState::Conflict => "conflict",
+                        HotkeyRuntimeState::Disabled
+                        | HotkeyRuntimeState::Unavailable
+                        | HotkeyRuntimeState::Degraded => "unavailable",
+                    }
+                    .to_owned(),
+                ),
+                detail: hotkey.detail,
+            })
+            .collect()
+    });
     OverviewViewModel {
         version,
         service_state: match runtime.status() {
@@ -49,7 +83,7 @@ fn build_view_model(runtime: &ApplicationRuntime, version: String) -> OverviewVi
         startup_enabled: match runtime.startup_mode() {
             StartupMode::Manual => false,
         },
-        hotkeys: None,
+        hotkeys,
         statistics: None,
     }
 }
@@ -73,20 +107,27 @@ mod tests {
 
         let view_model = build_view_model(&runtime, "1.2.3".to_owned());
 
-        assert_eq!(
-            view_model,
-            OverviewViewModel {
-                version: "1.2.3".to_owned(),
-                service_state: "running",
-                startup_enabled: false,
-                hotkeys: None,
-                statistics: None,
-            }
-        );
+        assert_eq!(view_model.version, "1.2.3");
+        assert_eq!(view_model.service_state, "running");
+        assert!(!view_model.startup_enabled);
+        assert!(view_model.statistics.is_none());
+        let hotkeys = view_model
+            .hotkeys
+            .expect("hotkeys should be real runtime data");
+        assert_eq!(hotkeys.len(), 5);
+        assert_eq!(hotkeys[0].id, "capture");
+        assert_eq!(hotkeys[0].binding.as_deref(), Some("F1"));
+        assert_eq!(hotkeys[0].enabled, Some(true));
+        assert_eq!(hotkeys[0].state.as_deref(), Some("unavailable"));
+        assert_eq!(hotkeys[4].id, "clipboardPanel");
+        assert!(hotkeys[4]
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("Windows")));
     }
 
     #[test]
-    fn view_model_serializes_the_frontend_contract_with_null_unimplemented_data() {
+    fn view_model_serializes_real_hotkeys_with_the_legacy_overview_ids() {
         let (_temp, runtime) = test_runtime();
         let response = build_view_model(&runtime, "0.1.0".to_owned())
             .body()
@@ -96,9 +137,17 @@ mod tests {
             panic!("overview view model must serialize to JSON");
         };
 
-        assert_eq!(
-            json,
-            r#"{"version":"0.1.0","serviceState":"running","startupEnabled":false,"hotkeys":null,"statistics":null}"#
-        );
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(json["version"], "0.1.0");
+        assert_eq!(json["serviceState"], "running");
+        assert_eq!(json["startupEnabled"], false);
+        let hotkeys = json["hotkeys"].as_array().unwrap();
+        assert_eq!(hotkeys.len(), 5);
+        assert_eq!(hotkeys[0]["id"], "capture");
+        assert_eq!(hotkeys[1]["id"], "pinImage");
+        assert_eq!(hotkeys[2]["id"], "clipboardQr");
+        assert_eq!(hotkeys[3]["id"], "toolWheel");
+        assert_eq!(hotkeys[4]["id"], "clipboardPanel");
+        assert_eq!(hotkeys[4]["state"], "unavailable");
     }
 }

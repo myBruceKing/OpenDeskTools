@@ -116,4 +116,14 @@ describe("getToolWheelShortcutLabel", () => {
 
     expect(getToolWheelShortcutLabel(viewModel.hotkeys)).toBe("Ctrl+Space 呼出");
   });
+
+  it("does not advertise an unavailable binding as callable", () => {
+    const viewModel = createOverviewViewModel(
+      snapshot({
+        hotkeys: [{ id: "toolWheel", binding: "Alt+Space", enabled: true, state: "unavailable", detail: null }]
+      })
+    );
+
+    expect(getToolWheelShortcutLabel(viewModel.hotkeys)).toBe("快捷键尚未生效");
+  });
 });

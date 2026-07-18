@@ -55,8 +55,15 @@ export type OverviewViewModel = {
 };
 
 export function getToolWheelShortcutLabel(hotkeys: OverviewHotkeyViewModel[]) {
-  const binding = hotkeys.find((hotkey) => hotkey.id === "toolWheel")?.binding?.trim();
-  return binding ? `${binding} 呼出` : "快捷键服务未接入";
+  const toolWheel = hotkeys.find((hotkey) => hotkey.id === "toolWheel");
+  const binding = toolWheel?.binding?.trim();
+  if (binding && toolWheel?.enabled === true && toolWheel.state === "normal") {
+    return `${binding} 呼出`;
+  }
+  if (binding && toolWheel?.state === "conflict") {
+    return `${binding} 冲突`;
+  }
+  return binding ? "快捷键尚未生效" : "快捷键服务未接入";
 }
 
 const EMPTY_STATISTICS: OverviewViewModel["statistics"] = {

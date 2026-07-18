@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
 use thiserror::Error;
 
+use super::hotkey::{HotkeyError, HotkeyManager};
 use super::storage::{StorageError, StorageService};
 use super::theme::{ThemeError, ThemeService};
 
@@ -20,6 +21,7 @@ pub enum StartupMode {
 #[derive(Debug)]
 pub struct ApplicationRuntime {
     storage: Arc<StorageService>,
+    hotkeys: HotkeyManager,
     theme: ThemeService,
 }
 
@@ -31,6 +33,8 @@ pub enum ApplicationRuntimeError {
     Storage(#[from] StorageError),
     #[error("failed to initialize theme service: {0}")]
     Theme(#[from] ThemeError),
+    #[error("failed to initialize hotkey manager: {0}")]
+    Hotkey(#[from] HotkeyError),
 }
 
 impl ApplicationRuntime {
@@ -57,12 +61,21 @@ impl ApplicationRuntime {
         &self.theme
     }
 
+    pub(crate) fn hotkeys(&self) -> &HotkeyManager {
+        &self.hotkeys
+    }
+
     pub(crate) fn from_app_data_dir(
         app_data_dir: PathBuf,
     ) -> Result<Self, ApplicationRuntimeError> {
         let storage = Arc::new(StorageService::initialize(app_data_dir)?);
         let theme = ThemeService::initialize(Arc::clone(&storage))?;
-        Ok(Self { storage, theme })
+        let hotkeys = HotkeyManager::initialize(Arc::clone(&storage))?;
+        Ok(Self {
+            storage,
+            hotkeys,
+            theme,
+        })
     }
 }
 

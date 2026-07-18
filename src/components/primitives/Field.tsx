@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import styles from "./primitives.module.css";
 
 type SearchFieldProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
@@ -84,18 +84,28 @@ type ShortcutCaptureFieldProps = {
   label: string;
   placeholder?: string;
   onChange: (value: string) => void;
+  autoFocus?: boolean;
 };
 
 export function ShortcutCaptureField({
   value,
   label,
   placeholder = "按下快捷键",
-  onChange
+  onChange,
+  autoFocus = false
 }: ShortcutCaptureFieldProps) {
   const tokens = value.trim().split(/\s+/).filter(Boolean);
   const [pendingModifiers, setPendingModifiers] = useState<string[]>([]);
   const modifierChordConsumedRef = useRef(false);
   const captureRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!autoFocus) {
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(() => captureRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [autoFocus]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     event.preventDefault();
