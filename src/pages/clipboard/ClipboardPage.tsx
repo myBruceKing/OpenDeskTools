@@ -13,10 +13,10 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type {
+  ClipboardControllerState,
   ClipboardFilter,
   ClipboardItemViewModel,
-  ClipboardMonitoringState,
-  ClipboardPageViewModel
+  ClipboardMonitoringState
 } from "../../app/clipboardModel";
 import { getClipboardMonitoringPresentation } from "../../app/clipboardModel";
 import { SplitPane, ThreeColumn } from "../../components/layout/TwoColumn";
@@ -31,7 +31,10 @@ import { Section, SectionTitle } from "../../components/patterns/Section";
 import styles from "./ClipboardPage.module.css";
 
 type ClipboardPageProps = {
-  viewModel: ClipboardPageViewModel;
+  state: ClipboardControllerState;
+  onSetFavorite: (id: string, isFavorite: boolean) => void;
+  onDelete: (id: string) => void;
+  onClearUnfavoriteHistory: () => void;
 };
 
 const filterOptions: { value: ClipboardFilter; label: string }[] = [
@@ -69,11 +72,13 @@ function HistoryIcon({ item }: { item: ClipboardItemViewModel }) {
 function HistoryRow({
   item,
   selected,
+  favoriteDisabled,
   onSelect,
   onToggleFavorite
 }: {
   item: ClipboardItemViewModel;
   selected: boolean;
+  favoriteDisabled: boolean;
   onSelect: () => void;
   onToggleFavorite: () => void;
 }) {
@@ -101,6 +106,7 @@ function HistoryRow({
         className={styles.favoriteButton}
         type="button"
         aria-label={item.favorite ? "取消收藏" : "收藏"}
+        disabled={favoriteDisabled}
         onClick={(event) => {
           event.stopPropagation();
           onToggleFavorite();
@@ -118,15 +124,19 @@ function Toolbar({
   filter,
   monitoring,
   canClearHistory,
+  clearing,
   onQueryChange,
-  onFilterChange
+  onFilterChange,
+  onClearHistory
 }: {
   query: string;
   filter: ClipboardFilter;
   monitoring: ClipboardMonitoringState;
   canClearHistory: boolean;
+  clearing: boolean;
   onQueryChange: (value: string) => void;
   onFilterChange: (value: ClipboardFilter) => void;
+  onClearHistory: () => void;
 }) {
   const monitoringPresentation = getClipboardMonitoringPresentation(monitoring);
 
@@ -155,9 +165,10 @@ function Toolbar({
         className={styles.clearButton}
         variant="text"
         icon={<Delete20Regular aria-hidden="true" />}
-        disabled={!canClearHistory}
+        disabled={!canClearHistory || clearing}
+        onClick={onClearHistory}
       >
-        清空历史
+        {clearing ? "正在清空" : "清空历史"}
       </Button>
     </div>
   );
@@ -167,12 +178,20 @@ function HistoryPanel({
   items,
   totalCount,
   selectedId,
+  statusMessage,
+  statusIsError,
+  pendingItemIds,
+  canFavorite,
   onSelect,
   onToggleFavorite
 }: {
   items: ClipboardItemViewModel[];
   totalCount: number;
   selectedId: string | null;
+  statusMessage: string | null;
+  statusIsError: boolean;
+  pendingItemIds: readonly string[];
+  canFavorite: boolean;
   onSelect: (id: string) => void;
   onToggleFavorite: (id: string) => void;
 }) {
@@ -243,13 +262,19 @@ function HistoryPanel({
         tabIndex={0}
         onKeyDown={handleKeyDown}
       >
+        {statusMessage && (
+          <div className={styles.historyNotice} role={statusIsError ? "alert" : "status"}>
+            {statusMessage}
+          </div>
+        )}
         {items.length === 0 ? (
-          <div className={styles.emptyHistory}>暂无剪贴板历史</div>
+          !statusMessage && <div className={styles.emptyHistory}>暂无剪贴板历史</div>
         ) : (
           items.map((item) => (
             <HistoryRow
               item={item}
               selected={item.id === selectedId}
+              favoriteDisabled={!canFavorite || pendingItemIds.includes(item.id)}
               key={item.id}
               onSelect={() => {
                 onSelect(item.id);
@@ -266,12 +291,16 @@ function HistoryPanel({
 
 function DetailsPanel({
   item,
-  viewModel,
+  canFavorite,
+  canDelete,
+  itemPending,
   onToggleFavorite,
   onDelete
 }: {
   item: ClipboardItemViewModel | null;
-  viewModel: ClipboardPageViewModel;
+  canFavorite: boolean;
+  canDelete: boolean;
+  itemPending: boolean;
   onToggleFavorite: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -300,7 +329,7 @@ function DetailsPanel({
       <div className={styles.detailsActions}>
         <Button
           icon={item?.favorite ? <Star20Filled aria-hidden="true" /> : <Star20Regular aria-hidden="true" />}
-          disabled={!viewModel.actions.canFavorite || !item}
+          disabled={!canFavorite || !item || itemPending}
           onClick={() => {
             if (item) {
               onToggleFavorite(item.id);
@@ -312,7 +341,7 @@ function DetailsPanel({
         <Button
           className={styles.dangerButton}
           icon={<Delete20Regular aria-hidden="true" />}
-          disabled={!viewModel.actions.canDelete || !item}
+          disabled={!canDelete || !item || itemPending}
           onClick={() => setDeleteConfirmOpen(true)}
         >
           删除
@@ -321,7 +350,7 @@ function DetailsPanel({
       <ConfirmDialog
         open={deleteConfirmOpen}
         title="删除剪贴板记录"
-        description={item ? `确认删除「${item.title}」？当前只从页面预览中移除。` : "没有可删除的剪贴板记录。"}
+        description={item ? `确认永久删除「${item.title}」？` : "没有可删除的剪贴板记录。"}
         confirmText="删除"
         danger
         onConfirm={() => {
@@ -336,7 +365,7 @@ function DetailsPanel({
   );
 }
 
-function SettingsPanel({ viewModel }: { viewModel: ClipboardPageViewModel }) {
+function SettingsPanel({ viewModel }: { viewModel: ClipboardControllerState["viewModel"] }) {
   const unavailableValue = "—";
   const retentionDays = viewModel.settings.retentionDays ?? unavailableValue;
   const duplicateStrategy = viewModel.settings.duplicateStrategy ?? unavailableValue;
@@ -397,18 +426,21 @@ function SettingsPanel({ viewModel }: { viewModel: ClipboardPageViewModel }) {
   );
 }
 
-export function ClipboardPage({ viewModel }: ClipboardPageProps) {
+export function ClipboardPage({
+  state,
+  onSetFavorite,
+  onDelete,
+  onClearUnfavoriteHistory
+}: ClipboardPageProps) {
+  const { viewModel } = state;
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ClipboardFilter>("all");
-  const [favoriteIds, setFavoriteIds] = useState(() => new Set(viewModel.items.filter((item) => item.favorite).map((item) => item.id)));
-  const [deletedIds, setDeletedIds] = useState(() => new Set<string>());
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(viewModel.items[0]?.id ?? null);
 
   const items = useMemo(
     () =>
       viewModel.items
-        .filter((item) => !deletedIds.has(item.id))
-        .map((item) => ({ ...item, favorite: favoriteIds.has(item.id) }))
         .filter((item) => {
           if (filter === "text" && item.kind !== "text") {
             return false;
@@ -421,29 +453,32 @@ export function ClipboardPage({ viewModel }: ClipboardPageProps) {
           }
           return `${item.title} ${item.preview} ${item.sourceApp}`.toLocaleLowerCase().includes(query.toLocaleLowerCase());
         }),
-    [deletedIds, favoriteIds, filter, query, viewModel.items]
+    [filter, query, viewModel.items]
   );
 
   const selectedItem = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
-  const totalCount = Math.max(0, viewModel.totalCount - deletedIds.size);
   const toggleFavorite = (id: string) => {
-    setFavoriteIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
+    const item = viewModel.items.find((candidate) => candidate.id === id);
+    if (item) {
+      onSetFavorite(id, !item.favorite);
+    }
   };
-  const deleteItem = (id: string) => {
-    setDeletedIds((current) => {
-      const next = new Set(current);
-      next.add(id);
-      return next;
-    });
-  };
+  const emptyStatusMessage = state.status === "loading"
+    ? "正在加载剪贴板历史…"
+    : state.status === "unavailable"
+      ? "剪贴板历史不可用"
+      : null;
+  const statusMessage = state.error?.message ?? emptyStatusMessage;
+  const actionsAvailable = state.status === "ready" && !state.clearing;
+  const canFavorite = viewModel.actions.canFavorite && actionsAvailable;
+  const canDelete = viewModel.actions.canDelete && actionsAvailable;
+  const canClearHistory = viewModel.actions.canClearHistory
+    && state.status === "ready"
+    && state.pendingItemIds.length === 0
+    && viewModel.items.some((item) => !item.favorite);
+  const selectedPending = selectedItem
+    ? state.pendingItemIds.includes(selectedItem.id)
+    : false;
 
   return (
     <div className={styles.page}>
@@ -451,21 +486,46 @@ export function ClipboardPage({ viewModel }: ClipboardPageProps) {
         query={query}
         filter={filter}
         monitoring={viewModel.monitoring}
-        canClearHistory={viewModel.actions.canClearHistory}
+        canClearHistory={canClearHistory}
+        clearing={state.clearing}
         onQueryChange={setQuery}
         onFilterChange={setFilter}
+        onClearHistory={() => setClearConfirmOpen(true)}
       />
       <SplitPane className={styles.middle}>
         <HistoryPanel
           items={items}
-          totalCount={totalCount}
+          totalCount={viewModel.totalCount}
           selectedId={selectedItem?.id ?? null}
+          statusMessage={statusMessage}
+          statusIsError={state.error !== null || state.status === "unavailable"}
+          pendingItemIds={state.pendingItemIds}
+          canFavorite={canFavorite}
           onSelect={setSelectedId}
           onToggleFavorite={toggleFavorite}
         />
-        <DetailsPanel item={selectedItem} viewModel={viewModel} onToggleFavorite={toggleFavorite} onDelete={deleteItem} />
+        <DetailsPanel
+          item={selectedItem}
+          canFavorite={canFavorite}
+          canDelete={canDelete}
+          itemPending={selectedPending}
+          onToggleFavorite={toggleFavorite}
+          onDelete={onDelete}
+        />
       </SplitPane>
       <SettingsPanel viewModel={viewModel} />
+      <ConfirmDialog
+        open={clearConfirmOpen}
+        title="清空未收藏历史"
+        description="确认永久删除全部未收藏的剪贴板记录？已收藏内容会保留。"
+        confirmText="清空"
+        danger
+        onConfirm={() => {
+          onClearUnfavoriteHistory();
+          setClearConfirmOpen(false);
+        }}
+        onClose={() => setClearConfirmOpen(false)}
+      />
     </div>
   );
 }

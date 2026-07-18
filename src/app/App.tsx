@@ -12,7 +12,7 @@ import {
   EMPTY_OVERVIEW_VIEW_MODEL,
   type OverviewViewModel
 } from "./overviewModel";
-import { EMPTY_CLIPBOARD_VIEW_MODEL } from "./clipboardModel";
+import { useClipboardController } from "./useClipboardController";
 import { useDesktopWebViewGuards } from "./useDesktopWebViewGuards";
 import {
   createThemeRootPresentation,
@@ -22,6 +22,18 @@ import {
 import { useThemeController } from "./useThemeController";
 
 const routeIds: AppRoute[] = ["overview", "hotkeys", "quickLaunch", "clipboard", "captureQr", "floatingTheme", "general"];
+
+function ClipboardRoute() {
+  const clipboard = useClipboardController();
+  return (
+    <ClipboardPage
+      state={clipboard.state}
+      onSetFavorite={clipboard.setFavorite}
+      onDelete={clipboard.deleteItem}
+      onClearUnfavoriteHistory={clipboard.clearUnfavoriteHistory}
+    />
+  );
+}
 
 function readInitialRoute(): AppRoute {
   const route = window.location.hash.replace(/^#/, "");
@@ -75,7 +87,7 @@ function App() {
   const pageContent = (() => {
     switch (page) {
       case "clipboard":
-        return <ClipboardPage viewModel={EMPTY_CLIPBOARD_VIEW_MODEL} />;
+        return <ClipboardRoute />;
       case "hotkeys":
         return <HotkeysPage onSnapshotChanged={refreshOverview} />;
       case "quickLaunch":

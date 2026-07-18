@@ -8,7 +8,7 @@ use thiserror::Error;
 
 const DATABASE_FILE_NAME: &str = "opendesktools.sqlite3";
 const FILES_DIRECTORY_NAME: &str = "files";
-const LATEST_SCHEMA_VERSION: u32 = 2;
+const LATEST_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -162,6 +162,14 @@ impl StorageService {
         }
     }
 
+    pub(crate) fn read<T, F>(&self, operation: F) -> Result<T, StorageError>
+    where
+        F: FnOnce(&Connection) -> Result<T, StorageError>,
+    {
+        let connection = self.lock_connection()?;
+        operation(&connection)
+    }
+
     pub fn query_i64(&self, sql: &str, parameters: &[&dyn ToSql]) -> Result<i64, StorageError> {
         let connection = self.lock_connection()?;
         let mut statement = connection.prepare(sql)?;
@@ -269,6 +277,54 @@ fn run_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
     }
 
+    if current_version < 3 {
+        transaction.execute_batch(
+            "CREATE TABLE clipboard_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id > 0),
+                content_type TEXT NOT NULL CHECK (content_type IN ('text', 'image')),
+                text_content TEXT,
+                file_path TEXT,
+                content_hash TEXT NOT NULL CHECK (
+                    length(content_hash) = 64
+                    AND content_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                source_application TEXT CHECK (
+                    source_application IS NULL OR length(source_application) <= 256
+                ),
+                source_process TEXT CHECK (
+                    source_process IS NULL OR length(source_process) <= 512
+                ),
+                captured_at_ms INTEGER NOT NULL CHECK (
+                    captured_at_ms >= 0 AND captured_at_ms <= 9007199254740991
+                ),
+                byte_size INTEGER NOT NULL CHECK (
+                    byte_size >= 0 AND byte_size <= 9007199254740991
+                ),
+                is_favorite INTEGER NOT NULL DEFAULT 0 CHECK (is_favorite IN (0, 1)),
+                CHECK (
+                    (
+                        content_type = 'text'
+                        AND text_content IS NOT NULL
+                        AND file_path IS NULL
+                        AND length(CAST(text_content AS BLOB)) <= 4194304
+                        AND byte_size = length(CAST(text_content AS BLOB))
+                    )
+                    OR
+                    (content_type = 'image' AND text_content IS NULL AND file_path IS NOT NULL)
+                ),
+                UNIQUE (content_type, content_hash)
+            );
+            CREATE INDEX clipboard_history_recency_idx
+                ON clipboard_history (captured_at_ms DESC, id DESC);
+            CREATE INDEX clipboard_history_favorite_recency_idx
+                ON clipboard_history (is_favorite, captured_at_ms DESC, id DESC);",
+        )?;
+        transaction.execute(
+            "INSERT INTO schema_migrations (version) VALUES (?1)",
+            [3_u32],
+        )?;
+    }
+
     transaction.commit()?;
     Ok(())
 }
@@ -332,6 +388,48 @@ mod tests {
                 .query_i64("SELECT value FROM test_records", &[])
                 .unwrap(),
             7
+        );
+    }
+
+    #[test]
+    fn version_two_database_migrates_to_clipboard_schema_without_losing_settings() {
+        let temp = tempdir().unwrap();
+        let data_root = temp.path().join("app-data");
+        fs::create_dir_all(&data_root).unwrap();
+        let database_path = data_root.join(DATABASE_FILE_NAME);
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY NOT NULL,
+                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );
+                 INSERT INTO schema_migrations (version) VALUES (1), (2);
+                 CREATE TABLE application_settings (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );
+                 INSERT INTO application_settings (key, value) VALUES ('theme.mode', 'dark');",
+            )
+            .unwrap();
+        drop(connection);
+
+        let storage = StorageService::initialize(&data_root).unwrap();
+
+        assert_eq!(storage.migration_version().unwrap(), 3);
+        assert_eq!(
+            storage.read_setting("theme.mode").unwrap().as_deref(),
+            Some("dark")
+        );
+        assert_eq!(
+            storage
+                .query_i64(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'clipboard_history'",
+                    &[]
+                )
+                .unwrap(),
+            1
         );
     }
 

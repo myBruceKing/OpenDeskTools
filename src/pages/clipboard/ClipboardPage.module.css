@@ -89,6 +89,18 @@
   text-align: center;
 }
 
+.historyNotice {
+  margin: var(--space-3);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-button);
+  background: var(--surface-card-subtle);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  overflow-wrap: anywhere;
+}
+
 .historyRow {
   position: relative;
   min-height: clamp(60px, 6.6406vw, 72px);
@@ -205,6 +217,11 @@
   border: 0;
   background: transparent;
   color: var(--status-warning);
+}
+
+.favoriteButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .lockIcon {

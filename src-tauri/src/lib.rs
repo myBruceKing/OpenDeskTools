@@ -64,6 +64,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::clipboard::get_clipboard_history,
+            commands::clipboard::set_clipboard_history_favorite,
+            commands::clipboard::delete_clipboard_history_item,
+            commands::clipboard::clear_unfavorite_clipboard_history,
             commands::hotkey::start_hotkey_capture,
             commands::hotkey::stop_hotkey_capture,
             commands::hotkey::get_hotkey_snapshot,
