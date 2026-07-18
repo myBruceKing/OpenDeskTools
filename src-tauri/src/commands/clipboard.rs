@@ -5,6 +5,7 @@ use crate::infrastructure::application::ApplicationRuntime;
 use crate::infrastructure::clipboard::{
     ClipboardContentKind, ClipboardError, ClipboardHistoryItem, ClipboardHistoryQuery,
 };
+use crate::infrastructure::clipboard_listener::ClipboardListenerStatus;
 
 const DEFAULT_HISTORY_LIMIT: u32 = 100;
 
@@ -54,6 +55,14 @@ pub struct ClipboardHistoryItemDto {
 pub struct ClipboardHistoryPageDto {
     items: Vec<ClipboardHistoryItemDto>,
     total_count: u64,
+    monitoring: ClipboardMonitoringDto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClipboardMonitoringDto {
+    Running,
+    Unavailable,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -127,7 +136,17 @@ fn get_history(
     Ok(ClipboardHistoryPageDto {
         items,
         total_count: page.total_count,
+        monitoring: monitoring_dto(runtime.clipboard_listener().status()),
     })
+}
+
+fn monitoring_dto(status: ClipboardListenerStatus) -> ClipboardMonitoringDto {
+    match status {
+        ClipboardListenerStatus::Running => ClipboardMonitoringDto::Running,
+        ClipboardListenerStatus::Unavailable | ClipboardListenerStatus::Stopped => {
+            ClipboardMonitoringDto::Unavailable
+        }
+    }
 }
 
 fn set_favorite(
@@ -290,10 +309,40 @@ mod tests {
         assert_eq!(
             json,
             format!(
-                "{{\"items\":[{{\"id\":\"{id}\",\"kind\":\"text\",\"textContent\":\"hello\",\"sourceApplication\":\"TestEditor\",\"sourceProcess\":null,\"capturedAtMs\":1720000000123,\"byteSize\":5,\"isFavorite\":false}}],\"totalCount\":1}}"
+                "{{\"items\":[{{\"id\":\"{id}\",\"kind\":\"text\",\"textContent\":\"hello\",\"sourceApplication\":\"TestEditor\",\"sourceProcess\":null,\"capturedAtMs\":1720000000123,\"byteSize\":5,\"isFavorite\":false}}],\"totalCount\":1,\"monitoring\":\"unavailable\"}}"
             )
         );
         assert!(!json.contains("filePath"));
+    }
+
+    #[test]
+    fn stopped_listener_maps_to_unavailable_monitoring_without_blocking_history() {
+        let (_temp, runtime) = runtime();
+
+        let page = get_history(
+            &runtime,
+            ClipboardHistoryQueryInput {
+                scope: ClipboardHistoryScopeInput::All,
+                search: None,
+                limit: Some(100),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            runtime.clipboard_listener().status(),
+            ClipboardListenerStatus::Stopped
+        );
+        assert_eq!(page.monitoring, ClipboardMonitoringDto::Unavailable);
+        assert_eq!(page.total_count, 0);
+        assert_eq!(
+            monitoring_dto(ClipboardListenerStatus::Running),
+            ClipboardMonitoringDto::Running
+        );
+        assert_eq!(
+            monitoring_dto(ClipboardListenerStatus::Unavailable),
+            ClipboardMonitoringDto::Unavailable
+        );
     }
 
     #[test]

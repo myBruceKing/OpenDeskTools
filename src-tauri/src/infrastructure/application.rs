@@ -6,6 +6,9 @@ use tauri::{AppHandle, Manager, Runtime};
 use thiserror::Error;
 
 use super::clipboard::ClipboardService;
+use super::clipboard_listener::{
+    ClipboardHistoryEventSink, ClipboardListenerError, ClipboardListenerManager,
+};
 use super::hotkey::{HotkeyError, HotkeyManager};
 use super::hotkey_capture::HotkeyCaptureManager;
 use super::storage::{StorageError, StorageService};
@@ -26,7 +29,8 @@ pub enum StartupMode {
 #[derive(Debug)]
 pub struct ApplicationRuntime {
     storage: Arc<StorageService>,
-    clipboard: ClipboardService,
+    clipboard: Arc<ClipboardService>,
+    clipboard_listener: ClipboardListenerManager,
     hotkeys: HotkeyManager,
     hotkey_capture: HotkeyCaptureManager,
     theme: ThemeService,
@@ -93,6 +97,18 @@ impl ApplicationRuntime {
         &self.clipboard
     }
 
+    pub(crate) fn clipboard_listener(&self) -> &ClipboardListenerManager {
+        &self.clipboard_listener
+    }
+
+    pub(crate) fn start_clipboard_listener(
+        &self,
+        sink: ClipboardHistoryEventSink,
+    ) -> Result<(), ClipboardListenerError> {
+        self.clipboard_listener
+            .start(Arc::clone(&self.clipboard), sink)
+    }
+
     pub(crate) fn hotkeys(&self) -> &HotkeyManager {
         &self.hotkeys
     }
@@ -105,12 +121,13 @@ impl ApplicationRuntime {
         app_data_dir: PathBuf,
     ) -> Result<Self, ApplicationRuntimeError> {
         let storage = Arc::new(StorageService::initialize(app_data_dir)?);
-        let clipboard = ClipboardService::initialize(Arc::clone(&storage));
+        let clipboard = Arc::new(ClipboardService::initialize(Arc::clone(&storage)));
         let theme = ThemeService::initialize(Arc::clone(&storage))?;
         let hotkeys = HotkeyManager::initialize(Arc::clone(&storage))?;
         Ok(Self {
             storage,
             clipboard,
+            clipboard_listener: ClipboardListenerManager::default(),
             hotkeys,
             hotkey_capture: HotkeyCaptureManager::default(),
             theme,
@@ -289,6 +306,10 @@ mod tests {
         );
         assert_eq!(runtime.status(), ApplicationStatus::Running);
         assert_eq!(runtime.startup_mode(), StartupMode::Manual);
+        assert_eq!(
+            runtime.clipboard_listener().status(),
+            super::super::clipboard_listener::ClipboardListenerStatus::Stopped
+        );
     }
 
     #[test]

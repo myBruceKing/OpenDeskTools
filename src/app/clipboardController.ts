@@ -5,7 +5,9 @@ import {
   normalizeClipboardCommandError,
   toClipboardItemViewModel,
   type ClipboardCommandError,
-  type ClipboardControllerState
+  type ClipboardControllerState,
+  type ClipboardHistoryResult,
+  type ClipboardMonitoringState
 } from "./clipboardModel";
 
 function operationIssue(): ClipboardCommandError {
@@ -16,14 +18,22 @@ function operationIssue(): ClipboardCommandError {
   };
 }
 
+type SubscriptionStatus = "pending" | "active" | "failed";
+
 export class ClipboardController {
   private state = createClipboardLoadingState();
   private listeners = new Set<() => void>();
   private active = false;
   private session = 0;
-  private request = 0;
+  private operationRequest = 0;
+  private historyRequest = 0;
   private itemRequests = new Map<string, number>();
   private errorOwner: string | null = null;
+  private unlisten: (() => void) | null = null;
+  private subscriptionStatus: SubscriptionStatus = "pending";
+  private backendMonitoring: ClipboardHistoryResult["monitoring"] | null = null;
+  private refreshInFlight = false;
+  private refreshQueued = false;
 
   constructor(private readonly client: ClipboardClient) {}
 
@@ -38,46 +48,66 @@ export class ClipboardController {
     this.stop();
     this.active = true;
     const session = this.session;
-    const request = ++this.request;
     this.errorOwner = null;
+    this.subscriptionStatus = "pending";
+    this.backendMonitoring = null;
+    this.refreshInFlight = false;
+    this.refreshQueued = false;
     this.setState(createClipboardLoadingState());
 
     void this.client
-      .getHistory({ scope: "all", search: null, limit: 100 })
-      .then((result) => {
-        if (!this.isCurrent(session, request)) {
-          return;
+      .subscribe(() => {
+        if (this.active && session === this.session) {
+          this.queueRefresh(session);
         }
-        this.errorOwner = null;
-        this.setState({
-          status: "ready",
-          viewModel: createClipboardReadyViewModel(result),
-          error: null,
-          pendingItemIds: [],
-          clearing: false
-        });
       })
-      .catch((error: unknown) => {
-        if (!this.isCurrent(session, request)) {
+      .then((unlisten) => {
+        if (!this.active || session !== this.session) {
+          unlisten();
           return;
         }
-        const loading = createClipboardLoadingState();
-        this.errorOwner = "load";
+        this.unlisten = unlisten;
+        this.subscriptionStatus = "active";
         this.setState({
-          ...loading,
-          status: "unavailable",
-          viewModel: { ...loading.viewModel, monitoring: "unavailable" },
-          error: normalizeClipboardCommandError(error)
+          ...this.state,
+          viewModel: {
+            ...this.state.viewModel,
+            monitoring: this.state.status === "unavailable"
+              ? "unavailable"
+              : this.effectiveMonitoring()
+          },
+          realtimeError: null
+        });
+        this.queueRefresh(session);
+      })
+      .catch(() => {
+        if (!this.active || session !== this.session) {
+          return;
+        }
+        this.subscriptionStatus = "failed";
+        this.setState({
+          ...this.state,
+          viewModel: { ...this.state.viewModel, monitoring: "unavailable" },
+          realtimeError: normalizeClipboardCommandError({
+            code: "clipboard_subscription_unavailable"
+          })
         });
       });
+
+    this.queueRefresh(session);
   }
 
   stop() {
     this.active = false;
     this.session += 1;
-    this.request += 1;
+    this.operationRequest += 1;
+    this.historyRequest += 1;
     this.itemRequests.clear();
     this.errorOwner = null;
+    this.unlisten?.();
+    this.unlisten = null;
+    this.refreshInFlight = false;
+    this.refreshQueued = false;
   }
 
   async setFavorite(id: string, isFavorite: boolean) {
@@ -85,10 +115,13 @@ export class ClipboardController {
       return;
     }
     const session = this.session;
-    const request = ++this.request;
+    const request = ++this.operationRequest;
     const errorOwner = `item:${id}`;
     this.itemRequests.set(id, request);
     this.markItemPending(id, true);
+    if (this.refreshInFlight) {
+      this.refreshQueued = true;
+    }
 
     try {
       const item = await this.client.setFavorite(id, isFavorite);
@@ -117,6 +150,7 @@ export class ClipboardController {
       if (this.isCurrentItem(session, id, request)) {
         this.itemRequests.delete(id);
         this.markItemPending(id, false);
+        this.processQueuedRefresh(session);
       }
     }
   }
@@ -126,10 +160,13 @@ export class ClipboardController {
       return;
     }
     const session = this.session;
-    const request = ++this.request;
+    const request = ++this.operationRequest;
     const errorOwner = `item:${id}`;
     this.itemRequests.set(id, request);
     this.markItemPending(id, true);
+    if (this.refreshInFlight) {
+      this.refreshQueued = true;
+    }
 
     try {
       const result = await this.client.deleteItem(id);
@@ -158,6 +195,7 @@ export class ClipboardController {
       if (this.isCurrentItem(session, id, request)) {
         this.itemRequests.delete(id);
         this.markItemPending(id, false);
+        this.processQueuedRefresh(session);
       }
     }
   }
@@ -172,13 +210,16 @@ export class ClipboardController {
       return;
     }
     const session = this.session;
-    const request = ++this.request;
+    const request = ++this.operationRequest;
     const errorOwner = "clear";
     this.setState({ ...this.state, clearing: true });
+    if (this.refreshInFlight) {
+      this.refreshQueued = true;
+    }
 
     try {
       const result = await this.client.clearUnfavoriteHistory();
-      if (!this.isCurrent(session, request)) {
+      if (!this.isCurrentOperation(session, request)) {
         return;
       }
       const nextItems = result.deletedCount > 0
@@ -198,7 +239,7 @@ export class ClipboardController {
         error: this.consumeOwnedError(errorOwner)
       });
     } catch (error: unknown) {
-      if (this.isCurrent(session, request)) {
+      if (this.isCurrentOperation(session, request)) {
         this.errorOwner = errorOwner;
         this.setState({
           ...this.state,
@@ -206,7 +247,102 @@ export class ClipboardController {
           error: normalizeClipboardCommandError(error)
         });
       }
+    } finally {
+      if (this.isCurrentOperation(session, request)) {
+        this.processQueuedRefresh(session);
+      }
     }
+  }
+
+  private queueRefresh(session: number) {
+    if (!this.active || session !== this.session) {
+      return;
+    }
+    this.refreshQueued = true;
+    this.processQueuedRefresh(session);
+  }
+
+  private processQueuedRefresh(session: number) {
+    if (
+      !this.active
+      || session !== this.session
+      || !this.refreshQueued
+      || this.refreshInFlight
+      || this.hasActiveMutation()
+    ) {
+      return;
+    }
+    this.refreshQueued = false;
+    this.refreshInFlight = true;
+    const request = ++this.historyRequest;
+
+    void this.client
+      .getHistory({ scope: "all", search: null, limit: 100 })
+      .then((result) => {
+        if (!this.isCurrentHistory(session, request)) {
+          return;
+        }
+        if (this.refreshQueued || this.hasActiveMutation()) {
+          this.refreshQueued = true;
+          return;
+        }
+        this.backendMonitoring = result.monitoring;
+        this.setState({
+          ...this.state,
+          status: "ready",
+          viewModel: {
+            ...createClipboardReadyViewModel(result),
+            monitoring: this.effectiveMonitoring(result.monitoring)
+          },
+          error: this.consumeOwnedError("history")
+        });
+      })
+      .catch((error: unknown) => {
+        if (!this.isCurrentHistory(session, request)) {
+          return;
+        }
+        if (this.refreshQueued || this.hasActiveMutation()) {
+          this.refreshQueued = true;
+          return;
+        }
+        this.errorOwner = "history";
+        const issue = normalizeClipboardCommandError(error);
+        if (this.state.status === "ready") {
+          this.setState({
+            ...this.state,
+            viewModel: { ...this.state.viewModel, monitoring: "unavailable" },
+            error: issue
+          });
+        } else {
+          const loading = createClipboardLoadingState();
+          this.setState({
+            ...loading,
+            status: "unavailable",
+            viewModel: { ...loading.viewModel, monitoring: "unavailable" },
+            error: issue,
+            realtimeError: this.state.realtimeError
+          });
+        }
+      })
+      .finally(() => {
+        if (!this.isCurrentHistory(session, request)) {
+          return;
+        }
+        this.refreshInFlight = false;
+        this.processQueuedRefresh(session);
+      });
+  }
+
+  private effectiveMonitoring(
+    backendMonitoring = this.backendMonitoring
+  ): ClipboardMonitoringState {
+    if (this.subscriptionStatus === "failed" || backendMonitoring === "unavailable") {
+      return "unavailable";
+    }
+    if (this.subscriptionStatus === "active" && backendMonitoring === "running") {
+      return "running";
+    }
+    return "paused";
   }
 
   private canMutateItem(id: string) {
@@ -215,6 +351,10 @@ export class ClipboardController {
       && !this.state.clearing
       && !this.state.pendingItemIds.includes(id)
       && this.state.viewModel.items.some((item) => item.id === id);
+  }
+
+  private hasActiveMutation() {
+    return this.state.clearing || this.state.pendingItemIds.length > 0;
   }
 
   private markItemPending(id: string, pending: boolean) {
@@ -227,14 +367,20 @@ export class ClipboardController {
     this.setState({ ...this.state, pendingItemIds: [...ids] });
   }
 
-  private isCurrent(session: number, request: number) {
-    return this.active && session === this.session && request === this.request;
+  private isCurrentOperation(session: number, request: number) {
+    return this.active && session === this.session && request === this.operationRequest;
   }
 
   private isCurrentItem(session: number, id: string, request: number) {
     return this.active
       && session === this.session
       && this.itemRequests.get(id) === request;
+  }
+
+  private isCurrentHistory(session: number, request: number) {
+    return this.active
+      && session === this.session
+      && request === this.historyRequest;
   }
 
   private consumeOwnedError(owner: string) {

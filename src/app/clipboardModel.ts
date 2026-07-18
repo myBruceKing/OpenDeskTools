@@ -51,6 +51,7 @@ export type ClipboardHistoryItem = {
 export type ClipboardHistoryResult = {
   items: ClipboardHistoryItem[];
   totalCount: number;
+  monitoring: "running" | "unavailable";
 };
 
 export type ClipboardCommandError = {
@@ -94,6 +95,7 @@ export type ClipboardControllerState = {
   status: ClipboardControllerStatus;
   viewModel: ClipboardPageViewModel;
   error: ClipboardCommandError | null;
+  realtimeError: ClipboardCommandError | null;
   pendingItemIds: readonly string[];
   clearing: boolean;
 };
@@ -145,6 +147,7 @@ export function createClipboardLoadingState(): ClipboardControllerState {
       settings: READY_SETTINGS
     },
     error: null,
+    realtimeError: null,
     pendingItemIds: [],
     clearing: false
   };
@@ -228,7 +231,7 @@ export function toClipboardItemViewModel(item: ClipboardHistoryItem): ClipboardI
 
 export function createClipboardReadyViewModel(result: ClipboardHistoryResult): ClipboardPageViewModel {
   return {
-    monitoring: "paused",
+    monitoring: result.monitoring,
     totalCount: result.totalCount,
     items: result.items.map(toClipboardItemViewModel),
     settings: READY_SETTINGS,
@@ -316,7 +319,10 @@ export function parseClipboardHistoryResult(value: unknown): ClipboardHistoryRes
   if (totalCount < items.length) {
     throw new Error("Invalid clipboard payload field: totalCount");
   }
-  return { items, totalCount };
+  if (value.monitoring !== "running" && value.monitoring !== "unavailable") {
+    throw new Error("Invalid clipboard payload field: monitoring");
+  }
+  return { items, totalCount, monitoring: value.monitoring };
 }
 
 export function parseClipboardDeleteResult(value: unknown): { deleted: boolean } {
@@ -364,6 +370,10 @@ export function normalizeClipboardCommandError(value: unknown): ClipboardCommand
     },
     clipboard_operation_not_applied: {
       message: "剪贴板操作未完成，请刷新后重试。",
+      retryable: true
+    },
+    clipboard_subscription_unavailable: {
+      message: "剪贴板实时更新暂时不可用，当前历史仍可查看。",
       retryable: true
     }
   };

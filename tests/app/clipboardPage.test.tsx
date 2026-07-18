@@ -39,8 +39,9 @@ const rawItems: ClipboardHistoryItem[] = [
 function readyState(overrides: Partial<ClipboardControllerState> = {}): ClipboardControllerState {
   return {
     status: "ready",
-    viewModel: createClipboardReadyViewModel({ items: rawItems, totalCount: 2 }),
+    viewModel: createClipboardReadyViewModel({ items: rawItems, totalCount: 2, monitoring: "running" }),
     error: null,
+    realtimeError: null,
     pendingItemIds: [],
     clearing: false,
     ...overrides
@@ -158,7 +159,11 @@ describe("ClipboardPage", () => {
   ] as const)("disables clear when history is %s", async (_label, items) => {
     await render({
       ...readyState(),
-      viewModel: createClipboardReadyViewModel({ items: [...items], totalCount: items.length })
+      viewModel: createClipboardReadyViewModel({
+        items: [...items],
+        totalCount: items.length,
+        monitoring: "running"
+      })
     });
     const clearButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
       .find((button) => button.textContent?.trim() === "清空历史");
@@ -170,5 +175,23 @@ describe("ClipboardPage", () => {
     const clearButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
       .find((button) => button.textContent?.trim() === "清空历史");
     expect(clearButton?.disabled).toBe(false);
+  });
+
+  it("shows realtime unavailability while keeping confirmed history readable", async () => {
+    await render({
+      ...readyState(),
+      viewModel: {
+        ...readyState().viewModel,
+        monitoring: "unavailable"
+      },
+      realtimeError: {
+        code: "clipboard_subscription_unavailable",
+        message: "剪贴板实时更新暂时不可用，当前历史仍可查看。",
+        retryable: true
+      }
+    });
+    expect(document.body.textContent).toContain("监控不可用");
+    expect(document.body.textContent).toContain("剪贴板实时更新暂时不可用");
+    expect(document.body.textContent).toContain("普通内容");
   });
 });

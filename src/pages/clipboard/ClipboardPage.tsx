@@ -468,7 +468,7 @@ export function ClipboardPage({
     : state.status === "unavailable"
       ? "剪贴板历史不可用"
       : null;
-  const statusMessage = state.error?.message ?? emptyStatusMessage;
+  const statusMessage = state.error?.message ?? state.realtimeError?.message ?? emptyStatusMessage;
   const actionsAvailable = state.status === "ready" && !state.clearing;
   const canFavorite = viewModel.actions.canFavorite && actionsAvailable;
   const canDelete = viewModel.actions.canDelete && actionsAvailable;
@@ -498,7 +498,7 @@ export function ClipboardPage({
           totalCount={viewModel.totalCount}
           selectedId={selectedItem?.id ?? null}
           statusMessage={statusMessage}
-          statusIsError={state.error !== null || state.status === "unavailable"}
+          statusIsError={state.error !== null || state.realtimeError !== null || state.status === "unavailable"}
           pendingItemIds={state.pendingItemIds}
           canFavorite={canFavorite}
           onSelect={setSelectedId}

@@ -16,7 +16,7 @@ describe("clipboardClient", () => {
   it("maps the frozen command and argument shapes", async () => {
     const invokeFunction = vi.fn(async (command: string) => {
       if (command === "get_clipboard_history") {
-        return { items: [item], totalCount: 1 };
+        return { items: [item], totalCount: 1, monitoring: "running" };
       }
       if (command === "set_clipboard_history_favorite") {
         return { ...item, isFavorite: true };
@@ -30,7 +30,8 @@ describe("clipboardClient", () => {
 
     await expect(client.getHistory({ scope: "all", search: null, limit: 100 })).resolves.toEqual({
       items: [item],
-      totalCount: 1
+      totalCount: 1,
+      monitoring: "running"
     });
     await expect(client.setFavorite("1", true)).resolves.toEqual({ ...item, isFavorite: true });
     await expect(client.deleteItem("1")).resolves.toEqual({ deleted: true });
@@ -50,8 +51,33 @@ describe("clipboardClient", () => {
 
   it("rejects malformed payloads instead of inventing content", async () => {
     const client = createClipboardClient({
-      invokeFunction: async () => ({ items: [{ ...item, sourceApplication: undefined }], totalCount: 1 })
+      invokeFunction: async () => ({
+        items: [{ ...item, sourceApplication: undefined }],
+        totalCount: 1,
+        monitoring: "running"
+      })
     });
     await expect(client.getHistory({ scope: "all" })).rejects.toThrow("sourceApplication");
+  });
+
+  it("subscribes to the frozen history event and returns the real unlisten function", async () => {
+    let handler: ((event: { payload: unknown }) => void) | undefined;
+    const unlisten = vi.fn();
+    const listenFunction = vi.fn(async (_event, eventHandler) => {
+      handler = eventHandler;
+      return unlisten;
+    });
+    const listener = vi.fn();
+    const client = createClipboardClient({ listenFunction });
+
+    const cleanup = await client.subscribe(listener);
+    expect(listenFunction).toHaveBeenCalledWith(
+      "clipboard://history-changed",
+      expect.any(Function)
+    );
+    handler?.({ payload: { ignored: "payload carries no clipboard content" } });
+    expect(listener).toHaveBeenCalledOnce();
+    cleanup();
+    expect(unlisten).toHaveBeenCalledOnce();
   });
 });

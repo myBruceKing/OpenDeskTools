@@ -1,6 +1,8 @@
 mod commands;
 mod infrastructure;
 
+use std::sync::Arc;
+
 use infrastructure::application::ApplicationRuntime;
 use infrastructure::hotkey::{HotkeyActionId, TauriHotkeyRegistrar};
 use infrastructure::tray::{
@@ -12,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent, ShortcutState};
 
 const HOTKEY_ACTION_EVENT: &str = "hotkey://action";
+const CLIPBOARD_HISTORY_CHANGED_EVENT: &str = "clipboard://history-changed";
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -29,6 +32,12 @@ struct HotkeyActionEvent {
     registration_revision: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardHistoryChangedEvent {
+    change: &'static str,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -40,6 +49,19 @@ pub fn run() {
         .setup(|app| {
             let runtime = ApplicationRuntime::initialize(app.handle())?;
             app.manage(runtime);
+            let event_app = app.handle().clone();
+            let clipboard_sink = Arc::new(move || {
+                let _ = event_app.emit(
+                    CLIPBOARD_HISTORY_CHANGED_EVENT,
+                    ClipboardHistoryChangedEvent { change: "recorded" },
+                );
+            });
+            if let Err(error) = app
+                .state::<ApplicationRuntime>()
+                .start_clipboard_listener(clipboard_sink)
+            {
+                eprintln!("clipboard listener unavailable during startup: {error}");
+            }
             let registrar = TauriHotkeyRegistrar::new(app.handle());
             app.state::<ApplicationRuntime>()
                 .hotkeys()
@@ -178,5 +200,17 @@ mod tests {
             "secondary",
             tauri::webview::PageLoadEvent::Started
         ));
+    }
+
+    #[test]
+    fn clipboard_history_event_payload_is_minimal_and_contains_no_clipboard_content() {
+        assert_eq!(
+            CLIPBOARD_HISTORY_CHANGED_EVENT,
+            "clipboard://history-changed"
+        );
+        assert_eq!(
+            serde_json::to_value(ClipboardHistoryChangedEvent { change: "recorded" }).unwrap(),
+            serde_json::json!({ "change": "recorded" })
+        );
     }
 }

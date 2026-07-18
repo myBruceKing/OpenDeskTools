@@ -1,5 +1,6 @@
 pub mod application;
 pub mod clipboard;
+pub mod clipboard_listener;
 pub mod hotkey;
 pub mod hotkey_capture;
 #[allow(dead_code)]

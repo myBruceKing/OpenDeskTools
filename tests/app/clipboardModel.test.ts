@@ -77,11 +77,12 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
       byteSize: 6,
       isFavorite: false
     };
-    expect(() => parseClipboardHistoryResult({ items: [valid, valid], totalCount: 2 })).toThrow("duplicate id");
-    expect(() => parseClipboardHistoryResult({ items: [valid], totalCount: 0 })).toThrow("totalCount");
+    expect(() => parseClipboardHistoryResult({ items: [valid, valid], totalCount: 2, monitoring: "running" })).toThrow("duplicate id");
+    expect(() => parseClipboardHistoryResult({ items: [valid], totalCount: 0, monitoring: "running" })).toThrow("totalCount");
     expect(() => parseClipboardHistoryResult({
       items: [{ ...valid, textContent: null }],
-      totalCount: 1
+      totalCount: 1,
+      monitoring: "running"
     })).toThrow("textContent");
   });
 
@@ -111,6 +112,22 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
     });
   });
 
+  it.each(["running", "unavailable"] as const)(
+    "accepts the backend monitoring truth %s",
+    (monitoring) => {
+      expect(parseClipboardHistoryResult({ items: [], totalCount: 0, monitoring }).monitoring)
+        .toBe(monitoring);
+    }
+  );
+
+  it.each(["paused", "RUNNING", null, true])(
+    "rejects invalid backend monitoring %s",
+    (monitoring) => {
+      expect(() => parseClipboardHistoryResult({ items: [], totalCount: 0, monitoring }))
+        .toThrow("monitoring");
+    }
+  );
+
   it.each(["abc", "01", "-1", "9223372036854775808"])(
     "rejects non-canonical or out-of-range id %s",
     (id) => {
@@ -125,7 +142,8 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
           byteSize: 6,
           isFavorite: false
         }],
-        totalCount: 1
+        totalCount: 1,
+        monitoring: "running"
       })).toThrow("id");
     }
   );
@@ -145,7 +163,8 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
         byteSize: 6,
         isFavorite: false
       }],
-      totalCount: 1
+      totalCount: 1,
+      monitoring: "running"
     })).toThrow("textContent");
   });
 });

@@ -42,12 +42,14 @@ pub struct WindowLifecycleRoute {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExitStep {
+    StopClipboardListener,
     StopCapture,
     UnregisterGlobalShortcuts,
     ExitApplication,
 }
 
-const EXIT_STEPS: [ExitStep; 3] = [
+const EXIT_STEPS: [ExitStep; 4] = [
+    ExitStep::StopClipboardListener,
     ExitStep::StopCapture,
     ExitStep::UnregisterGlobalShortcuts,
     ExitStep::ExitApplication,
@@ -185,6 +187,13 @@ fn exit_application<R: Runtime>(app: &AppHandle<R>) {
 
     for step in EXIT_STEPS {
         match step {
+            ExitStep::StopClipboardListener => {
+                if let Some(runtime) = app.try_state::<ApplicationRuntime>() {
+                    if let Err(error) = runtime.clipboard_listener().stop() {
+                        eprintln!("failed to stop clipboard listener during exit: {error}");
+                    }
+                }
+            }
             ExitStep::StopCapture => {
                 if let Some(runtime) = app.try_state::<ApplicationRuntime>() {
                     if let Err(error) = runtime.hotkey_capture().stop_active() {
@@ -286,6 +295,7 @@ mod tests {
         assert_eq!(
             EXIT_STEPS,
             [
+                ExitStep::StopClipboardListener,
                 ExitStep::StopCapture,
                 ExitStep::UnregisterGlobalShortcuts,
                 ExitStep::ExitApplication,

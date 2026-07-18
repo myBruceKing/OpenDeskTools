@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   parseClipboardClearResult,
   parseClipboardDeleteResult,
@@ -10,18 +11,25 @@ import {
 } from "./clipboardModel";
 
 type InvokeFunction = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+type ListenFunction = (
+  event: string,
+  handler: (event: { payload: unknown }) => void
+) => Promise<() => void>;
 
 export type ClipboardClient = {
   getHistory: (query: ClipboardHistoryQuery) => Promise<ClipboardHistoryResult>;
   setFavorite: (id: string, isFavorite: boolean) => Promise<ClipboardHistoryItem>;
   deleteItem: (id: string) => Promise<{ deleted: boolean }>;
   clearUnfavoriteHistory: () => Promise<{ deletedCount: number }>;
+  subscribe: (listener: () => void) => Promise<() => void>;
 };
 
 export function createClipboardClient({
-  invokeFunction = invoke as InvokeFunction
+  invokeFunction = invoke as InvokeFunction,
+  listenFunction = listen as ListenFunction
 }: {
   invokeFunction?: InvokeFunction;
+  listenFunction?: ListenFunction;
 } = {}): ClipboardClient {
   return {
     async getHistory(query) {
@@ -48,6 +56,10 @@ export function createClipboardClient({
       return parseClipboardClearResult(
         await invokeFunction("clear_unfavorite_clipboard_history")
       );
+    },
+
+    subscribe(listener) {
+      return listenFunction("clipboard://history-changed", () => listener());
     }
   };
 }
