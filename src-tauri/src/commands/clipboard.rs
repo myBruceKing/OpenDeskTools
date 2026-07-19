@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{ipc::Response, State};
 
 use crate::infrastructure::application::ApplicationRuntime;
 use crate::infrastructure::clipboard::{
     ClipboardContentKind, ClipboardError, ClipboardHistoryItem, ClipboardHistoryQuery,
 };
 use crate::infrastructure::clipboard_listener::ClipboardListenerStatus;
+use crate::infrastructure::image::ImageError;
 
 const DEFAULT_HISTORY_LIMIT: u32 = 100;
 
@@ -116,6 +117,26 @@ pub fn clear_unfavorite_clipboard_history(
     clear_unfavorite(&runtime)
 }
 
+#[tauri::command]
+pub fn get_clipboard_history_image(
+    runtime: State<'_, ApplicationRuntime>,
+    input: ClipboardItemIdInput,
+) -> Result<Response, ClipboardCommandErrorDto> {
+    get_image(&runtime, input)
+}
+
+fn get_image(
+    runtime: &ApplicationRuntime,
+    input: ClipboardItemIdInput,
+) -> Result<Response, ClipboardCommandErrorDto> {
+    let id = parse_id(&input.id)?;
+    runtime
+        .clipboard()
+        .image_bytes(id)
+        .map(Response::new)
+        .map_err(map_error)
+}
+
 fn get_history(
     runtime: &ApplicationRuntime,
     input: ClipboardHistoryQueryInput,
@@ -202,10 +223,11 @@ fn parse_id(value: &str) -> Result<i64, ClipboardCommandErrorDto> {
 fn item_dto(
     item: ClipboardHistoryItem,
 ) -> Result<ClipboardHistoryItemDto, ClipboardCommandErrorDto> {
-    if item.kind != ClipboardContentKind::Text
-        || item.text_content.is_none()
-        || item.file_path.is_some()
-    {
+    let shape_is_valid = match item.kind {
+        ClipboardContentKind::Text => item.text_content.is_some() && item.file_path.is_none(),
+        ClipboardContentKind::Image => item.text_content.is_none() && item.file_path.is_some(),
+    };
+    if !shape_is_valid {
         return Err(ClipboardCommandErrorDto {
             code: "clipboard_content_unavailable",
             message: "This clipboard content type is not available yet.",
@@ -245,7 +267,31 @@ fn map_error(error: ClipboardError) -> ClipboardCommandErrorDto {
             message: "Clipboard content is invalid.",
             retryable: false,
         },
-        ClipboardError::Storage(_) | ClipboardError::CorruptRecord => ClipboardCommandErrorDto {
+        ClipboardError::Image(ImageError::TooLarge) => ClipboardCommandErrorDto {
+            code: "clipboard_image_too_large",
+            message: "Clipboard image exceeds the supported size.",
+            retryable: false,
+        },
+        ClipboardError::Image(
+            ImageError::Missing
+            | ImageError::Corrupt
+            | ImageError::InvalidReference
+            | ImageError::InvalidImage,
+        ) => ClipboardCommandErrorDto {
+            code: "clipboard_image_unavailable",
+            message: "Clipboard image is unavailable.",
+            retryable: false,
+        },
+        ClipboardError::Image(
+            ImageError::Io(_) | ImageError::Storage(_) | ImageError::Encode(_),
+        ) => ClipboardCommandErrorDto {
+            code: "clipboard_history_unavailable",
+            message: "Clipboard history is temporarily unavailable.",
+            retryable: true,
+        },
+        ClipboardError::Storage(_)
+        | ClipboardError::CorruptRecord
+        | ClipboardError::LifecycleLockPoisoned => ClipboardCommandErrorDto {
             code: "clipboard_history_unavailable",
             message: "Clipboard history is temporarily unavailable.",
             retryable: true,
@@ -432,5 +478,112 @@ mod tests {
         assert!(!json.contains("SQLite"));
         assert!(!json.contains(".sqlite3"));
         assert!(!json.contains("InvalidQuery"));
+    }
+
+    #[test]
+    fn image_history_hides_file_reference_and_raw_command_returns_png_bytes() {
+        let (temp, runtime) = runtime();
+        let item = runtime
+            .clipboard()
+            .record_image(
+                1,
+                1,
+                vec![4, 5, 6, 255],
+                ClipboardCaptureMetadata {
+                    captured_at_ms: 42,
+                    source_application: None,
+                    source_process: None,
+                },
+            )
+            .unwrap()
+            .item
+            .unwrap();
+        let page = get_history(
+            &runtime,
+            ClipboardHistoryQueryInput {
+                scope: ClipboardHistoryScopeInput::All,
+                search: None,
+                limit: Some(100),
+            },
+        )
+        .unwrap();
+        let body = page.body().unwrap();
+        let InvokeResponseBody::Json(json) = body else {
+            panic!("history should be JSON");
+        };
+        assert!(json.contains("\"kind\":\"image\",\"textContent\":null"));
+        assert!(!json.contains("filePath"));
+        assert!(!json.contains("files/clipboard"));
+
+        let response = get_image(
+            &runtime,
+            ClipboardItemIdInput {
+                id: item.id.to_string(),
+            },
+        )
+        .unwrap();
+        let body = response.body().unwrap();
+        let InvokeResponseBody::Raw(bytes) = body else {
+            panic!("image should use raw IPC bytes");
+        };
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let managed_path = temp
+            .path()
+            .join("app-data")
+            .join(item.file_path.as_deref().unwrap().replace('/', "\\"));
+        std::fs::write(&managed_path, b"corrupt").unwrap();
+        let corrupt = get_image(
+            &runtime,
+            ClipboardItemIdInput {
+                id: item.id.to_string(),
+            },
+        )
+        .err()
+        .unwrap();
+        assert_eq!(corrupt.code, "clipboard_image_unavailable");
+        assert!(!corrupt.retryable);
+        assert!(!corrupt.message.contains("files"));
+        for invalid in ["../1", "01", "-1"] {
+            let error = get_image(
+                &runtime,
+                ClipboardItemIdInput {
+                    id: invalid.to_owned(),
+                },
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.code, "invalid_clipboard_item_id");
+            assert!(!error.message.contains("files"));
+        }
+        let text_id = record(&runtime, "not-image", 43);
+        let error = get_image(
+            &runtime,
+            ClipboardItemIdInput {
+                id: text_id.to_string(),
+            },
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "clipboard_item_not_found");
+
+        let oversized = map_error(ClipboardError::Image(ImageError::TooLarge));
+        assert_eq!(oversized.code, "clipboard_image_too_large");
+        assert!(!oversized.retryable);
+
+        for unavailable in [
+            ImageError::Missing,
+            ImageError::Corrupt,
+            ImageError::InvalidReference,
+            ImageError::InvalidImage,
+        ] {
+            let dto = map_error(ClipboardError::Image(unavailable));
+            assert_eq!(dto.code, "clipboard_image_unavailable");
+            assert!(!dto.retryable);
+        }
+        let transient = map_error(ClipboardError::Image(ImageError::Io(
+            std::io::Error::other("test-only"),
+        )));
+        assert_eq!(transient.code, "clipboard_history_unavailable");
+        assert!(transient.retryable);
     }
 }

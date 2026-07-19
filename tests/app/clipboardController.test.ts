@@ -40,6 +40,7 @@ async function flush() {
 function makeClient(overrides: Partial<ClipboardClient> = {}): ClipboardClient {
   return {
     getHistory: async () => ({ items: [first, favorite], totalCount: 2, monitoring: "running" }),
+    getImage: async () => new Blob(),
     setFavorite: async (id, isFavorite) => ({
       ...(id === favorite.id ? favorite : first),
       isFavorite

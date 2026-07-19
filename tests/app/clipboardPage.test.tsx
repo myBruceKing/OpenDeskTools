@@ -16,6 +16,8 @@ const primitivesCss = readFileSync(
   "src/components/primitives/primitives.module.css",
   "utf8"
 );
+const clipboardCss = readFileSync("src/pages/clipboard/ClipboardPage.module.css", "utf8");
+const imagePreviewCss = readFileSync("src/components/patterns/ImagePreview.module.css", "utf8");
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -42,6 +44,30 @@ const rawItems: ClipboardHistoryItem[] = [
   }
 ];
 
+const imageItems: ClipboardHistoryItem[] = [
+  {
+    id: "10",
+    kind: "image",
+    textContent: null,
+    sourceApplication: "截图工具",
+    sourceProcess: "capture.exe",
+    capturedAtMs: 1_720_000_002_000,
+    byteSize: 512,
+    isFavorite: false
+  },
+  rawItems[0],
+  {
+    id: "11",
+    kind: "image",
+    textContent: null,
+    sourceApplication: "画图",
+    sourceProcess: "mspaint.exe",
+    capturedAtMs: 1_720_000_003_000,
+    byteSize: 1024,
+    isFavorite: false
+  }
+];
+
 const longSourceApplication = "超长应用".repeat(64);
 const longSourceProcess = `C:\\${"deep-folder\\".repeat(60)}app.exe`.slice(0, 512);
 
@@ -63,11 +89,22 @@ describe("ClipboardPage", () => {
   const onSetFavorite = vi.fn();
   const onDelete = vi.fn();
   const onClear = vi.fn();
+  const loadImage = vi.fn(async () => new Blob([new Uint8Array([1])], { type: "image/png" }));
 
   beforeEach(() => {
     host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
+    let urlIndex = 0;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => `blob:page-${++urlIndex}`)
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn()
+    });
+    loadImage.mockResolvedValue(new Blob([new Uint8Array([1])], { type: "image/png" }));
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: vi.fn()
@@ -112,6 +149,7 @@ describe("ClipboardPage", () => {
       root.render(
         <ClipboardPage
           state={state}
+          loadImage={loadImage}
           onSetFavorite={onSetFavorite}
           onDelete={onDelete}
           onClearUnfavoriteHistory={onClear}
@@ -166,6 +204,81 @@ describe("ClipboardPage", () => {
     });
     expect(document.body.textContent).not.toContain("普通内容");
     expect(document.body.textContent).toContain("收藏内容");
+  });
+
+  it("lazy-loads only the selected image while keyboard selection keeps the list active", async () => {
+    await render({
+      ...readyState(),
+      viewModel: createClipboardReadyViewModel({
+        items: imageItems,
+        totalCount: imageItems.length,
+        monitoring: "running"
+      })
+    });
+    await act(async () => Promise.resolve());
+    expect(loadImage).toHaveBeenCalledTimes(1);
+    expect(loadImage).toHaveBeenLastCalledWith("10");
+
+    const list = document.querySelector<HTMLElement>("[role='listbox']")!;
+    list.focus();
+    await act(async () => {
+      list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    expect(document.activeElement).toBe(list);
+    expect(loadImage).toHaveBeenCalledTimes(1);
+    expect(list.getAttribute("aria-activedescendant")).toContain("1");
+
+    await act(async () => {
+      list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(loadImage).toHaveBeenCalledTimes(2);
+    expect(loadImage).toHaveBeenLastCalledWith("11");
+    expect(document.activeElement).toBe(list);
+  });
+
+  it("releases the selected image before delete and clear mutations", async () => {
+    const imageState = {
+      ...readyState(),
+      viewModel: createClipboardReadyViewModel({
+        items: [imageItems[0]],
+        totalCount: 1,
+        monitoring: "running"
+      })
+    };
+    await render(imageState);
+    await act(async () => Promise.resolve());
+
+    const deleteButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "删除")!;
+    await act(async () => deleteButton.click());
+    const deleteConfirm = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "删除" && button !== deleteButton)!;
+    await act(async () => deleteConfirm.click());
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    expect(onDelete).toHaveBeenCalledWith("10");
+
+    const retry = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "重试")!;
+    await act(async () => {
+      retry.click();
+      await Promise.resolve();
+    });
+    const clearButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "清空历史")!;
+    await act(async () => clearButton.click());
+    const clearConfirm = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "清空")!;
+    await act(async () => clearConfirm.click());
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
+    expect(onClear).toHaveBeenCalledOnce();
+  });
+
+  it("keeps landscape, portrait, and transparent images contained at 960 by 640", () => {
+    expect(clipboardCss).toMatch(/\.page\s*\{[\s\S]*min-width:\s*0;[\s\S]*overflow:\s*hidden;/);
+    expect(clipboardCss).toMatch(/\.previewBox\s*\{[\s\S]*min-height:\s*0;[\s\S]*overflow:\s*hidden;/);
+    expect(imagePreviewCss).toMatch(/\.image\s*\{[\s\S]*width:\s*100%;[\s\S]*height:\s*100%;[\s\S]*object-fit:\s*contain;/);
+    expect(imagePreviewCss).toMatch(/\.imageStage\s*\{[\s\S]*background-image:[\s\S]*linear-gradient/);
   });
 
   it("confirms backend delete and clear operations with permanent-action copy", async () => {

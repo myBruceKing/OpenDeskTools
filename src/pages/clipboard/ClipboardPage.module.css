@@ -235,7 +235,7 @@
   min-height: 0;
   flex: 1 1 auto;
   margin: clamp(8px, 0.9115vw, 10px) clamp(10px, 1.0417vw, 11px);
-  overflow: auto;
+  overflow: hidden;
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-button);
   background: var(--surface-card-subtle);
@@ -245,23 +245,11 @@
 }
 
 .previewText {
+  height: 100%;
   min-height: 100%;
   padding: clamp(12px, 1.3021vw, 14px);
+  overflow: auto;
   white-space: pre-wrap;
-}
-
-.previewBoxImage {
-  display: grid;
-  place-items: center;
-  padding: clamp(10px, 1.0417vw, 11px);
-}
-
-.previewImage {
-  max-width: 100%;
-  max-height: 100%;
-  display: block;
-  border-radius: calc(var(--radius-button) - 2px);
-  object-fit: contain;
 }
 
 .detailsActions {

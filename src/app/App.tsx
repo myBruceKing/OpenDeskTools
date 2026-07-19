@@ -28,6 +28,7 @@ function ClipboardRoute() {
   return (
     <ClipboardPage
       state={clipboard.state}
+      loadImage={clipboard.loadImage}
       onSetFavorite={clipboard.setFavorite}
       onDelete={clipboard.deleteItem}
       onClearUnfavoriteHistory={clipboard.clearUnfavoriteHistory}

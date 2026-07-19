@@ -9,7 +9,6 @@ export type ClipboardItemViewModel = {
   kind: ClipboardItemKind;
   title: string;
   preview: string;
-  previewImageUrl?: string;
   sourceApp: string;
   sourceProcess: string;
   capturedAt: string;

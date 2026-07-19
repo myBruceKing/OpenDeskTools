@@ -1,5 +1,3 @@
-import clipboardPreviewLandscape from "../../src/assets/clipboard-preview-landscape.svg";
-import clipboardPreviewWindow from "../../src/assets/clipboard-preview-window.svg";
 import type { ClipboardPageViewModel } from "../../src/app/clipboardModel";
 import type { OverviewBackendSnapshot } from "../../src/app/overviewModel";
 
@@ -69,7 +67,6 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
       kind: "image",
       title: "2024-05-21_10-22-45.png",
       preview: "图片预览：湖泊、山脉与天空截图，尺寸 960 × 540。",
-      previewImageUrl: clipboardPreviewLandscape,
       sourceApp: "截图工具",
       sourceProcess: "OpenDeskTools.exe",
       capturedAt: "2024-05-21 10:22:45",
@@ -116,7 +113,6 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
       kind: "image",
       title: "Snipaste_2024-05-21_10-19-33.png",
       preview: "图片预览：白色窗口局部截图，尺寸 512 × 256。",
-      previewImageUrl: clipboardPreviewWindow,
       sourceApp: "Snipaste",
       sourceProcess: "Snipaste.exe",
       capturedAt: "2024-05-21 10:19:33",

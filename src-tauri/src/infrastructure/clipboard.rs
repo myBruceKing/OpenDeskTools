@@ -1,9 +1,10 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use rusqlite::{params, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use super::image::{ImageError, ImageService};
 use super::storage::{StorageError, StorageService};
 
 pub const CLIPBOARD_HISTORY_CAPACITY: u32 = 100;
@@ -12,6 +13,9 @@ pub const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_SOURCE_APPLICATION_CHARS: usize = 256;
 pub const MAX_SOURCE_PROCESS_CHARS: usize = 512;
 pub const MAX_SEARCH_CHARS: usize = 256;
+
+#[cfg(test)]
+type AfterImageStoreHook = Arc<dyn Fn(&ClipboardCaptureMetadata) + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardContentKind {
@@ -100,16 +104,47 @@ pub enum ClipboardError {
     NotFound,
     #[error("clipboard history contains an invalid record")]
     CorruptRecord,
+    #[error("clipboard image lifecycle lock is poisoned")]
+    LifecycleLockPoisoned,
+    #[error("clipboard image operation failed")]
+    Image(#[from] ImageError),
 }
 
-#[derive(Debug)]
 pub struct ClipboardService {
     storage: Arc<StorageService>,
+    images: ImageService,
+    image_lifecycle: Mutex<()>,
+    #[cfg(test)]
+    after_image_store_hook: Mutex<Option<AfterImageStoreHook>>,
+}
+
+impl std::fmt::Debug for ClipboardService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClipboardService")
+            .field("storage", &self.storage)
+            .field("images", &self.images)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ClipboardService {
+    #[cfg(test)]
     pub fn initialize(storage: Arc<StorageService>) -> Self {
-        Self { storage }
+        Self::try_initialize(storage).expect("clipboard image storage should initialize")
+    }
+
+    pub fn try_initialize(storage: Arc<StorageService>) -> Result<Self, ClipboardError> {
+        let images = ImageService::initialize(&storage)?;
+        let service = Self {
+            storage,
+            images,
+            image_lifecycle: Mutex::new(()),
+            #[cfg(test)]
+            after_image_store_hook: Mutex::new(None),
+        };
+        service.reconcile_images()?;
+        Ok(service)
     }
 
     #[allow(dead_code)] // Intentionally not exposed as a frontend command.
@@ -141,8 +176,9 @@ impl ClipboardService {
             i64::try_from(metadata.captured_at_ms).map_err(|_| ClipboardError::NumericRange)?;
         let byte_size = i64::try_from(byte_size).map_err(|_| ClipboardError::NumericRange)?;
         let content_hash = format!("{:x}", Sha256::digest(text.as_bytes()));
+        let _lifecycle = self.lock_image_lifecycle()?;
 
-        let id = self.storage.transaction(|transaction| {
+        let (id, removed_images) = self.storage.transaction(|transaction| {
             let id = transaction.query_row(
                 "INSERT INTO clipboard_history (
                     content_type,
@@ -172,26 +208,72 @@ impl ClipboardService {
                 |row| row.get::<_, i64>(0),
             )?;
 
-            let count: i64 =
-                transaction.query_row("SELECT COUNT(*) FROM clipboard_history", [], |row| {
-                    row.get(0)
-                })?;
-            let excess = count.saturating_sub(i64::from(CLIPBOARD_HISTORY_CAPACITY));
-            if excess > 0 {
-                transaction.execute(
-                    "DELETE FROM clipboard_history
-                     WHERE id IN (
-                        SELECT id FROM clipboard_history
-                        WHERE is_favorite = 0
-                        ORDER BY captured_at_ms ASC, id ASC
-                        LIMIT ?1
-                     )",
-                    [excess],
-                )?;
-            }
-            Ok(id)
+            let removed_images = evict_excess(transaction)?;
+            Ok((id, removed_images))
         })?;
+        self.remove_image_references(removed_images);
 
+        let item = self.item_by_id(id)?;
+        Ok(ClipboardRecordResult {
+            retained: item.is_some(),
+            item,
+        })
+    }
+
+    pub fn record_image(
+        &self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+        metadata: ClipboardCaptureMetadata,
+    ) -> Result<ClipboardRecordResult, ClipboardError> {
+        validate_metadata(&metadata)?;
+        let _lifecycle = self.lock_image_lifecycle()?;
+        let stored = self.images.store_rgba(width, height, &rgba)?;
+        #[cfg(test)]
+        if let Some(hook) = self.after_image_store_hook.lock().unwrap().clone() {
+            hook(&metadata);
+        }
+        validate_safe_integer(stored.byte_size)?;
+        let captured_at_ms =
+            i64::try_from(metadata.captured_at_ms).map_err(|_| ClipboardError::NumericRange)?;
+        let byte_size =
+            i64::try_from(stored.byte_size).map_err(|_| ClipboardError::NumericRange)?;
+        let transaction_result = self.storage.transaction(|transaction| {
+            let id = transaction.query_row(
+                "INSERT INTO clipboard_history (
+                    content_type, text_content, file_path, content_hash,
+                    source_application, source_process, captured_at_ms, byte_size
+                 ) VALUES ('image', NULL, ?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(content_type, content_hash) DO UPDATE SET
+                    file_path = excluded.file_path,
+                    source_application = excluded.source_application,
+                    source_process = excluded.source_process,
+                    captured_at_ms = excluded.captured_at_ms,
+                    byte_size = excluded.byte_size
+                 RETURNING id",
+                params![
+                    stored.reference,
+                    stored.hash,
+                    metadata.source_application,
+                    metadata.source_process,
+                    captured_at_ms,
+                    byte_size
+                ],
+                |row| row.get::<_, i64>(0),
+            )?;
+            Ok((id, evict_excess(transaction)?))
+        });
+        let (id, removed_images) = match transaction_result {
+            Ok(value) => value,
+            Err(error) => {
+                if stored.newly_created {
+                    self.cleanup_if_unreferenced(&stored.reference);
+                }
+                return Err(error.into());
+            }
+        };
+        self.remove_image_references(removed_images);
         let item = self.item_by_id(id)?;
         Ok(ClipboardRecordResult {
             retained: item.is_some(),
@@ -298,17 +380,108 @@ impl ClipboardService {
 
     pub fn delete(&self, id: i64) -> Result<bool, ClipboardError> {
         validate_id(id)?;
-        let deleted = self.storage.transaction(|transaction| {
-            Ok(transaction.execute("DELETE FROM clipboard_history WHERE id = ?1", [id])?)
+        let _lifecycle = self.lock_image_lifecycle()?;
+        let (deleted, image) = self.storage.transaction(|transaction| {
+            let image = transaction
+                .query_row(
+                    "SELECT file_path FROM clipboard_history WHERE id = ?1",
+                    [id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
+            let deleted =
+                transaction.execute("DELETE FROM clipboard_history WHERE id = ?1", [id])?;
+            Ok((deleted, image))
         })?;
+        if let Some(reference) = image {
+            self.cleanup_if_unreferenced(&reference);
+        }
         Ok(deleted > 0)
     }
 
     pub fn clear_unfavorite(&self) -> Result<u64, ClipboardError> {
-        let deleted = self.storage.transaction(|transaction| {
-            Ok(transaction.execute("DELETE FROM clipboard_history WHERE is_favorite = 0", [])?)
+        let _lifecycle = self.lock_image_lifecycle()?;
+        let (deleted, images) = self.storage.transaction(|transaction| {
+            let mut statement = transaction.prepare(
+                "SELECT file_path FROM clipboard_history WHERE is_favorite = 0 AND file_path IS NOT NULL",
+            )?;
+            let images = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(statement);
+            let deleted = transaction.execute("DELETE FROM clipboard_history WHERE is_favorite = 0", [])?;
+            Ok((deleted, images))
         })?;
+        self.remove_image_references(images);
         u64::try_from(deleted).map_err(|_| ClipboardError::NumericRange)
+    }
+
+    pub fn image_bytes(&self, id: i64) -> Result<Vec<u8>, ClipboardError> {
+        validate_id(id)?;
+        let _lifecycle = self.lock_image_lifecycle()?;
+        let item = self.item_by_id(id)?.ok_or(ClipboardError::NotFound)?;
+        if item.kind != ClipboardContentKind::Image {
+            return Err(ClipboardError::NotFound);
+        }
+        self.images
+            .read(
+                item.file_path
+                    .as_deref()
+                    .ok_or(ClipboardError::CorruptRecord)?,
+            )
+            .map_err(Into::into)
+    }
+
+    fn reconcile_images(&self) -> Result<(), ClipboardError> {
+        let _lifecycle = self.lock_image_lifecycle()?;
+        let references = self.storage.read(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT file_path FROM clipboard_history WHERE content_type = 'image' AND file_path IS NOT NULL",
+            )?;
+            let references = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(references)
+        })?;
+        let result = self.images.reconcile(&references);
+        if !result.missing_references.is_empty() {
+            self.storage.transaction(|transaction| {
+                let mut statement = transaction.prepare(
+                    "DELETE FROM clipboard_history WHERE content_type = 'image' AND file_path = ?1",
+                )?;
+                for reference in &result.missing_references {
+                    statement.execute([reference])?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    fn remove_image_references(&self, references: Vec<String>) {
+        for reference in references {
+            self.cleanup_if_unreferenced(&reference);
+        }
+    }
+
+    fn cleanup_if_unreferenced(&self, reference: &str) {
+        let referenced = self.storage.read(|connection| {
+            Ok(connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM clipboard_history WHERE file_path = ?1)",
+                [reference],
+                |row| row.get::<_, bool>(0),
+            )?)
+        });
+        if matches!(referenced, Ok(false)) {
+            let _ = self.images.remove(reference);
+        }
+    }
+
+    fn lock_image_lifecycle(&self) -> Result<MutexGuard<'_, ()>, ClipboardError> {
+        self.image_lifecycle
+            .lock()
+            .map_err(|_| ClipboardError::LifecycleLockPoisoned)
     }
 
     fn item_by_id(&self, id: i64) -> Result<Option<ClipboardHistoryItem>, ClipboardError> {
@@ -334,6 +507,48 @@ impl ClipboardService {
         })?;
         raw.map(ClipboardHistoryItem::try_from).transpose()
     }
+}
+
+fn validate_metadata(metadata: &ClipboardCaptureMetadata) -> Result<(), ClipboardError> {
+    validate_optional_chars(
+        metadata.source_application.as_deref(),
+        MAX_SOURCE_APPLICATION_CHARS,
+        ClipboardError::SourceApplicationTooLong,
+    )?;
+    validate_optional_chars(
+        metadata.source_process.as_deref(),
+        MAX_SOURCE_PROCESS_CHARS,
+        ClipboardError::SourceProcessTooLong,
+    )?;
+    validate_safe_integer(metadata.captured_at_ms)
+}
+
+fn evict_excess(transaction: &rusqlite::Transaction<'_>) -> Result<Vec<String>, StorageError> {
+    let count: i64 =
+        transaction.query_row("SELECT COUNT(*) FROM clipboard_history", [], |row| {
+            row.get(0)
+        })?;
+    let excess = count.saturating_sub(i64::from(CLIPBOARD_HISTORY_CAPACITY));
+    if excess <= 0 {
+        return Ok(Vec::new());
+    }
+    let mut statement = transaction.prepare(
+        "SELECT id, file_path FROM clipboard_history
+         WHERE is_favorite = 0 ORDER BY captured_at_ms ASC, id ASC LIMIT ?1",
+    )?;
+    let victims = statement
+        .query_map([excess], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    for (id, _) in &victims {
+        transaction.execute("DELETE FROM clipboard_history WHERE id = ?1", [id])?;
+    }
+    Ok(victims
+        .into_iter()
+        .filter_map(|(_, reference)| reference)
+        .collect())
 }
 
 #[derive(Debug)]
@@ -431,6 +646,9 @@ fn validate_id(id: i64) -> Result<(), ClipboardError> {
 #[cfg(test)]
 mod tests {
     use rusqlite::params;
+    use std::fs;
+    use std::sync::{mpsc, Barrier};
+    use std::time::Duration;
     use tempfile::tempdir;
 
     use super::*;
@@ -707,6 +925,301 @@ mod tests {
         assert_eq!(page.total_count, 1);
         assert_eq!(page.items[0].id, kept.id);
         assert!(page.items[0].is_favorite);
+    }
+
+    fn image_path(temp: &tempfile::TempDir, item: &ClipboardHistoryItem) -> std::path::PathBuf {
+        temp.path()
+            .join(item.file_path.as_deref().unwrap().replace('/', "\\"))
+    }
+
+    #[test]
+    fn image_persists_as_png_across_restart_and_duplicate_preserves_favorite() {
+        let temp = tempdir().unwrap();
+        let data_root = temp.path().join("app-data");
+        let storage = Arc::new(StorageService::initialize(&data_root).unwrap());
+        let service = ClipboardService::initialize(storage);
+        let first = service
+            .record_image(1, 1, vec![1, 2, 3, 255], metadata(10))
+            .unwrap()
+            .item
+            .unwrap();
+        assert_eq!(first.kind, ClipboardContentKind::Image);
+        assert_eq!(first.text_content, None);
+        assert!(service
+            .image_bytes(first.id)
+            .unwrap()
+            .starts_with(b"\x89PNG\r\n\x1a\n"));
+        service.set_favorite(first.id, true).unwrap();
+        let duplicate = service
+            .record_image(1, 1, vec![1, 2, 3, 255], metadata(20))
+            .unwrap()
+            .item
+            .unwrap();
+        assert_eq!(duplicate.id, first.id);
+        assert!(duplicate.is_favorite);
+        assert_eq!(duplicate.captured_at_ms, 20);
+        drop(service);
+
+        let reopened =
+            ClipboardService::initialize(Arc::new(StorageService::initialize(&data_root).unwrap()));
+        let item = reopened.history(all(100)).unwrap().items.pop().unwrap();
+        assert_eq!(item.kind, ClipboardContentKind::Image);
+        assert!(reopened
+            .image_bytes(item.id)
+            .unwrap()
+            .starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn image_files_are_removed_by_delete_clear_and_capacity_eviction() {
+        let (temp, _storage, service) = service();
+        let deleted = service
+            .record_image(1, 1, vec![1, 0, 0, 255], metadata(1))
+            .unwrap()
+            .item
+            .unwrap();
+        let deleted_path = image_path(&temp, &deleted);
+        assert!(deleted_path.is_file());
+        assert!(service.delete(deleted.id).unwrap());
+        assert!(!deleted_path.exists());
+
+        let cleared = service
+            .record_image(1, 1, vec![2, 0, 0, 255], metadata(2))
+            .unwrap()
+            .item
+            .unwrap();
+        let cleared_path = image_path(&temp, &cleared);
+        assert_eq!(service.clear_unfavorite().unwrap(), 1);
+        assert!(!cleared_path.exists());
+
+        let evicted = service
+            .record_image(1, 1, vec![3, 0, 0, 255], metadata(0))
+            .unwrap()
+            .item
+            .unwrap();
+        let evicted_path = image_path(&temp, &evicted);
+        for index in 0..CLIPBOARD_HISTORY_CAPACITY {
+            service
+                .record_text(format!("capacity-{index}"), metadata(u64::from(index) + 1))
+                .unwrap();
+        }
+        assert!(!evicted_path.exists());
+        assert_eq!(service.history(all(100)).unwrap().total_count, 100);
+    }
+
+    #[test]
+    fn startup_reconcile_removes_orphans_temp_files_and_missing_image_rows() {
+        let temp = tempdir().unwrap();
+        let data_root = temp.path().join("app-data");
+        let storage = Arc::new(StorageService::initialize(&data_root).unwrap());
+        let service = ClipboardService::initialize(storage);
+        let item = service
+            .record_image(1, 1, vec![9, 8, 7, 255], metadata(1))
+            .unwrap()
+            .item
+            .unwrap();
+        let corrupt_item = service
+            .record_image(1, 1, vec![6, 5, 4, 255], metadata(2))
+            .unwrap()
+            .item
+            .unwrap();
+        let image_path = data_root.join(item.file_path.as_deref().unwrap().replace('/', "\\"));
+        let corrupt_path = data_root.join(
+            corrupt_item
+                .file_path
+                .as_deref()
+                .unwrap()
+                .replace('/', "\\"),
+        );
+        let directory = image_path.parent().unwrap().to_path_buf();
+        drop(service);
+        fs::remove_file(&image_path).unwrap();
+        fs::write(&corrupt_path, b"corrupt png").unwrap();
+        let orphan = directory.join(format!("{}.png", "a".repeat(64)));
+        let temporary = directory.join("stale.tmp");
+        let unremovable_orphan = directory.join("unexpected-directory");
+        fs::write(&orphan, b"orphan").unwrap();
+        fs::write(&temporary, b"temporary").unwrap();
+        fs::create_dir(&unremovable_orphan).unwrap();
+
+        let reopened =
+            ClipboardService::initialize(Arc::new(StorageService::initialize(&data_root).unwrap()));
+        assert_eq!(reopened.history(all(100)).unwrap().total_count, 0);
+        assert!(!orphan.exists());
+        assert!(!temporary.exists());
+        assert!(!corrupt_path.exists());
+        assert!(unremovable_orphan.is_dir());
+    }
+
+    #[test]
+    fn image_write_and_database_failures_leave_no_new_managed_file() {
+        let (temp, storage, service) = service();
+        let directory = temp.path().join("files\\clipboard\\images");
+        fs::remove_dir_all(&directory).unwrap();
+        fs::write(&directory, b"blocks directory").unwrap();
+        assert!(matches!(
+            service.record_image(1, 1, vec![1, 2, 3, 255], metadata(1)),
+            Err(ClipboardError::Image(_))
+        ));
+        fs::remove_file(&directory).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        storage.transaction(|transaction| {
+            transaction.execute_batch("CREATE TRIGGER reject_images BEFORE INSERT ON clipboard_history WHEN NEW.content_type = 'image' BEGIN SELECT RAISE(FAIL, 'reject'); END;")?;
+            Ok(())
+        }).unwrap();
+        assert!(matches!(
+            service.record_image(1, 1, vec![4, 5, 6, 255], metadata(2)),
+            Err(ClipboardError::Storage(_))
+        ));
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn committed_delete_keeps_database_success_truth_when_file_cleanup_fails() {
+        let (temp, _storage, service) = service();
+        let item = service
+            .record_image(1, 1, vec![8, 8, 8, 255], metadata(1))
+            .unwrap()
+            .item
+            .unwrap();
+        let path = image_path(&temp, &item);
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(service.delete(item.id).unwrap());
+        assert_eq!(service.history(all(100)).unwrap().total_count, 0);
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn image_lifecycle_lock_serializes_same_hash_failure_reuse_and_mixed_mutations() {
+        let temp = tempdir().unwrap();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        storage
+            .transaction(|transaction| {
+                transaction.execute_batch(
+                    "CREATE TRIGGER reject_selected_images
+                     BEFORE INSERT ON clipboard_history
+                     WHEN NEW.content_type = 'image' AND NEW.source_application = 'Fail'
+                     BEGIN SELECT RAISE(FAIL, 'selected failure'); END;",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let service = Arc::new(ClipboardService::initialize(storage));
+        let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
+        let (proceed_sender, proceed_receiver) = mpsc::sync_channel(1);
+        let proceed_receiver = Arc::new(Mutex::new(proceed_receiver));
+        *service.after_image_store_hook.lock().unwrap() = Some(Arc::new({
+            let proceed_receiver = Arc::clone(&proceed_receiver);
+            move |metadata| {
+                if metadata.source_application.as_deref() == Some("Fail") {
+                    entered_sender.send(()).unwrap();
+                    proceed_receiver.lock().unwrap().recv().unwrap();
+                }
+            }
+        }));
+
+        let failing_service = Arc::clone(&service);
+        let failing = std::thread::spawn(move || {
+            failing_service.record_image(
+                1,
+                1,
+                vec![1, 2, 3, 255],
+                ClipboardCaptureMetadata {
+                    captured_at_ms: 1,
+                    source_application: Some("Fail".to_owned()),
+                    source_process: None,
+                },
+            )
+        });
+        entered_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+
+        let (success_done_sender, success_done_receiver) = mpsc::sync_channel(1);
+        let (success_started_sender, success_started_receiver) = mpsc::sync_channel(1);
+        let successful_service = Arc::clone(&service);
+        let successful = std::thread::spawn(move || {
+            success_started_sender.send(()).unwrap();
+            let result = successful_service.record_image(
+                1,
+                1,
+                vec![1, 2, 3, 255],
+                ClipboardCaptureMetadata {
+                    captured_at_ms: 2,
+                    source_application: Some("Success".to_owned()),
+                    source_process: None,
+                },
+            );
+            success_done_sender.send(()).unwrap();
+            result
+        });
+        success_started_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert!(success_done_receiver
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+        proceed_sender.send(()).unwrap();
+        assert!(matches!(
+            failing.join().unwrap(),
+            Err(ClipboardError::Storage(_))
+        ));
+        assert!(successful.join().unwrap().unwrap().retained);
+        *service.after_image_store_hook.lock().unwrap() = None;
+
+        let existing = service
+            .record_image(1, 1, vec![8, 8, 8, 255], metadata(3))
+            .unwrap()
+            .item
+            .unwrap();
+        let barrier = Arc::new(Barrier::new(4));
+        let success_service = Arc::clone(&service);
+        let success_barrier = Arc::clone(&barrier);
+        let record = std::thread::spawn(move || {
+            success_barrier.wait();
+            success_service.record_image(1, 1, vec![4, 5, 6, 255], metadata(4))
+        });
+        let fail_service = Arc::clone(&service);
+        let fail_barrier = Arc::clone(&barrier);
+        let fail = std::thread::spawn(move || {
+            fail_barrier.wait();
+            fail_service.record_image(
+                1,
+                1,
+                vec![4, 5, 6, 255],
+                ClipboardCaptureMetadata {
+                    captured_at_ms: 5,
+                    source_application: Some("Fail".to_owned()),
+                    source_process: None,
+                },
+            )
+        });
+        let delete_service = Arc::clone(&service);
+        let delete_barrier = Arc::clone(&barrier);
+        let delete = std::thread::spawn(move || {
+            delete_barrier.wait();
+            delete_service.delete(existing.id)
+        });
+        barrier.wait();
+        assert!(record.join().unwrap().unwrap().retained);
+        assert!(matches!(
+            fail.join().unwrap(),
+            Err(ClipboardError::Storage(_))
+        ));
+        assert!(delete.join().unwrap().unwrap());
+
+        let page = service.history(all(100)).unwrap();
+        for item in page
+            .items
+            .iter()
+            .filter(|item| item.kind == ClipboardContentKind::Image)
+        {
+            assert!(service
+                .image_bytes(item.id)
+                .unwrap()
+                .starts_with(b"\x89PNG"));
+        }
     }
 
     #[test]

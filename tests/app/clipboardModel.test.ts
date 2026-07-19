@@ -45,7 +45,6 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
       locked: false,
       iconTone: "note"
     });
-    expect(item.previewImageUrl).toBeUndefined();
     expect(item.capturedAt).not.toBe("");
     expect(item.size).toContain("32 B");
   });
@@ -62,7 +61,6 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
       isFavorite: true
     });
     expect(item.preview).toBe("图片预览暂不可用");
-    expect(item.previewImageUrl).toBeUndefined();
     expect(item.capturedAt).toBe("时间不可用");
   });
 

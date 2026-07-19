@@ -17,6 +17,7 @@ export function useClipboardController() {
 
   return {
     state,
+    loadImage: clipboardClient.getImage,
     setFavorite: controller.setFavorite.bind(controller),
     deleteItem: controller.deleteItem.bind(controller),
     clearUnfavoriteHistory: controller.clearUnfavoriteHistory.bind(controller)

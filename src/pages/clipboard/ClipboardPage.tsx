@@ -27,11 +27,14 @@ import { SearchField, SelectField, TextAreaField, TextField } from "../../compon
 import { HintTooltip } from "../../components/primitives/HintTooltip";
 import { SegmentedControl, Toggle } from "../../components/primitives/SelectionControl";
 import { List, ListRow } from "../../components/patterns/ListRow";
+import { ImagePreview, type ImagePreviewState } from "../../components/patterns/ImagePreview";
 import { Section, SectionTitle } from "../../components/patterns/Section";
 import styles from "./ClipboardPage.module.css";
+import { useClipboardImagePreview, type LoadClipboardImage } from "./useClipboardImagePreview";
 
 type ClipboardPageProps = {
   state: ClipboardControllerState;
+  loadImage: LoadClipboardImage;
   onSetFavorite: (id: string, isFavorite: boolean) => void;
   onDelete: (id: string) => void;
   onClearUnfavoriteHistory: () => void;
@@ -291,16 +294,26 @@ function HistoryPanel({
 
 function DetailsPanel({
   item,
+  imagePreview,
   canFavorite,
   canDelete,
   itemPending,
+  onImageLoaded,
+  onImageError,
+  onRetryImage,
+  onReleaseImagePreview,
   onToggleFavorite,
   onDelete
 }: {
   item: ClipboardItemViewModel | null;
+  imagePreview: ImagePreviewState;
   canFavorite: boolean;
   canDelete: boolean;
   itemPending: boolean;
+  onImageLoaded: (url: string) => void;
+  onImageError: (url: string) => void;
+  onRetryImage: () => void;
+  onReleaseImagePreview: () => void;
   onToggleFavorite: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -325,9 +338,15 @@ function DetailsPanel({
           interactive
         />
       </div>
-      <div className={[styles.previewBox, item?.kind === "image" ? styles.previewBoxImage : ""].filter(Boolean).join(" ")}>
-        {item?.kind === "image" && item.previewImageUrl ? (
-          <img className={styles.previewImage} src={item.previewImageUrl} alt={item.title} />
+      <div className={styles.previewBox}>
+        {item?.kind === "image" ? (
+          <ImagePreview
+            state={imagePreview}
+            alt={`剪贴板图片，来源于${item.sourceApp}，捕获于${item.capturedAt}`}
+            onLoad={onImageLoaded}
+            onError={onImageError}
+            onRetry={onRetryImage}
+          />
         ) : (
           <div className={styles.previewText}>{item?.preview ?? "暂无剪贴板内容"}</div>
         )}
@@ -361,6 +380,7 @@ function DetailsPanel({
         danger
         onConfirm={() => {
           if (item) {
+            onReleaseImagePreview();
             onDelete(item.id);
           }
           setDeleteConfirmOpen(false);
@@ -434,6 +454,7 @@ function SettingsPanel({ viewModel }: { viewModel: ClipboardControllerState["vie
 
 export function ClipboardPage({
   state,
+  loadImage,
   onSetFavorite,
   onDelete,
   onClearUnfavoriteHistory
@@ -463,6 +484,10 @@ export function ClipboardPage({
   );
 
   const selectedItem = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
+  const imagePreview = useClipboardImagePreview(
+    selectedItem?.kind === "image" ? selectedItem.id : null,
+    loadImage
+  );
   const toggleFavorite = (id: string) => {
     const item = viewModel.items.find((candidate) => candidate.id === id);
     if (item) {
@@ -512,9 +537,14 @@ export function ClipboardPage({
         />
         <DetailsPanel
           item={selectedItem}
+          imagePreview={imagePreview.state}
           canFavorite={canFavorite}
           canDelete={canDelete}
           itemPending={selectedPending}
+          onImageLoaded={imagePreview.markLoaded}
+          onImageError={imagePreview.markDecodeError}
+          onRetryImage={imagePreview.retry}
+          onReleaseImagePreview={imagePreview.release}
           onToggleFavorite={toggleFavorite}
           onDelete={onDelete}
         />
@@ -527,6 +557,7 @@ export function ClipboardPage({
         confirmText="清空"
         danger
         onConfirm={() => {
+          imagePreview.release();
           onClearUnfavoriteHistory();
           setClearConfirmOpen(false);
         }}

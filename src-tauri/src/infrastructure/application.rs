@@ -58,6 +58,8 @@ pub enum ApplicationRuntimeError {
     Theme(#[from] ThemeError),
     #[error("failed to initialize hotkey manager: {0}")]
     Hotkey(#[from] HotkeyError),
+    #[error("failed to initialize clipboard service: {0}")]
+    Clipboard(String),
 }
 
 impl ApplicationRuntime {
@@ -121,7 +123,10 @@ impl ApplicationRuntime {
         app_data_dir: PathBuf,
     ) -> Result<Self, ApplicationRuntimeError> {
         let storage = Arc::new(StorageService::initialize(app_data_dir)?);
-        let clipboard = Arc::new(ClipboardService::initialize(Arc::clone(&storage)));
+        let clipboard = Arc::new(
+            ClipboardService::try_initialize(Arc::clone(&storage))
+                .map_err(|error| ApplicationRuntimeError::Clipboard(error.to_string()))?,
+        );
         let theme = ThemeService::initialize(Arc::clone(&storage))?;
         let hotkeys = HotkeyManager::initialize(Arc::clone(&storage))?;
         Ok(Self {

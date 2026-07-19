@@ -24,6 +24,9 @@ describe("clipboardClient", () => {
       if (command === "delete_clipboard_history_item") {
         return { deleted: true };
       }
+      if (command === "get_clipboard_history_image") {
+        return new Uint8Array([137, 80, 78, 71]);
+      }
       return { deletedCount: 1 };
     });
     const client = createClipboardClient({ invokeFunction });
@@ -33,6 +36,9 @@ describe("clipboardClient", () => {
       totalCount: 1,
       monitoring: "running"
     });
+    const image = await client.getImage("1");
+    expect(image.type).toBe("image/png");
+    expect(Array.from(new Uint8Array(await image.arrayBuffer()))).toEqual([137, 80, 78, 71]);
     await expect(client.setFavorite("1", true)).resolves.toEqual({ ...item, isFavorite: true });
     await expect(client.deleteItem("1")).resolves.toEqual({ deleted: true });
     await expect(client.clearUnfavoriteHistory()).resolves.toEqual({ deletedCount: 1 });
@@ -40,13 +46,25 @@ describe("clipboardClient", () => {
     expect(invokeFunction).toHaveBeenNthCalledWith(1, "get_clipboard_history", {
       query: { scope: "all", search: null, limit: 100 }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(2, "set_clipboard_history_favorite", {
-      input: { id: "1", isFavorite: true }
-    });
-    expect(invokeFunction).toHaveBeenNthCalledWith(3, "delete_clipboard_history_item", {
+    expect(invokeFunction).toHaveBeenNthCalledWith(2, "get_clipboard_history_image", {
       input: { id: "1" }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(4, "clear_unfavorite_clipboard_history");
+    expect(invokeFunction).toHaveBeenNthCalledWith(3, "set_clipboard_history_favorite", {
+      input: { id: "1", isFavorite: true }
+    });
+    expect(invokeFunction).toHaveBeenNthCalledWith(4, "delete_clipboard_history_item", {
+      input: { id: "1" }
+    });
+    expect(invokeFunction).toHaveBeenNthCalledWith(5, "clear_unfavorite_clipboard_history");
+  });
+
+  it("accepts raw ArrayBuffer images and rejects JSON-like image payloads", async () => {
+    const bytes = new Uint8Array([1, 2, 3]).buffer;
+    const rawClient = createClipboardClient({ invokeFunction: async () => bytes });
+    await expect(rawClient.getImage("7")).resolves.toMatchObject({ size: 3, type: "image/png" });
+
+    const jsonClient = createClipboardClient({ invokeFunction: async () => [1, 2, 3] });
+    await expect(jsonClient.getImage("7")).rejects.toThrow("Invalid clipboard image payload");
   });
 
   it("rejects malformed payloads instead of inventing content", async () => {

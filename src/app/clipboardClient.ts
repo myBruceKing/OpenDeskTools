@@ -18,6 +18,7 @@ type ListenFunction = (
 
 export type ClipboardClient = {
   getHistory: (query: ClipboardHistoryQuery) => Promise<ClipboardHistoryResult>;
+  getImage: (id: string) => Promise<Blob>;
   setFavorite: (id: string, isFavorite: boolean) => Promise<ClipboardHistoryItem>;
   deleteItem: (id: string) => Promise<{ deleted: boolean }>;
   clearUnfavoriteHistory: () => Promise<{ deletedCount: number }>;
@@ -31,10 +32,26 @@ export function createClipboardClient({
   invokeFunction?: InvokeFunction;
   listenFunction?: ListenFunction;
 } = {}): ClipboardClient {
+  const imageBlob = (value: unknown) => {
+    if (value instanceof ArrayBuffer) {
+      return new Blob([value], { type: "image/png" });
+    }
+    if (value instanceof Uint8Array) {
+      return new Blob([Uint8Array.from(value)], { type: "image/png" });
+    }
+    throw new Error("Invalid clipboard image payload");
+  };
+
   return {
     async getHistory(query) {
       return parseClipboardHistoryResult(
         await invokeFunction("get_clipboard_history", { query })
+      );
+    },
+
+    async getImage(id) {
+      return imageBlob(
+        await invokeFunction("get_clipboard_history_image", { input: { id } })
       );
     },
 

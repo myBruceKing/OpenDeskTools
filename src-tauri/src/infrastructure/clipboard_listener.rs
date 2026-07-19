@@ -7,6 +7,7 @@ use thiserror::Error;
 use super::clipboard::{
     ClipboardCaptureMetadata, ClipboardError, ClipboardService, JS_MAX_SAFE_INTEGER,
 };
+use super::image::ImageError;
 
 const STATUS_STOPPED: u8 = 0;
 const STATUS_RUNNING: u8 = 1;
@@ -154,11 +155,21 @@ fn detach_listener_reaper(
 
 trait ClipboardReader {
     fn sequence_number(&mut self) -> u32;
+    fn read_image(&mut self) -> Result<Option<ClipboardImage>, ()> {
+        Ok(None)
+    }
     fn read_text(&mut self) -> Result<Option<String>, ()>;
 
     fn source_metadata(&mut self) -> ClipboardSourceMetadata {
         ClipboardSourceMetadata::default()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClipboardImage {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -181,6 +192,15 @@ trait ClipboardRecordTarget {
         captured_at_ms: u64,
         source: ClipboardSourceMetadata,
     ) -> ListenerRecordOutcome;
+
+    fn record_listener_image(
+        &self,
+        _image: ClipboardImage,
+        _captured_at_ms: u64,
+        _source: ClipboardSourceMetadata,
+    ) -> ListenerRecordOutcome {
+        ListenerRecordOutcome::PermanentReject
+    }
 }
 
 impl ClipboardRecordTarget for ClipboardService {
@@ -201,7 +221,40 @@ impl ClipboardRecordTarget for ClipboardService {
             Ok(result) => ListenerRecordOutcome::Recorded {
                 retained: result.retained,
             },
-            Err(ClipboardError::Storage(_) | ClipboardError::CorruptRecord) => {
+            Err(
+                ClipboardError::Storage(_)
+                | ClipboardError::CorruptRecord
+                | ClipboardError::LifecycleLockPoisoned,
+            ) => ListenerRecordOutcome::RetryableFailure,
+            Err(_) => ListenerRecordOutcome::PermanentReject,
+        }
+    }
+
+    fn record_listener_image(
+        &self,
+        image: ClipboardImage,
+        captured_at_ms: u64,
+        source: ClipboardSourceMetadata,
+    ) -> ListenerRecordOutcome {
+        match self.record_image(
+            image.width,
+            image.height,
+            image.rgba,
+            ClipboardCaptureMetadata {
+                captured_at_ms,
+                source_application: source.source_application,
+                source_process: source.source_process,
+            },
+        ) {
+            Ok(result) => ListenerRecordOutcome::Recorded {
+                retained: result.retained,
+            },
+            Err(
+                ClipboardError::Storage(_)
+                | ClipboardError::CorruptRecord
+                | ClipboardError::LifecycleLockPoisoned,
+            ) => ListenerRecordOutcome::RetryableFailure,
+            Err(ClipboardError::Image(ImageError::Io(_) | ImageError::Storage(_))) => {
                 ListenerRecordOutcome::RetryableFailure
             }
             Err(_) => ListenerRecordOutcome::PermanentReject,
@@ -225,21 +278,38 @@ fn process_clipboard_notification<R: ClipboardReader, T: ClipboardRecordTarget>(
         return;
     }
 
-    let text = match reader.read_text() {
-        Ok(text) => text,
+    let image = match reader.read_image() {
+        Ok(image) => image,
         Err(()) => return,
+    };
+    let text = match (image.is_some(), reader.read_text()) {
+        (_, Ok(text)) => text,
+        (true, Err(())) => None,
+        (false, Err(())) => return,
     };
     let source = reader.source_metadata();
     let final_sequence = reader.sequence_number();
     let Some(sequence) = stable_sequence(sequence, final_sequence) else {
         return;
     };
-    let Some(text) = text.filter(|text| !text.is_empty()) else {
+    let outcome = if let Some(image) = image {
+        let image_outcome = target.record_listener_image(image, captured_at_ms, source.clone());
+        if image_outcome == ListenerRecordOutcome::PermanentReject {
+            if let Some(text) = text.filter(|text| !text.is_empty()) {
+                target.record_listener_text(text, captured_at_ms, source)
+            } else {
+                image_outcome
+            }
+        } else {
+            image_outcome
+        }
+    } else if let Some(text) = text.filter(|text| !text.is_empty()) {
+        target.record_listener_text(text, captured_at_ms, source)
+    } else {
         commit_sequence(last_sequence, sequence);
         return;
     };
-
-    match target.record_listener_text(text, captured_at_ms, source) {
+    match outcome {
         ListenerRecordOutcome::Recorded { retained } => {
             commit_sequence(last_sequence, sequence);
             if retained {
@@ -322,12 +392,20 @@ mod platform {
     use crate::infrastructure::clipboard::{
         MAX_SOURCE_APPLICATION_CHARS, MAX_SOURCE_PROCESS_CHARS, MAX_TEXT_BYTES,
     };
+    use crate::infrastructure::image::{
+        MAX_IMAGE_HEIGHT, MAX_IMAGE_PIXELS, MAX_IMAGE_WIDTH, MAX_RGBA_BYTES,
+    };
 
     const STOP_MESSAGE: u32 = WM_APP + 0x31;
     const OPEN_ATTEMPTS: usize = 5;
     const OPEN_RETRY_DELAY: Duration = Duration::from_millis(12);
     const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
     const PROCESS_PATH_CAPACITY: usize = 32_768;
+    const CF_DIB_FORMAT: u32 = 8;
+    const CF_DIBV5_FORMAT: u32 = 17;
+    const MAX_CLIPBOARD_BLOCK_BYTES: usize = 128 * 1024 * 1024;
+    const BI_RGB: u32 = 0;
+    const BI_BITFIELDS: u32 = 3;
     const WINDOW_CLASS_NAME: &[u16] = &[
         79, 112, 101, 110, 68, 101, 115, 107, 84, 111, 111, 108, 115, 67, 108, 105, 112, 98, 111,
         97, 114, 100, 76, 105, 115, 116, 101, 110, 101, 114, 0,
@@ -661,6 +739,15 @@ mod platform {
         fn global_size(&mut self, handle: usize) -> usize;
         fn global_lock(&mut self, handle: usize) -> Option<*const u16>;
         fn global_unlock(&mut self, handle: usize);
+        fn is_format_available(&mut self, _format: u32) -> bool {
+            false
+        }
+        fn get_format_data(&mut self, _format: u32) -> Option<usize> {
+            None
+        }
+        fn global_lock_bytes(&mut self, handle: usize) -> Option<*const u8> {
+            self.global_lock(handle).map(|pointer| pointer.cast())
+        }
     }
 
     struct SystemClipboardApi;
@@ -699,6 +786,20 @@ mod platform {
                 GlobalUnlock(handle as HGLOBAL);
             }
         }
+
+        fn is_format_available(&mut self, format: u32) -> bool {
+            (unsafe { IsClipboardFormatAvailable(format) }) != 0
+        }
+
+        fn get_format_data(&mut self, format: u32) -> Option<usize> {
+            let handle = unsafe { GetClipboardData(format) };
+            (!handle.is_null()).then_some(handle as usize)
+        }
+
+        fn global_lock_bytes(&mut self, handle: usize) -> Option<*const u8> {
+            let data = unsafe { GlobalLock(handle as HGLOBAL) } as *const u8;
+            (!data.is_null()).then_some(data)
+        }
     }
 
     #[derive(Default)]
@@ -711,8 +812,15 @@ mod platform {
             unsafe { GetClipboardSequenceNumber() }
         }
 
-        fn read_text(&mut self) -> Result<Option<String>, ()> {
+        fn read_image(&mut self) -> Result<Option<ClipboardImage>, ()> {
             self.source = resolve_clipboard_source(&mut SystemProcessSourceApi);
+            read_image_with_retries(&mut SystemClipboardApi, || thread::sleep(OPEN_RETRY_DELAY))
+        }
+
+        fn read_text(&mut self) -> Result<Option<String>, ()> {
+            if self.source == ClipboardSourceMetadata::default() {
+                self.source = resolve_clipboard_source(&mut SystemProcessSourceApi);
+            }
             read_text_with_retries(&mut SystemClipboardApi, || thread::sleep(OPEN_RETRY_DELAY))
         }
 
@@ -885,6 +993,293 @@ mod platform {
         api: &'a mut A,
         handle: usize,
         pointer: *const u16,
+    }
+
+    struct GlobalByteLockGuard<'a, A: ClipboardApi> {
+        api: &'a mut A,
+        handle: usize,
+        pointer: *const u8,
+    }
+
+    impl<'a, A: ClipboardApi> GlobalByteLockGuard<'a, A> {
+        fn try_lock(api: &'a mut A, handle: usize) -> Result<Self, ()> {
+            let pointer = api.global_lock_bytes(handle).ok_or(())?;
+            Ok(Self {
+                api,
+                handle,
+                pointer,
+            })
+        }
+
+        unsafe fn bytes(&self, count: usize) -> &[u8] {
+            unsafe { std::slice::from_raw_parts(self.pointer, count) }
+        }
+    }
+
+    impl<A: ClipboardApi> Drop for GlobalByteLockGuard<'_, A> {
+        fn drop(&mut self) {
+            self.api.global_unlock(self.handle);
+        }
+    }
+
+    fn read_image_with_retries<A, F>(
+        api: &mut A,
+        mut wait_before_retry: F,
+    ) -> Result<Option<ClipboardImage>, ()>
+    where
+        A: ClipboardApi,
+        F: FnMut(),
+    {
+        let formats = [CF_DIBV5_FORMAT, CF_DIB_FORMAT]
+            .into_iter()
+            .filter(|format| api.is_format_available(*format))
+            .collect::<Vec<_>>();
+        if formats.is_empty() {
+            return Ok(None);
+        }
+        for format in formats {
+            match read_image_format_with_retries(api, format, &mut wait_before_retry)? {
+                Some(image) => return Ok(Some(image)),
+                None => continue,
+            }
+        }
+        Ok(None)
+    }
+
+    fn read_image_format_with_retries<A, F>(
+        api: &mut A,
+        format: u32,
+        wait_before_retry: &mut F,
+    ) -> Result<Option<ClipboardImage>, ()>
+    where
+        A: ClipboardApi,
+        F: FnMut(),
+    {
+        for attempt in 0..OPEN_ATTEMPTS {
+            match read_image_attempt(api, format) {
+                Ok(Some(bytes)) => return Ok(parse_dib(bytes).ok()),
+                Ok(None) => return Ok(None),
+                Err(()) if attempt + 1 < OPEN_ATTEMPTS => wait_before_retry(),
+                Err(()) => return Err(()),
+            }
+        }
+        Err(())
+    }
+
+    fn read_image_attempt<A: ClipboardApi>(
+        api: &mut A,
+        format: u32,
+    ) -> Result<Option<Vec<u8>>, ()> {
+        let mut clipboard = ClipboardOpenGuard::try_open(api)?;
+        let handle = clipboard.get_format_data(format).ok_or(())?;
+        let size = clipboard.global_size(handle);
+        if !(40..=MAX_CLIPBOARD_BLOCK_BYTES).contains(&size) {
+            return Ok(None);
+        }
+        let locked = GlobalByteLockGuard::try_lock(&mut *clipboard, handle)?;
+        Ok(Some(unsafe { locked.bytes(size) }.to_vec()))
+    }
+
+    fn parse_dib(bytes: Vec<u8>) -> Result<ClipboardImage, ()> {
+        if bytes.len() < 40 || bytes.len() > MAX_CLIPBOARD_BLOCK_BYTES {
+            return Err(());
+        }
+        let header_size = usize::try_from(read_u32(&bytes, 0)?).map_err(|_| ())?;
+        if !matches!(header_size, 40 | 52 | 56 | 108 | 124) || header_size > bytes.len() {
+            return Err(());
+        }
+        let width_i = read_i32(&bytes, 4)?;
+        let height_i = read_i32(&bytes, 8)?;
+        if width_i <= 0 || height_i == 0 {
+            return Err(());
+        }
+        let width = u32::try_from(width_i).map_err(|_| ())?;
+        let height = height_i.unsigned_abs();
+        if width > MAX_IMAGE_WIDTH || height > MAX_IMAGE_HEIGHT {
+            return Err(());
+        }
+        let pixels = u64::from(width).checked_mul(u64::from(height)).ok_or(())?;
+        if pixels > MAX_IMAGE_PIXELS {
+            return Err(());
+        }
+        if read_u16(&bytes, 12)? != 1 {
+            return Err(());
+        }
+        let bit_count = read_u16(&bytes, 14)?;
+        if bit_count != 24 && bit_count != 32 {
+            return Err(());
+        }
+        let compression = read_u32(&bytes, 16)?;
+        if compression != BI_RGB && compression != BI_BITFIELDS {
+            return Err(());
+        }
+        if read_u32(&bytes, 32)? != 0 {
+            return Err(());
+        }
+        if header_size >= 124 {
+            const PROFILE_LINKED: u32 = 0x4c49_4e4b;
+            const PROFILE_EMBEDDED: u32 = 0x4d42_4544;
+            let color_space_type = read_u32(&bytes, 56)?;
+            let profile_offset = read_u32(&bytes, 112)?;
+            let profile_size = read_u32(&bytes, 116)?;
+            if matches!(color_space_type, PROFILE_LINKED | PROFILE_EMBEDDED)
+                || profile_offset != 0
+                || profile_size != 0
+            {
+                return Err(());
+            }
+        }
+
+        let mut pixel_offset = header_size;
+        let masks = if compression == BI_BITFIELDS {
+            let masks_offset = 40;
+            let required = if header_size >= 52 {
+                52
+            } else {
+                header_size.checked_add(12).ok_or(())?
+            };
+            if bytes.len() < required {
+                return Err(());
+            }
+            if header_size < 52 {
+                pixel_offset = required;
+            }
+            let red = read_u32(&bytes, masks_offset)?;
+            let green = read_u32(&bytes, masks_offset + 4)?;
+            let blue = read_u32(&bytes, masks_offset + 8)?;
+            let alpha = if header_size >= 56 {
+                read_u32(&bytes, masks_offset + 12)?
+            } else {
+                0
+            };
+            validate_masks(red, green, blue, alpha, bit_count)?;
+            Some((red, green, blue, alpha))
+        } else {
+            None
+        };
+        let row_bits = usize::try_from(width)
+            .map_err(|_| ())?
+            .checked_mul(bit_count as usize)
+            .ok_or(())?;
+        let stride = row_bits
+            .checked_add(31)
+            .ok_or(())?
+            .checked_div(32)
+            .ok_or(())?
+            .checked_mul(4)
+            .ok_or(())?;
+        let data_size = stride.checked_mul(height as usize).ok_or(())?;
+        let end = pixel_offset.checked_add(data_size).ok_or(())?;
+        if end > bytes.len() {
+            return Err(());
+        }
+        let rgba_len = usize::try_from(pixels.checked_mul(4).ok_or(())?).map_err(|_| ())?;
+        if rgba_len > MAX_RGBA_BYTES {
+            return Err(());
+        }
+        let mut rgba = vec![0_u8; rgba_len];
+        let source = &bytes[pixel_offset..end];
+        let bytes_per_pixel = usize::from(bit_count / 8);
+        for output_y in 0..height as usize {
+            let source_y = if height_i > 0 {
+                height as usize - 1 - output_y
+            } else {
+                output_y
+            };
+            let row = source_y.checked_mul(stride).ok_or(())?;
+            for x in 0..width as usize {
+                let source_offset = row
+                    .checked_add(x.checked_mul(bytes_per_pixel).ok_or(())?)
+                    .ok_or(())?;
+                let target_offset = output_y
+                    .checked_mul(width as usize)
+                    .and_then(|v| v.checked_add(x))
+                    .and_then(|v| v.checked_mul(4))
+                    .ok_or(())?;
+                if let Some((red, green, blue, alpha)) = masks {
+                    let raw = if bit_count == 32 {
+                        read_u32(source, source_offset)?
+                    } else {
+                        u32::from(source[source_offset])
+                            | (u32::from(source[source_offset + 1]) << 8)
+                            | (u32::from(source[source_offset + 2]) << 16)
+                    };
+                    rgba[target_offset] = mask_component(raw, red)?;
+                    rgba[target_offset + 1] = mask_component(raw, green)?;
+                    rgba[target_offset + 2] = mask_component(raw, blue)?;
+                    rgba[target_offset + 3] = if alpha == 0 {
+                        255
+                    } else {
+                        mask_component(raw, alpha)?
+                    };
+                } else {
+                    rgba[target_offset] = source[source_offset + 2];
+                    rgba[target_offset + 1] = source[source_offset + 1];
+                    rgba[target_offset + 2] = source[source_offset];
+                    rgba[target_offset + 3] = 255;
+                }
+            }
+        }
+        Ok(ClipboardImage {
+            width,
+            height,
+            rgba,
+        })
+    }
+
+    fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ()> {
+        let value = bytes
+            .get(offset..offset.checked_add(2).ok_or(())?)
+            .ok_or(())?;
+        Ok(u16::from_le_bytes([value[0], value[1]]))
+    }
+    fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ()> {
+        let value = bytes
+            .get(offset..offset.checked_add(4).ok_or(())?)
+            .ok_or(())?;
+        Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+    }
+    fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, ()> {
+        read_u32(bytes, offset).map(|value| i32::from_le_bytes(value.to_le_bytes()))
+    }
+    fn validate_masks(red: u32, green: u32, blue: u32, alpha: u32, bits: u16) -> Result<(), ()> {
+        if red == 0
+            || green == 0
+            || blue == 0
+            || red & green != 0
+            || red & blue != 0
+            || green & blue != 0
+            || alpha & (red | green | blue) != 0
+        {
+            return Err(());
+        }
+        let valid_bits = if bits == 32 {
+            u32::MAX
+        } else {
+            (1_u32 << bits) - 1
+        };
+        if (red | green | blue | alpha) & !valid_bits != 0 {
+            return Err(());
+        }
+        for mask in [red, green, blue, alpha] {
+            if mask != 0 {
+                let shifted = mask >> mask.trailing_zeros();
+                if shifted & shifted.wrapping_add(1) != 0 {
+                    return Err(());
+                }
+            }
+        }
+        Ok(())
+    }
+    fn mask_component(raw: u32, mask: u32) -> Result<u8, ()> {
+        if mask == 0 {
+            return Err(());
+        }
+        let shift = mask.trailing_zeros();
+        let maximum = mask >> shift;
+        let value = (raw & mask) >> shift;
+        u8::try_from((u64::from(value) * 255 + u64::from(maximum) / 2) / u64::from(maximum))
+            .map_err(|_| ())
     }
 
     impl<'a, A: ClipboardApi> GlobalLockGuard<'a, A> {
@@ -1291,6 +1686,241 @@ mod platform {
             );
             assert_eq!(app_api.close_calls, 1);
         }
+
+        fn dib_header(
+            width: i32,
+            height: i32,
+            bits: u16,
+            compression: u32,
+            header_size: u32,
+        ) -> Vec<u8> {
+            let mut bytes = vec![0_u8; header_size as usize];
+            bytes[0..4].copy_from_slice(&header_size.to_le_bytes());
+            bytes[4..8].copy_from_slice(&width.to_le_bytes());
+            bytes[8..12].copy_from_slice(&height.to_le_bytes());
+            bytes[12..14].copy_from_slice(&1_u16.to_le_bytes());
+            bytes[14..16].copy_from_slice(&bits.to_le_bytes());
+            bytes[16..20].copy_from_slice(&compression.to_le_bytes());
+            bytes
+        }
+
+        #[test]
+        fn dib_24_stride_and_bottom_up_rows_decode_to_top_down_rgba() {
+            let mut dib = dib_header(2, 2, 24, BI_RGB, 40);
+            dib.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
+            dib.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
+            let image = parse_dib(dib).unwrap();
+            assert_eq!((image.width, image.height), (2, 2));
+            assert_eq!(
+                image.rgba,
+                vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255]
+            );
+        }
+
+        #[test]
+        fn dib_top_down_and_32_bitfields_masks_decode_correctly() {
+            let mut top_down = dib_header(1, -2, 24, BI_RGB, 40);
+            top_down.extend_from_slice(&[0, 0, 255, 0]);
+            top_down.extend_from_slice(&[255, 0, 0, 0]);
+            assert_eq!(
+                parse_dib(top_down).unwrap().rgba,
+                vec![255, 0, 0, 255, 0, 0, 255, 255]
+            );
+
+            let mut masked = dib_header(1, 1, 32, BI_BITFIELDS, 56);
+            masked[40..44].copy_from_slice(&0x0000_00ff_u32.to_le_bytes());
+            masked[44..48].copy_from_slice(&0x0000_ff00_u32.to_le_bytes());
+            masked[48..52].copy_from_slice(&0x00ff_0000_u32.to_le_bytes());
+            masked[52..56].copy_from_slice(&0xff00_0000_u32.to_le_bytes());
+            masked.extend_from_slice(&0x8040_2010_u32.to_le_bytes());
+            assert_eq!(parse_dib(masked).unwrap().rgba, vec![16, 32, 64, 128]);
+        }
+
+        #[test]
+        fn dib_rejects_short_headers_bad_masks_and_dimension_bombs_without_allocating() {
+            assert!(parse_dib(vec![0; 39]).is_err());
+            for (width, height) in [(16_385, 1), (1, 16_385), (16_384, 16_384)] {
+                assert!(parse_dib(dib_header(width, height, 32, BI_RGB, 40)).is_err());
+            }
+            let mut bad_masks = dib_header(1, 1, 32, BI_BITFIELDS, 56);
+            bad_masks[40..44].copy_from_slice(&0xff_u32.to_le_bytes());
+            bad_masks[44..48].copy_from_slice(&0xff_u32.to_le_bytes());
+            bad_masks[48..52].copy_from_slice(&0xff0000_u32.to_le_bytes());
+            bad_masks.extend_from_slice(&0_u32.to_le_bytes());
+            assert!(parse_dib(bad_masks).is_err());
+            let mut truncated = dib_header(100, 100, 24, BI_RGB, 40);
+            truncated.extend_from_slice(&[0; 8]);
+            assert!(parse_dib(truncated).is_err());
+
+            let mut forged_color_table = dib_header(1, 1, 24, BI_RGB, 40);
+            forged_color_table[32..36].copy_from_slice(&1_u32.to_le_bytes());
+            forged_color_table.extend_from_slice(&[10, 20, 30, 0, 1, 2, 3, 0]);
+            assert!(parse_dib(forged_color_table).is_err());
+
+            let mut forged_profile = dib_header(1, 1, 32, BI_RGB, 124);
+            forged_profile[112..116].copy_from_slice(&124_u32.to_le_bytes());
+            forged_profile[116..120].copy_from_slice(&4_u32.to_le_bytes());
+            forged_profile.extend_from_slice(&[9, 9, 9, 9, 3, 2, 1, 0]);
+            assert!(parse_dib(forged_profile).is_err());
+
+            let mut linked_profile = dib_header(1, 1, 32, BI_RGB, 124);
+            linked_profile[56..60].copy_from_slice(&0x4c49_4e4b_u32.to_le_bytes());
+            linked_profile.extend_from_slice(&[3, 2, 1, 0]);
+            assert!(parse_dib(linked_profile).is_err());
+        }
+
+        struct FakeImageApi {
+            dib_v5: bool,
+            dib: bool,
+            bytes: Vec<u8>,
+            opens: usize,
+            closes: usize,
+            unlocks: usize,
+            requested: Vec<u32>,
+        }
+
+        impl ClipboardApi for FakeImageApi {
+            fn is_unicode_text_available(&mut self) -> bool {
+                false
+            }
+            fn open(&mut self) -> bool {
+                self.opens += 1;
+                true
+            }
+            fn close(&mut self) {
+                self.closes += 1;
+            }
+            fn get_unicode_text_data(&mut self) -> Option<usize> {
+                None
+            }
+            fn global_size(&mut self, _handle: usize) -> usize {
+                self.bytes.len()
+            }
+            fn global_lock(&mut self, _handle: usize) -> Option<*const u16> {
+                Some(self.bytes.as_ptr().cast())
+            }
+            fn global_unlock(&mut self, _handle: usize) {
+                self.unlocks += 1;
+            }
+            fn is_format_available(&mut self, format: u32) -> bool {
+                (format == CF_DIBV5_FORMAT && self.dib_v5) || (format == CF_DIB_FORMAT && self.dib)
+            }
+            fn get_format_data(&mut self, format: u32) -> Option<usize> {
+                self.requested.push(format);
+                Some(9)
+            }
+            fn global_lock_bytes(&mut self, _handle: usize) -> Option<*const u8> {
+                Some(self.bytes.as_ptr())
+            }
+        }
+
+        #[test]
+        fn dibv5_is_preferred_and_clipboard_open_lock_resources_are_balanced() {
+            let mut bytes = dib_header(1, 1, 32, BI_RGB, 124);
+            bytes.extend_from_slice(&[3, 2, 1, 0]);
+            let mut api = FakeImageApi {
+                dib_v5: true,
+                dib: true,
+                bytes,
+                opens: 0,
+                closes: 0,
+                unlocks: 0,
+                requested: Vec::new(),
+            };
+            let image = read_image_with_retries(&mut api, || {}).unwrap().unwrap();
+            assert_eq!(image.rgba, vec![1, 2, 3, 255]);
+            assert_eq!(api.requested, vec![CF_DIBV5_FORMAT]);
+            assert_eq!((api.opens, api.closes, api.unlocks), (1, 1, 1));
+        }
+
+        #[test]
+        fn invalid_dib_returns_none_so_same_snapshot_can_fallback_to_unicode_text() {
+            let mut api = FakeImageApi {
+                dib_v5: false,
+                dib: true,
+                bytes: vec![0; 40],
+                opens: 0,
+                closes: 0,
+                unlocks: 0,
+                requested: Vec::new(),
+            };
+            assert_eq!(read_image_with_retries(&mut api, || {}), Ok(None));
+            assert_eq!((api.opens, api.closes, api.unlocks), (1, 1, 1));
+        }
+
+        struct PerFormatImageApi {
+            dib_v5: Vec<u8>,
+            dib: Vec<u8>,
+            active_format: Option<u32>,
+            requested: Vec<u32>,
+            opens: usize,
+            closes: usize,
+            unlocks: usize,
+        }
+
+        impl ClipboardApi for PerFormatImageApi {
+            fn is_unicode_text_available(&mut self) -> bool {
+                false
+            }
+            fn open(&mut self) -> bool {
+                self.opens += 1;
+                true
+            }
+            fn close(&mut self) {
+                self.closes += 1;
+            }
+            fn get_unicode_text_data(&mut self) -> Option<usize> {
+                None
+            }
+            fn global_size(&mut self, _handle: usize) -> usize {
+                match self.active_format {
+                    Some(CF_DIBV5_FORMAT) => self.dib_v5.len(),
+                    Some(CF_DIB_FORMAT) => self.dib.len(),
+                    _ => 0,
+                }
+            }
+            fn global_lock(&mut self, handle: usize) -> Option<*const u16> {
+                self.global_lock_bytes(handle).map(|pointer| pointer.cast())
+            }
+            fn global_unlock(&mut self, _handle: usize) {
+                self.unlocks += 1;
+            }
+            fn is_format_available(&mut self, format: u32) -> bool {
+                matches!(format, CF_DIBV5_FORMAT | CF_DIB_FORMAT)
+            }
+            fn get_format_data(&mut self, format: u32) -> Option<usize> {
+                self.active_format = Some(format);
+                self.requested.push(format);
+                Some(1)
+            }
+            fn global_lock_bytes(&mut self, _handle: usize) -> Option<*const u8> {
+                match self.active_format {
+                    Some(CF_DIBV5_FORMAT) => Some(self.dib_v5.as_ptr()),
+                    Some(CF_DIB_FORMAT) => Some(self.dib.as_ptr()),
+                    _ => None,
+                }
+            }
+        }
+
+        #[test]
+        fn advertised_invalid_dibv5_falls_back_to_valid_dib_with_balanced_resources() {
+            let invalid_v5 = vec![0_u8; 40];
+            let mut valid_dib = dib_header(1, 1, 24, BI_RGB, 40);
+            valid_dib.extend_from_slice(&[3, 2, 1, 0]);
+            let mut api = PerFormatImageApi {
+                dib_v5: invalid_v5,
+                dib: valid_dib,
+                active_format: None,
+                requested: Vec::new(),
+                opens: 0,
+                closes: 0,
+                unlocks: 0,
+            };
+            let image = read_image_with_retries(&mut api, || {}).unwrap().unwrap();
+            assert_eq!(image.rgba, vec![1, 2, 3, 255]);
+            assert_eq!(api.requested, vec![CF_DIBV5_FORMAT, CF_DIB_FORMAT]);
+            assert_eq!((api.opens, api.closes, api.unlocks), (2, 2, 2));
+        }
     }
 }
 
@@ -1317,6 +1947,53 @@ mod tests {
     struct FakeRecordTarget {
         outcomes: Mutex<VecDeque<ListenerRecordOutcome>>,
         calls: AtomicUsize,
+    }
+
+    struct ImageReader {
+        sequences: VecDeque<u32>,
+        image: Result<Option<ClipboardImage>, ()>,
+        text: Option<String>,
+        text_reads: usize,
+    }
+
+    impl ClipboardReader for ImageReader {
+        fn sequence_number(&mut self) -> u32 {
+            self.sequences.pop_front().unwrap()
+        }
+        fn read_image(&mut self) -> Result<Option<ClipboardImage>, ()> {
+            self.image.clone()
+        }
+        fn read_text(&mut self) -> Result<Option<String>, ()> {
+            self.text_reads += 1;
+            Ok(self.text.clone())
+        }
+    }
+
+    struct ContentTarget {
+        image_calls: AtomicUsize,
+        text_calls: AtomicUsize,
+        image_outcome: ListenerRecordOutcome,
+    }
+
+    impl ClipboardRecordTarget for ContentTarget {
+        fn record_listener_text(
+            &self,
+            _text: String,
+            _captured_at_ms: u64,
+            _source: ClipboardSourceMetadata,
+        ) -> ListenerRecordOutcome {
+            self.text_calls.fetch_add(1, Ordering::SeqCst);
+            ListenerRecordOutcome::Recorded { retained: true }
+        }
+        fn record_listener_image(
+            &self,
+            _image: ClipboardImage,
+            _captured_at_ms: u64,
+            _source: ClipboardSourceMetadata,
+        ) -> ListenerRecordOutcome {
+            self.image_calls.fetch_add(1, Ordering::SeqCst);
+            self.image_outcome
+        }
     }
 
     impl ClipboardRecordTarget for FakeRecordTarget {
@@ -1358,6 +2035,93 @@ mod tests {
         assert!(!is_duplicate_sequence(Some(7), 8));
         assert!(!is_duplicate_sequence(Some(0), 0));
         assert!(!is_duplicate_sequence(None, 0));
+    }
+
+    #[test]
+    fn image_has_priority_and_absent_or_invalid_image_can_fallback_to_same_sequence_text() {
+        let target = ContentTarget {
+            image_calls: AtomicUsize::new(0),
+            text_calls: AtomicUsize::new(0),
+            image_outcome: ListenerRecordOutcome::Recorded { retained: true },
+        };
+        let sink: ClipboardHistoryEventSink = Arc::new(|| {});
+        let mut image_reader = ImageReader {
+            sequences: VecDeque::from([1, 1]),
+            image: Ok(Some(ClipboardImage {
+                width: 1,
+                height: 1,
+                rgba: vec![1, 2, 3, 255],
+            })),
+            text: Some("also-text".to_owned()),
+            text_reads: 0,
+        };
+        process_clipboard_notification(&mut image_reader, &mut None, &target, &sink, 1);
+        assert_eq!(target.image_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(target.text_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(image_reader.text_reads, 1);
+
+        let mut fallback_reader = ImageReader {
+            sequences: VecDeque::from([2, 2]),
+            image: Ok(None),
+            text: Some("fallback".to_owned()),
+            text_reads: 0,
+        };
+        process_clipboard_notification(&mut fallback_reader, &mut None, &target, &sink, 2);
+        assert_eq!(target.text_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_reader.text_reads, 1);
+
+        let rejecting_target = ContentTarget {
+            image_calls: AtomicUsize::new(0),
+            text_calls: AtomicUsize::new(0),
+            image_outcome: ListenerRecordOutcome::PermanentReject,
+        };
+        let mut permanent_reader = ImageReader {
+            sequences: VecDeque::from([3, 3]),
+            image: Ok(Some(ClipboardImage {
+                width: 1,
+                height: 1,
+                rgba: vec![1, 2, 3, 255],
+            })),
+            text: Some("permanent-image-fallback".to_owned()),
+            text_reads: 0,
+        };
+        let mut sequence = None;
+        process_clipboard_notification(
+            &mut permanent_reader,
+            &mut sequence,
+            &rejecting_target,
+            &sink,
+            3,
+        );
+        assert_eq!(rejecting_target.image_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(rejecting_target.text_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(sequence, Some(3));
+
+        let retrying_target = ContentTarget {
+            image_calls: AtomicUsize::new(0),
+            text_calls: AtomicUsize::new(0),
+            image_outcome: ListenerRecordOutcome::RetryableFailure,
+        };
+        let mut retry_reader = ImageReader {
+            sequences: VecDeque::from([4, 4]),
+            image: Ok(Some(ClipboardImage {
+                width: 1,
+                height: 1,
+                rgba: vec![1, 2, 3, 255],
+            })),
+            text: Some("must-not-substitute".to_owned()),
+            text_reads: 0,
+        };
+        let mut sequence = None;
+        process_clipboard_notification(
+            &mut retry_reader,
+            &mut sequence,
+            &retrying_target,
+            &sink,
+            4,
+        );
+        assert_eq!(retrying_target.text_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(sequence, None);
     }
 
     #[test]
