@@ -1,14 +1,8 @@
 import {
+  CheckmarkCircle20Regular,
   Delete20Regular,
-  DocumentTable24Regular,
-  DocumentText24Regular,
-  Globe24Regular,
-  Image24Regular,
-  LockClosed16Regular,
-  Notebook24Regular,
   Search20Regular,
-  Star20Filled,
-  Star20Regular
+  Warning20Regular
 } from "@fluentui/react-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
@@ -20,70 +14,56 @@ import type {
 } from "../../app/clipboardModel";
 import { getClipboardMonitoringPresentation } from "../../app/clipboardModel";
 import { SplitPane, ThreeColumn } from "../../components/layout/TwoColumn";
-import { TagBadge } from "../../components/primitives/Badge";
 import { Button } from "../../components/primitives/Button";
 import { ConfirmDialog } from "../../components/primitives/Dialog";
 import { SearchField, SelectField, TextAreaField, TextField } from "../../components/primitives/Field";
 import { HintTooltip } from "../../components/primitives/HintTooltip";
-import { SegmentedControl, Toggle } from "../../components/primitives/SelectionControl";
+import { Toggle } from "../../components/primitives/SelectionControl";
 import { List, ListRow } from "../../components/patterns/ListRow";
-import { ImagePreview, type ImagePreviewState } from "../../components/patterns/ImagePreview";
+import { type ImagePreviewState } from "../../components/patterns/ImagePreview";
+import { ClipboardHistoryFilter } from "../../components/patterns/ClipboardHistoryControls";
+import {
+  ClipboardHistoryPreviewContent,
+  ClipboardHistoryRowContent,
+  clipboardHistoryInfoCopy
+} from "../../components/patterns/ClipboardHistoryItem";
 import { Section, SectionTitle } from "../../components/patterns/Section";
+import { type LoadClipboardSourceIcon } from "../../components/patterns/SourceAppIcon";
 import styles from "./ClipboardPage.module.css";
 import { useClipboardImagePreview, type LoadClipboardImage } from "./useClipboardImagePreview";
 
 type ClipboardPageProps = {
   state: ClipboardControllerState;
   loadImage: LoadClipboardImage;
+  loadSourceIcon: LoadClipboardSourceIcon;
+  onUpdateText: (id: string, textContent: string, expectedRevision: number) => Promise<boolean>;
   onSetFavorite: (id: string, isFavorite: boolean) => void;
   onDelete: (id: string) => void;
   onClearUnfavoriteHistory: () => void;
 };
 
-const filterOptions: { value: ClipboardFilter; label: string }[] = [
-  { value: "all", label: "全部" },
-  { value: "text", label: "文本" },
-  { value: "image", label: "图片" },
-  { value: "favorite", label: "收藏" }
-];
-
-const iconByTone = {
-  note: Notebook24Regular,
-  chrome: Globe24Regular,
-  image: Image24Regular,
-  excel: DocumentTable24Regular,
-  word: DocumentText24Regular,
-} as const;
-
-function kindLabel(kind: ClipboardItemViewModel["kind"]) {
-  return kind === "image" ? "图片" : "文本";
-}
-
 function historyOptionId(id: string) {
   return `clipboard-history-${id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-}
-
-function HistoryIcon({ item }: { item: ClipboardItemViewModel }) {
-  const Icon = iconByTone[item.iconTone];
-  return (
-    <span className={[styles.itemIcon, styles[`itemIcon${item.iconTone}`]].join(" ")} aria-hidden="true">
-      <Icon />
-    </span>
-  );
 }
 
 function HistoryRow({
   item,
   selected,
   favoriteDisabled,
+  deleteDisabled,
+  loadSourceIcon,
   onSelect,
-  onToggleFavorite
+  onToggleFavorite,
+  onDelete
 }: {
   item: ClipboardItemViewModel;
   selected: boolean;
   favoriteDisabled: boolean;
+  deleteDisabled: boolean;
+  loadSourceIcon: LoadClipboardSourceIcon;
   onSelect: () => void;
   onToggleFavorite: () => void;
+  onDelete: () => void;
 }) {
   return (
     <ListRow
@@ -93,31 +73,15 @@ function HistoryRow({
       aria-selected={selected}
       onClick={onSelect}
     >
-      <HistoryIcon item={item} />
-      <div className={styles.rowCopy}>
-        <div className={styles.rowTitle}>{item.title}</div>
-        <div className={styles.rowSource}>
-          <span className={styles.sourceGlyph} aria-hidden="true" />
-          {item.sourceApp}
-        </div>
-      </div>
-      <div className={styles.rowMeta}>
-        <span className={styles.rowTime}>{item.time}</span>
-        <TagBadge tone={item.kind === "image" ? "green" : "blue"}>{kindLabel(item.kind)}</TagBadge>
-      </div>
-      <button
-        className={styles.favoriteButton}
-        type="button"
-        aria-label={item.favorite ? "取消收藏" : "收藏"}
-        disabled={favoriteDisabled}
-        onClick={(event) => {
-          event.stopPropagation();
-          onToggleFavorite();
-        }}
-      >
-        {item.favorite ? <Star20Filled aria-hidden="true" /> : <Star20Regular aria-hidden="true" />}
-      </button>
-      {item.locked && <LockClosed16Regular className={styles.lockIcon} aria-hidden="true" />}
+      <ClipboardHistoryRowContent
+        className={styles.historyRowContent}
+        item={item}
+        loadSourceIcon={loadSourceIcon}
+        favoriteDisabled={favoriteDisabled}
+        deleteDisabled={deleteDisabled}
+        onToggleFavorite={onToggleFavorite}
+        onDelete={onDelete}
+      />
     </ListRow>
   );
 }
@@ -154,7 +118,7 @@ function Toolbar({
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
       />
-      <SegmentedControl label="剪贴板筛选" value={filter} options={filterOptions} onChange={onFilterChange} />
+      <ClipboardHistoryFilter value={filter} onChange={onFilterChange} />
       <div className={styles.monitoring}>
         <span>{monitoringPresentation.label}</span>
         <Toggle
@@ -185,8 +149,11 @@ function HistoryPanel({
   statusIsError,
   pendingItemIds,
   canFavorite,
+  canDelete,
+  loadSourceIcon,
   onSelect,
-  onToggleFavorite
+  onToggleFavorite,
+  onDelete
 }: {
   items: ClipboardItemViewModel[];
   totalCount: number;
@@ -195,10 +162,15 @@ function HistoryPanel({
   statusIsError: boolean;
   pendingItemIds: readonly string[];
   canFavorite: boolean;
+  canDelete: boolean;
+  loadSourceIcon: LoadClipboardSourceIcon;
   onSelect: (id: string) => void;
   onToggleFavorite: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const deleteItem = deleteId ? items.find((item) => item.id === deleteId) ?? null : null;
 
   useEffect(() => {
     if (!selectedId) {
@@ -243,6 +215,7 @@ function HistoryPanel({
       event.preventDefault();
       selectAt(items.length - 1);
     }
+
   };
 
   return (
@@ -251,7 +224,7 @@ function HistoryPanel({
         <SectionTitle>剪贴板历史（{totalCount}）</SectionTitle>
         <HintTooltip
           className={styles.panelInfoHint}
-          content="滚动查看更多历史项，点击选择；聚焦列表后可用 ↑↓ 切换预览"
+          content="点击选择；聚焦列表后可用 ↑↓、Home、End 切换预览"
           label="查看剪贴板历史提示"
           symbol="i"
         />
@@ -278,16 +251,31 @@ function HistoryPanel({
               item={item}
               selected={item.id === selectedId}
               favoriteDisabled={!canFavorite || pendingItemIds.includes(item.id)}
+              deleteDisabled={!canDelete || pendingItemIds.includes(item.id)}
+              loadSourceIcon={loadSourceIcon}
               key={item.id}
               onSelect={() => {
                 onSelect(item.id);
                 listRef.current?.focus();
               }}
               onToggleFavorite={() => onToggleFavorite(item.id)}
+              onDelete={() => setDeleteId(item.id)}
             />
           ))
         )}
       </List>
+      <ConfirmDialog
+        open={deleteItem !== null}
+        title="删除剪贴板记录"
+        description={deleteItem ? `确认永久删除「${deleteItem.title}」？` : ""}
+        confirmText="删除"
+        danger
+        onConfirm={() => {
+          if (deleteItem) onDelete(deleteItem.id);
+          setDeleteId(null);
+        }}
+        onClose={() => setDeleteId(null)}
+      />
     </Section>
   );
 }
@@ -295,36 +283,88 @@ function HistoryPanel({
 function DetailsPanel({
   item,
   imagePreview,
-  canFavorite,
-  canDelete,
+  canEditText,
   itemPending,
+  textEdit,
   onImageLoaded,
   onImageError,
   onRetryImage,
-  onReleaseImagePreview,
-  onToggleFavorite,
-  onDelete
+  onUpdateText
 }: {
   item: ClipboardItemViewModel | null;
   imagePreview: ImagePreviewState;
-  canFavorite: boolean;
-  canDelete: boolean;
+  canEditText: boolean;
   itemPending: boolean;
+  textEdit: ClipboardControllerState["textEdit"];
   onImageLoaded: (url: string) => void;
   onImageError: (url: string) => void;
   onRetryImage: () => void;
-  onReleaseImagePreview: () => void;
-  onToggleFavorite: (id: string) => void;
-  onDelete: (id: string) => void;
+  onUpdateText: (id: string, textContent: string, expectedRevision: number) => Promise<boolean>;
 }) {
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const infoCopy = item
-    ? `来源应用：${item.sourceApp}
-来源进程：${item.sourceProcess}
-捕获时间：${item.capturedAt}
-内容类型：${kindLabel(item.kind)}
-大小：${item.size}`
-    : "暂无剪贴板内容信息";
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item?.kind === "text" ? item.preview : "");
+  const previewRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const savingRef = useRef(false);
+  const activeEdit = item && textEdit?.itemId === item.id ? textEdit : null;
+  const editPending = activeEdit?.status === "pending";
+  const infoCopy = clipboardHistoryInfoCopy(item);
+
+  useEffect(() => {
+    setEditing(false);
+    savingRef.current = false;
+    setDraft(item?.kind === "text" ? item.preview : "");
+  }, [item?.id]);
+
+  useEffect(() => {
+    if (editing && !editPending) {
+      editorRef.current?.focus();
+    }
+  }, [editPending, editing]);
+
+  useEffect(() => {
+    if (activeEdit?.code !== "clipboard_revision_conflict" || !editing) {
+      return;
+    }
+    setEditing(false);
+    setDraft(item?.kind === "text" ? item.preview : "");
+    window.requestAnimationFrame(() => previewRef.current?.focus());
+  }, [activeEdit?.code, editing, item?.kind, item?.preview]);
+
+  const beginEditing = () => {
+    if (!item || item.kind !== "text" || !canEditText || itemPending || editPending) {
+      return;
+    }
+    setDraft(item.preview);
+    setEditing(true);
+  };
+
+  const cancelEditing = () => {
+    if (!item || editPending) {
+      return;
+    }
+    setDraft(item.kind === "text" ? item.preview : "");
+    setEditing(false);
+    window.requestAnimationFrame(() => previewRef.current?.focus());
+  };
+
+  const saveEditing = async () => {
+    if (!item || item.kind !== "text" || savingRef.current || editPending) {
+      return;
+    }
+    if (draft === item.preview) {
+      setEditing(false);
+      window.requestAnimationFrame(() => previewRef.current?.focus());
+      return;
+    }
+    savingRef.current = true;
+    const saved = await onUpdateText(item.id, draft, item.revision);
+    savingRef.current = false;
+    if (saved) {
+      setEditing(false);
+      window.requestAnimationFrame(() => previewRef.current?.focus());
+    }
+  };
 
   return (
     <Section className={styles.detailsPanel}>
@@ -338,55 +378,66 @@ function DetailsPanel({
           interactive
         />
       </div>
-      <div className={styles.previewBox}>
-        {item?.kind === "image" ? (
-          <ImagePreview
-            state={imagePreview}
-            alt={`剪贴板图片，来源于${item.sourceApp}，捕获于${item.capturedAt}`}
-            onLoad={onImageLoaded}
-            onError={onImageError}
-            onRetry={onRetryImage}
-          />
-        ) : (
-          <div className={styles.previewText}>{item?.preview ?? "暂无剪贴板内容"}</div>
-        )}
+      <div className={styles.detailsContent}>
+        <div className={styles.previewBox}>
+          {editing && item ? (
+            <textarea
+              ref={editorRef}
+              className={styles.previewEditor}
+              aria-label="编辑剪贴板文本"
+              aria-describedby={activeEdit ? "clipboard-edit-feedback" : undefined}
+              value={draft}
+              disabled={editPending}
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={() => void saveEditing()}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  cancelEditing();
+                } else if (event.key === "Enter" && event.ctrlKey) {
+                  event.preventDefault();
+                  void saveEditing();
+                }
+              }}
+            />
+          ) : (
+            <ClipboardHistoryPreviewContent
+              item={item}
+              imagePreview={imagePreview}
+              textRef={previewRef}
+              textRole={item?.kind === "text" ? "button" : undefined}
+              textTabIndex={item?.kind === "text" ? 0 : undefined}
+              textAriaLabel={item?.kind === "text" ? "双击编辑剪贴板文本" : undefined}
+              onTextDoubleClick={beginEditing}
+              onTextKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  beginEditing();
+                }
+              }}
+              onImageLoaded={onImageLoaded}
+              onImageError={onImageError}
+              onRetryImage={onRetryImage}
+            />
+          )}
+        </div>
+        {activeEdit && <div className={styles.detailsFooter}>
+          <div
+            className={[
+              styles.actionFeedback,
+              styles[`actionFeedback${activeEdit.status === "error" ? "error" : activeEdit.status === "success" ? "success" : "neutral"}`]
+            ].filter(Boolean).join(" ")}
+            id="clipboard-edit-feedback"
+            role={activeEdit?.status === "error" ? "alert" : "status"}
+            aria-live="polite"
+          >
+            {activeEdit?.status === "success" && <CheckmarkCircle20Regular aria-hidden="true" />}
+            {activeEdit?.status === "error" && <Warning20Regular aria-hidden="true" />}
+            <span>{activeEdit.message}</span>
+          </div>
+        </div>}
       </div>
-      <div className={styles.detailsActions}>
-        <Button
-          icon={item?.favorite ? <Star20Filled aria-hidden="true" /> : <Star20Regular aria-hidden="true" />}
-          disabled={!canFavorite || !item || itemPending}
-          onClick={() => {
-            if (item) {
-              onToggleFavorite(item.id);
-            }
-          }}
-        >
-          {item?.favorite ? "取消收藏" : "收藏"}
-        </Button>
-        <Button
-          className={styles.dangerButton}
-          icon={<Delete20Regular aria-hidden="true" />}
-          disabled={!canDelete || !item || itemPending}
-          onClick={() => setDeleteConfirmOpen(true)}
-        >
-          删除
-        </Button>
-      </div>
-      <ConfirmDialog
-        open={deleteConfirmOpen}
-        title="删除剪贴板记录"
-        description={item ? `确认永久删除「${item.title}」？` : "没有可删除的剪贴板记录。"}
-        confirmText="删除"
-        danger
-        onConfirm={() => {
-          if (item) {
-            onReleaseImagePreview();
-            onDelete(item.id);
-          }
-          setDeleteConfirmOpen(false);
-        }}
-        onClose={() => setDeleteConfirmOpen(false)}
-      />
     </Section>
   );
 }
@@ -455,6 +506,8 @@ function SettingsPanel({ viewModel }: { viewModel: ClipboardControllerState["vie
 export function ClipboardPage({
   state,
   loadImage,
+  loadSourceIcon,
+  onUpdateText,
   onSetFavorite,
   onDelete,
   onClearUnfavoriteHistory
@@ -469,10 +522,10 @@ export function ClipboardPage({
     () =>
       viewModel.items
         .filter((item) => {
-          if (filter === "text" && item.kind !== "text") {
+          if (filter === "text" && item.displayCategory !== "text") {
             return false;
           }
-          if (filter === "image" && item.kind !== "image") {
+          if (filter === "image" && item.displayCategory !== "image") {
             return false;
           }
           if (filter === "favorite" && !item.favorite) {
@@ -510,6 +563,7 @@ export function ClipboardPage({
   const selectedPending = selectedItem
     ? state.pendingItemIds.includes(selectedItem.id)
     : false;
+  const canEditText = viewModel.actions.canEditText && actionsAvailable;
 
   return (
     <div className={styles.page}>
@@ -532,21 +586,27 @@ export function ClipboardPage({
           statusIsError={state.error !== null || state.realtimeError !== null || state.status === "unavailable"}
           pendingItemIds={state.pendingItemIds}
           canFavorite={canFavorite}
+          canDelete={canDelete}
+          loadSourceIcon={loadSourceIcon}
           onSelect={setSelectedId}
           onToggleFavorite={toggleFavorite}
+          onDelete={(id) => {
+            if (selectedItem?.id === id && selectedItem.kind === "image") {
+              imagePreview.release();
+            }
+            onDelete(id);
+          }}
         />
         <DetailsPanel
           item={selectedItem}
           imagePreview={imagePreview.state}
-          canFavorite={canFavorite}
-          canDelete={canDelete}
+          canEditText={canEditText}
           itemPending={selectedPending}
+          textEdit={state.textEdit}
           onImageLoaded={imagePreview.markLoaded}
           onImageError={imagePreview.markDecodeError}
           onRetryImage={imagePreview.retry}
-          onReleaseImagePreview={imagePreview.release}
-          onToggleFavorite={toggleFavorite}
-          onDelete={onDelete}
+          onUpdateText={onUpdateText}
         />
       </SplitPane>
       <SettingsPanel viewModel={viewModel} />

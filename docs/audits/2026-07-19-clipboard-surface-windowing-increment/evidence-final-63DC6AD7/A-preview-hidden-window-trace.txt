@@ -1,0 +1,42 @@
+Frozen EXE SHA-256: 63DC6AD7A3AC6D2B36F88FDB8C525F88152F94E6A222F88529FB60EDEC62FA8F
+ODT PID: 84936
+
+Main popup:
+HWND=12259552
+title=OpenDeskTools Clipboard
+class=Tauri Window
+visible=True
+rect=2769,520,3149,1040
+style=0x94000000
+exstyle=0x08000098
+region_type=3
+region_corners=False,False,False,False
+region_center=True
+
+Preview after multiple real out-to-in row hovers:
+HWND=33558318
+title=OpenDeskTools Clipboard Preview
+PID=84936
+visible=False
+rect=26,26,356,256
+style=0x04C80000
+exstyle=0x00040118
+region_type=0
+region_corners=False,False,False,False
+region_center=False
+
+Preview children:
+HWND=5246328 class=WRY_WEBVIEW PID=84936 rect=26,26,356,256
+HWND=15142920 class=Chrome_WidgetWin_0 PID=84936 rect=26,26,26,26
+
+Visibility trace:
+After a fresh cursor move outside the popup and then into a real history row, EnumWindows polling started at approximately 2ms and continued every 5ms for 3 seconds. The preview HWND existed for the whole interval and never changed from visible=False or rect=26,26,356,256.
+
+Target postcondition:
+Notepad foreground/active=11210840/11210840
+Notepad focus/caret=2363368/2363368
+Notepad selection=9,9
+Notepad text=LEFTRIGHT
+
+Conclusion:
+The independent preview top-level HWND is created, but it never becomes visible or receives left/right placement. This fails A and blocks the dependent A/B1/B3/C/D matrix under the requested fail-fast gate.

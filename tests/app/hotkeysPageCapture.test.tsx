@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HotkeyControllerState } from "../../src/app/hotkeyModel";
 
 const mocks = vi.hoisted(() => ({
   stopCapture: vi.fn(async () => true),
@@ -12,7 +13,8 @@ const mocks = vi.hoisted(() => ({
   setBinding: vi.fn(),
   appendBindingToken: vi.fn(),
   setForceOverrideSystem: vi.fn(),
-  openEditor: vi.fn()
+  openEditor: vi.fn(),
+  controllerState: null as HotkeyControllerState | null
 }));
 
 vi.mock("../../src/app/useHotkeyCaptureSession", () => ({
@@ -26,39 +28,7 @@ vi.mock("../../src/app/useHotkeyCaptureSession", () => ({
 
 vi.mock("../../src/app/useHotkeyController", () => ({
   useHotkeyController: () => ({
-    state: {
-      status: "ready",
-      error: null,
-      snapshot: {
-        revision: 1,
-        actions: [{
-          actionId: "capture",
-          binding: "F1",
-          configuredEnabled: true,
-          classification: "ordinary",
-          runtimeState: "registered",
-          detail: null,
-          actionAvailable: true,
-          forceOverrideSystem: false
-        }]
-      },
-      editor: {
-        actionId: "capture",
-        actionAvailable: true,
-        binding: "F1",
-        classificationStatus: "ready",
-        classification: {
-          binding: "F1",
-          normalizedBinding: "F1",
-          classification: "ordinary",
-          message: "可以保存",
-          forceOverrideAllowed: false
-        },
-        forceOverrideSystem: false,
-        saving: false,
-        error: null
-      }
-    },
+    state: mocks.controllerState!,
     openEditor: mocks.openEditor,
     closeEditor: mocks.closeEditor,
     setBinding: mocks.setBinding,
@@ -81,6 +51,7 @@ describe("HotkeysPage native capture lifecycle", () => {
     document.body.append(host);
     root = createRoot(host);
     mocks.stopCapture.mockResolvedValue(true);
+    mocks.controllerState = readyEditorState();
   });
 
   afterEach(async () => {
@@ -187,7 +158,77 @@ describe("HotkeysPage native capture lifecycle", () => {
     expect(save.disabled).toBe(false);
     expect(mocks.closeEditor).not.toHaveBeenCalled();
   });
+
+  it("explains the Win+V replacement and requires confirmed registered state", async () => {
+    mocks.controllerState = readyEditorState({
+      actionId: "clipboardPanel",
+      binding: "Win+V",
+      classification: "system_reserved",
+      forceOverrideSystem: true
+    });
+    await act(async () => {
+      root.render(<HotkeysPage onSnapshotChanged={async () => undefined} />);
+    });
+
+    const dialog = document.querySelector<HTMLElement>("[role='dialog']")!;
+    expect(dialog.textContent).toContain("第一次录入会替换当前绑定");
+    expect(dialog.textContent).toContain("未持久化或未生效时会保留弹窗并显示原因");
+    expect(dialog.textContent).toContain("只有保存后状态显示“已注册”才算生效");
+    expect(dialog.textContent).toContain("此组合由 Windows 使用，需要明确确认强制覆盖");
+    expect(document.querySelector("[role='switch']")?.getAttribute("aria-checked")).toBe("true");
+    expect(getButton("保存").disabled).toBe(false);
+  });
 });
+
+function readyEditorState({
+  actionId = "capture",
+  binding = "F1",
+  classification = "ordinary",
+  forceOverrideSystem = false
+}: {
+  actionId?: "capture" | "clipboardPanel";
+  binding?: string;
+  classification?: "ordinary" | "system_reserved";
+  forceOverrideSystem?: boolean;
+} = {}): HotkeyControllerState {
+  return {
+    status: "ready",
+    error: null,
+    snapshot: {
+      revision: 1,
+      actions: [{
+        actionId,
+        binding,
+        configuredEnabled: true,
+        classification,
+        runtimeState: "registered",
+        runtimeBackend: "standard",
+        detail: null,
+        actionAvailable: true,
+        forceOverrideSystem
+      }]
+    },
+    editor: {
+      actionId,
+      actionAvailable: true,
+      binding,
+      inputDirty: false,
+      classificationStatus: "ready",
+      classification: {
+        binding,
+        normalizedBinding: binding,
+        classification,
+        message: classification === "system_reserved"
+          ? "此组合由 Windows 使用，需要明确确认强制覆盖"
+          : "可以保存",
+        forceOverrideAllowed: classification === "system_reserved"
+      },
+      forceOverrideSystem,
+      saving: false,
+      error: null
+    }
+  };
+}
 
 function getButton(name: string) {
   const button = Array.from(document.querySelectorAll("button")).find(

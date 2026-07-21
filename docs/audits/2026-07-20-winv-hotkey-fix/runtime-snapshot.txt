@@ -1,0 +1,63 @@
+OpenDeskTools Win+V runtime audit snapshot
+Date: 2026-07-20 Asia/Shanghai
+
+Frozen executable
+- path: <workspace>\src-tauri\target\debug\open-desk-tools.exe
+- SHA-256: 237779F59AAD4166965266F62C6D17327AB66A07516B95FBE47066CDDC3A219B
+- size: 18,271,232 bytes
+- mtime: 2026-07-20T12:13:51.8876563+08:00
+- superseded executable: C280A1E8F419C3AFA23F17972A8620E791E8DAC71BE1BBB5276409EA2FAA8A35
+
+Read-only machine baseline
+- HKCU Explorer Advanced DisabledHotkeys: V
+- native Win+V probe before app: registered=true, last_error=0, unregistered=true
+- formal DB: %APPDATA%\com.opendesktools.app\opendesktools.sqlite3
+- formal hotkey revision: 11
+- formal clipboard.open_panel: F2, enabled=true, forceOverrideSystem=false
+
+Historical failure baseline
+- OpenDeskTools-clipboard-surface-qa-41064.log: repeated `show failure source=forced_hotkey error=... SetWindowSubclass(top-level no activate)`
+- OpenDeskTools-clipboard-surface-qa-60440.log: same forced-hotkey failure
+
+Isolated fixture
+- path: %TEMP%\OpenDeskTools-winv-standard-d097891197d64e46bed8fd4d9342b242
+- initial revision: 0
+- test revision: 1
+- clipboard.open_panel: Win+V, enabled=true, forceOverrideSystem=true
+- DB size before cleanup: 53,248 bytes
+- DB SHA-256 before cleanup: 260BBD709E4CB14D6C57FB25EF64513B53AC4A3FB24FB074375D8CD721128519
+
+Standard backend runtime
+- PID: 25172
+- app accessibility state: Win+V / 剪贴板面板 / 正常
+- competing RegisterHotKey while running: registered=false, last_error=1409 (ERROR_HOTKEY_ALREADY_REGISTERED)
+- current trace forced dispatch count: 0
+- current trace forced show failure count: 0
+- after exact-path exit: Win+V registered=true, last_error=0, unregistered=true
+
+Debug downstream route
+- PID: 72844
+- QA delay: 2,000 ms
+- competing RegisterHotKey while running: registered=false, last_error=1409
+- `surface request source=debug_qa`: exactly 1
+- `show success source=debug_qa visible_after=true`: exactly 1
+- `forced hotkey dispatch`: 0
+- `show failure source=forced_hotkey`: 0
+- after exact-path exit: Win+V registered=true, last_error=0, unregistered=true
+
+Targeted tests
+- final full Rust gate: 219 passed, 0 failed, 4 ignored, 223 total
+- ignored tests are explicitly marked real-Windows clipboard/listener smokes
+- linker emitted the existing DLL import-library informational warning; tests passed
+
+Cleanup
+- exact final-package PIDs 25172 and 72844 stopped after executable-path checks
+- no OpenDeskTools process remained
+- Win+V registration released and re-probed successfully after each exit
+- Temp fixture target was resolved and validated as a direct Temp child with expected prefix
+- execution policy denied recursive Temp deletion; fixture and pointer remain, test-only
+
+Physical-key boundary
+- No Windows-key automation was sent.
+- Python/SendInput/Computer Use did not press Win+V.
+- Physical Win+V suppression/restoration remains NOT SIGNED.

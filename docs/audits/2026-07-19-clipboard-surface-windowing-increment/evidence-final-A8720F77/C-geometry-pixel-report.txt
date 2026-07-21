@@ -1,0 +1,18 @@
+Frozen SHA-256: A8720F77CFEAE3CF9226FA3E9CD1E6C732EAB46FECDCB78C02486E8574CBB7BD
+Top HWND: 3805510
+Top WindowRect: 2512,212,2892,732
+Top ClientRect: 0,0,380,520; screen origin 2512,212
+WRY_WEBVIEW HWND 660236: WindowRect and ClientRect 380x520, same screen origin
+Chrome_WidgetWin_0 HWND 1905168: WindowRect and ClientRect 380x520, same screen origin
+
+Lossless show/hidden image: 400x540 RGBA; relative window bounds (10,10)-(390,530)
+left outside x=9: 0/312 changed, white
+left edge x=10: 312/312 #e0dedc
+right edge x=389: 0/312 changed, white
+right outside x=390: 0/312 changed, white
+top outside y=9: 0/228 changed, white
+top edge y=10: 228/228 #e0dedc
+bottom edge y=529: 0/228 changed, white
+bottom outside y=530: 0/228 changed, white
+
+Conclusion: no native/DWM outer black line; CSS right and bottom borders remain absent despite exact top/client/WRY/Chrome geometry parity. C FAIL.

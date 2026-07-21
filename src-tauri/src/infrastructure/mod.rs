@@ -1,11 +1,20 @@
 pub mod application;
 pub mod clipboard;
+pub mod clipboard_input;
 pub mod clipboard_listener;
+pub mod clipboard_surface_foreground;
+pub mod clipboard_surface_pointer;
+pub mod clipboard_surface_window;
+pub mod clipboard_writer;
+pub mod debug_qa;
 pub mod hotkey;
 pub mod hotkey_capture;
 pub mod image;
+pub mod keyboard_hook;
+pub mod source_icon;
 #[allow(dead_code)]
 pub mod storage;
+pub mod surface;
 pub mod theme;
 pub mod tray;
 pub mod windowing;

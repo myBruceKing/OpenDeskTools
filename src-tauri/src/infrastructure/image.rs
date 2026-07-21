@@ -44,6 +44,13 @@ pub struct StoredImage {
     pub newly_created: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ReconcileResult {
     pub missing_references: Vec<String>,
@@ -147,6 +154,33 @@ impl ImageService {
             .and_then(|name| name.strip_suffix(".png"))
             .ok_or(ImageError::InvalidReference)?;
         self.validate_managed_file(&path, expected_hash)
+    }
+
+    pub fn decode_rgba(&self, reference: &str) -> Result<DecodedImage, ImageError> {
+        let bytes = self.read(reference)?;
+        let decoder = png::Decoder::new(Cursor::new(bytes));
+        let mut reader = decoder.read_info().map_err(|_| ImageError::Corrupt)?;
+        let info = reader.info();
+        if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+            return Err(ImageError::Corrupt);
+        }
+        let width = info.width;
+        let height = info.height;
+        let output_size = reader.output_buffer_size();
+        if output_size > MAX_RGBA_BYTES {
+            return Err(ImageError::TooLarge);
+        }
+        let mut rgba = vec![0; output_size];
+        let frame = reader
+            .next_frame(&mut rgba)
+            .map_err(|_| ImageError::Corrupt)?;
+        rgba.truncate(frame.buffer_size());
+        validate_rgba(width, height, &rgba)?;
+        Ok(DecodedImage {
+            width,
+            height,
+            rgba,
+        })
     }
 
     pub fn remove(&self, reference: &str) -> Result<(), ImageError> {

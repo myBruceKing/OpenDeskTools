@@ -1,0 +1,21 @@
+.iconSlot {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--surface-shortcut);
+  color: var(--accent-primary);
+}
+
+.iconSlot img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.iconSlot svg {
+  width: 62%;
+  height: 62%;
+}

@@ -1,0 +1,9 @@
+Controlled Explorer HWND: 1118856
+Controlled LocationURL: file:///%TEMP%/OpenDeskTools-windowing-final-B12F7C8D-75c72b91abba481187b83d7ee6af92e2/target/
+QA target_top: Some(1118856)
+Input available: true
+Target file count: 1
+Source/target size: 53 / 53 bytes
+Source SHA-256: 436F7599C50A93974D011C41896F4E4F0A4EC069884D751FEA2439120257E286
+Target SHA-256: 436F7599C50A93974D011C41896F4E4F0A4EC069884D751FEA2439120257E286
+Trace result: internal popup root kept; input_succeeded closed main and preview.

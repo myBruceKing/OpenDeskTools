@@ -7,6 +7,8 @@ use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 use super::application::ApplicationRuntime;
+use super::clipboard_surface_foreground;
+use super::clipboard_surface_pointer;
 
 const TRAY_ID: &str = "open-desk-tools";
 const OPEN_MENU_ID: &str = "tray.open-main";
@@ -44,13 +46,17 @@ pub struct WindowLifecycleRoute {
 enum ExitStep {
     StopClipboardListener,
     StopCapture,
+    StopKeyboardHook,
+    StopSurfaceMonitors,
     UnregisterGlobalShortcuts,
     ExitApplication,
 }
 
-const EXIT_STEPS: [ExitStep; 4] = [
+const EXIT_STEPS: [ExitStep; 6] = [
     ExitStep::StopClipboardListener,
     ExitStep::StopCapture,
+    ExitStep::StopKeyboardHook,
+    ExitStep::StopSurfaceMonitors,
     ExitStep::UnregisterGlobalShortcuts,
     ExitStep::ExitApplication,
 ];
@@ -166,14 +172,37 @@ fn execute_action<R: Runtime>(app: &AppHandle<R>, action: TrayAction) {
     }
 }
 
-fn open_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainWindowWakeStep {
+    Show,
+    Unminimize,
+    Focus,
+}
+
+const MAIN_WINDOW_WAKE_STEPS: [MainWindowWakeStep; 3] = [
+    MainWindowWakeStep::Show,
+    MainWindowWakeStep::Unminimize,
+    MainWindowWakeStep::Focus,
+];
+
+fn run_main_window_wake<E>(
+    mut execute: impl FnMut(MainWindowWakeStep) -> Result<(), E>,
+) -> Result<(), E> {
+    for step in MAIN_WINDOW_WAKE_STEPS {
+        execute(step)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn open_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the main window is unavailable"))?;
-    window.show()?;
-    window.unminimize()?;
-    window.set_focus()?;
-    Ok(())
+    run_main_window_wake(|step| match step {
+        MainWindowWakeStep::Show => window.show(),
+        MainWindowWakeStep::Unminimize => window.unminimize(),
+        MainWindowWakeStep::Focus => window.set_focus(),
+    })
 }
 
 fn exit_application<R: Runtime>(app: &AppHandle<R>) {
@@ -201,12 +230,39 @@ fn exit_application<R: Runtime>(app: &AppHandle<R>) {
                     }
                 }
             }
+            ExitStep::StopKeyboardHook => {
+                if let Some(runtime) = app.try_state::<ApplicationRuntime>() {
+                    if let Err(error) = runtime.keyboard_hook().shutdown() {
+                        eprintln!("failed to stop low-level keyboard hook during exit: {error}");
+                    }
+                }
+            }
+            ExitStep::StopSurfaceMonitors => {
+                if let Err(error) = clipboard_surface_foreground::stop() {
+                    eprintln!("failed to stop clipboard foreground monitor during exit: {error}");
+                }
+                if let Err(error) = clipboard_surface_pointer::stop() {
+                    eprintln!(
+                        "failed to stop clipboard outside-pointer monitor during exit: {error}"
+                    );
+                }
+            }
             ExitStep::UnregisterGlobalShortcuts => {
+                if let Some(runtime) = app.try_state::<ApplicationRuntime>() {
+                    runtime.ordinary_hotkey_latch().clear();
+                }
                 if let Err(error) = app.global_shortcut().unregister_all() {
                     eprintln!("failed to unregister global shortcuts during exit: {error}");
                 }
             }
-            ExitStep::ExitApplication => app.exit(0),
+            ExitStep::ExitApplication => {
+                if let Some(runtime) = app.try_state::<ApplicationRuntime>() {
+                    if let Err(error) = runtime.surface().clear() {
+                        eprintln!("failed to clear clipboard surface during exit: {error}");
+                    }
+                }
+                app.exit(0);
+            }
         }
     }
 }
@@ -297,9 +353,36 @@ mod tests {
             [
                 ExitStep::StopClipboardListener,
                 ExitStep::StopCapture,
+                ExitStep::StopKeyboardHook,
+                ExitStep::StopSurfaceMonitors,
                 ExitStep::UnregisterGlobalShortcuts,
                 ExitStep::ExitApplication,
             ]
+        );
+    }
+
+    #[test]
+    fn main_window_wake_shows_unminimizes_then_focuses_and_stops_on_error() {
+        let mut calls = Vec::new();
+        run_main_window_wake::<()>(|step| {
+            calls.push(step);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, MAIN_WINDOW_WAKE_STEPS);
+
+        calls.clear();
+        let error = run_main_window_wake(|step| {
+            calls.push(step);
+            (step != MainWindowWakeStep::Unminimize)
+                .then_some(())
+                .ok_or("wake failed")
+        })
+        .unwrap_err();
+        assert_eq!(error, "wake failed");
+        assert_eq!(
+            calls,
+            [MainWindowWakeStep::Show, MainWindowWakeStep::Unminimize]
         );
     }
 

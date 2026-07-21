@@ -1,0 +1,31 @@
+Frozen SHA-256: 982E7E6BC7F248B74C448F77E64A89277437FDBDBFAA6B5CEC4818F6DD2BED87
+Package size: 18,007,552 bytes
+Package mtime: 2026-07-19 22:44:10.036 +08:00
+Fixture: %TEMP%\OpenDeskTools-windowing-final-982E7E6B-9739229c7d974a0d9eee8607f2e6b315
+
+Native underlay trace
+- surface group underlay request color=#e0dedc main_prepared=true preview_prepared=true
+- surface group underlay label=clipboard-surface color=#e0dedc result=success
+- surface group underlay label=clipboard-preview-surface color=#e0dedc result=success
+- surface group underlay result=success color=#e0dedc
+- The same successful four-line group was recorded twice before the deterministic main open.
+- Full trace, including main and preview surface_metrics, is preserved in qa-trace.log.
+
+Stable white lossless show/hidden comparison
+- Images: 400x540 RGBA; relative main bounds (10,10)-(390,530); middle 60% sampled.
+- left outside x=9: 0/312 changed, white.
+- left edge x=10: 312/312 changed to #e0dedc.
+- right edge x=389: 0/312 changed, white.
+- right outside x=390: 0/312 changed, white.
+- top outside y=9: 0/228 changed, white.
+- top edge y=10: 228/228 changed to #e0dedc.
+- bottom edge y=529: 0/228 changed, white.
+- bottom outside y=530: 0/228 changed, white.
+
+Geometry
+- Top HWND 659950: rect 2512,212,2892,732; rounded region type 3; all four corners outside and center inside.
+- WRY_WEBVIEW HWND 791378 and Chrome_WidgetWin_0 HWND 207490452 have the exact same rect as top.
+
+Conclusion
+- Native underlay commands succeeded for both prepared surfaces at the current light color, but the right and bottom final raster edges remain absent.
+- C FAIL. Per fail-fast, preview pixels, dark/system theme checks, A/B1/B3/D smoke were not run; B2 was not started.

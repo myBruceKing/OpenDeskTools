@@ -1,0 +1,14 @@
+Frozen SHA-256: D97C0D66586390DA03E09DA44584F338E70945797B751D6874C4FC2C02E3AAA8
+ODT PID: 96856
+Main popup: HWND=2690752 visible=True rect=2763,527,3143,1047 style=0x94000000 exstyle=0x08000098 region_type=3
+Preview: HWND=6164706 visible=False rect=234,234,564,464 style=0x04C80000 exstyle=0x00040118 region_type=0
+Preview WRY_WEBVIEW child: HWND=856302 PID=96856 rect=234,234,564,464
+Preview Chrome_WidgetWin_0 child: HWND=44306574 PID=96856 rect=234,234,234,234
+
+Trace terminal sequence:
+preview frontend event=open_requested record_id=Some(12)
+preview command=open request raw_record_id="12"
+preview open request record_id=12 main_visible=true selected_before=None
+preview get_or_create stage=build requested
+
+No later preview trace entry appeared during more than 10 seconds of observation. The preview HWND never became visible or received placement. Controlled Notepad foreground/focus/selection/text remained unchanged.

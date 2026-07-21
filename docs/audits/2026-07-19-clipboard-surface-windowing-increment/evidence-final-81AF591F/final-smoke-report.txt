@@ -1,0 +1,39 @@
+Frozen SHA-256: 81AF591FF3251A50D024404AE69531BD9A14835B038366352A2B8F1295F27919
+Package size: 18,014,208 bytes
+Package mtime: 2026-07-19 22:53:16.915 +08:00
+Fixture: %TEMP%\OpenDeskTools-windowing-final-81AF591F-789022ab009e46ecb79d2db992935fc9
+
+C region and stable-white pixels: PASS
+- Main client=380x520; region_request=(0,0,381,521); region_box_before and applied_box=(0,0,380,520).
+- edge_contains=[true,true,true,true]; corner_contains=[false,false,false,false]; applied_type=3.
+- Main and preview native underlay commands both succeeded at #e0dedc.
+- Lossless show/hidden middle-60% comparison: left/right=312/312 #e0dedc; top/bottom=228/228 #e0dedc.
+- All four immediately outside lines had zero changed pixels and remained white.
+
+A placement and no-activate: PASS
+- Right-priority: main=(2512,212)-(2892,732), preview=(2904,212)-(3234,442), gap=12, intersection=0.
+- Flip-left: main=(3460,300)-(3840,820), preview=(3118,300)-(3448,530), gap=12, intersection=0.
+- Controlled Notepad HWND 35066638 remained foreground and Edit HWND 29954948 retained focus while main/preview were clicked.
+
+B1 text input: PASS
+- One controlled double-click inserted exactly `ODT-81AF-B1-TEXT-20260719` (25 characters) into the empty controlled Notepad.
+- Trace recorded keep_internal_surface_root followed by input_succeeded; main and preview closed.
+
+B3 file input: PASS
+- Controlled Explorer HWND 8328202 had the unique LocationURL for this fixture target.
+- One controlled file-record double-click produced exactly one target file, odt-surface-file.txt.
+- Source and target were both 51 bytes with SHA-256 8509FDEA0946DF7CFE24F7FAE7EB32929D8A6130F41E9F19D15D0400BBB60CC3.
+- Trace recorded keep_internal_surface_root and input_succeeded; no duplicate file was created.
+
+D lifecycle smoke: PASS
+- Internal popup click was kept by keep_internal_surface_root.
+- Same-process different root: foreground changed to the OpenDeskTools settings window; trace recorded close_different_root and closed main plus preview.
+- Cross-process root: foreground changed to controlled Notepad; trace recorded close_different_root and closed main plus preview.
+- Controlled Explorer context-menu interaction dismissed preview while main remained usable; preview opened again from the row with no orphan window.
+- Deterministic reopen cycles recaptured the controlled target and reopened main/preview successfully.
+
+Cleanup
+- Controlled OpenDeskTools and Notepad processes were terminated by exact PID and executable path.
+- Controlled Explorer HWND 8328202 was closed by exact HWND and disappeared from Shell enumeration.
+- User Explorer HWND 11013508 remained present at file:///F:/.
+- B2 Notepad -- was intentionally not started and remains the only excluded matrix item.

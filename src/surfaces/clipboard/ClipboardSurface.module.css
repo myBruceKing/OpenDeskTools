@@ -1,0 +1,157 @@
+.surface {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 5px 5px 7px;
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--surface-card);
+  user-select: none;
+}
+
+.titlebar > button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.titlebar > button {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-button);
+}
+
+.titlebar > button:hover {
+  background: var(--surface-titlebar-control-hover);
+  color: var(--text-primary);
+}
+
+.titlebar > button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.history {
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--surface-card);
+}
+
+.empty {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  text-align: center;
+}
+
+.row {
+  position: relative;
+  min-height: 70px;
+  display: flex;
+  padding: 7px 7px 7px 12px;
+  border-bottom: var(--border-width) solid var(--border-subtle);
+  outline: 0;
+  background: var(--surface-card);
+  user-select: none;
+}
+
+.rowContent {
+  --clipboard-history-icon-size: 40px;
+  --clipboard-history-meta-width: 52px;
+  --clipboard-history-row-gap: 8px;
+  --clipboard-history-title-weight: var(--font-weight-semibold);
+  width: 100%;
+}
+
+.rowBrowseOnly {
+  cursor: help;
+}
+
+.rowSelected {
+  background: var(--surface-row-selected);
+}
+
+.rowSelected::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  content: "";
+  background: var(--accent-primary);
+}
+
+.row:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent-primary);
+}
+
+.surfaceStatus {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: calc(var(--z-tooltip) + 1);
+  max-width: calc(100% - 20px);
+  padding: 7px 10px;
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-button);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-tooltip);
+  font-size: var(--font-size-secondary);
+  line-height: var(--line-height-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.surfaceMessage {
+  min-width: 0;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-top: var(--border-width) solid var(--border-subtle);
+  background: var(--surface-card-subtle);
+  color: var(--text-secondary);
+  font-size: var(--font-size-secondary);
+  line-height: var(--line-height-secondary);
+  overflow-wrap: anywhere;
+}
+
+.surfaceMessageError {
+  color: var(--status-danger);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 340px) {
+  .rowContent {
+    --clipboard-history-icon-size: 36px;
+    --clipboard-history-meta-width: 46px;
+  }
+
+  .row { padding-left: 8px; }
+}

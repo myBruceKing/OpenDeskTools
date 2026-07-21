@@ -11,6 +11,7 @@ const backendSnapshot = {
       configuredEnabled: true,
       classification: "ordinary",
       runtimeState: "registered",
+      runtimeBackend: "standard",
       detail: null,
       actionAvailable: true,
       forceOverrideSystem: false
@@ -86,6 +87,14 @@ describe("hotkeyClient", () => {
       })
     });
     await expect(invalidRuntimeClient.getSnapshot()).rejects.toThrow("runtimeState");
+
+    const invalidBackendClient = createHotkeyClient({
+      invokeFunction: async () => ({
+        ...backendSnapshot,
+        actions: [{ ...backendSnapshot.actions[0], runtimeBackend: "policy_only" }]
+      })
+    });
+    await expect(invalidBackendClient.getSnapshot()).rejects.toThrow("runtimeBackend");
 
     const invalidClassificationClient = createHotkeyClient({
       invokeFunction: async () => ({

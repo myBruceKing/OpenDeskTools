@@ -1,0 +1,26 @@
+Frozen EXE SHA-256: 9407A24306FA71E0ADBE4129A72CB82D8FCA08E45969DAD2FC1602BB4B13B367
+ODT PID after restoring Alt+V: 62976
+Runtime registration status: Alt+V / normal
+
+Precondition:
+global_hotkey_app count across EnumWindows: 1
+global_hotkey_app HWND: 7278236
+global_hotkey_app PID: 62976
+Notepad top/edit PID: 20712524 / 45550150 / 93576
+Notepad foreground/active/focus/caret: 20712524 / 20712524 / 45550150 / 45550150
+Notepad selection/text: 4,4 / LEFTRIGHT
+
+Direct registered-callback delivery (not a physical Alt+V test):
+PostMessageW(hwnd=7278236, msg=0x0312, wParam=65576, lParam=0x00560001) => TRUE
+
+Window polling:
+1ms: hwnd=46862216 visible=False class=Tauri Window title=OpenDeskTools Clipboard rect=52,52,432,572
+8ms: hwnd=15011890 visible=True class=Tauri Window title=OpenDeskTools rect=412,156,1508,884
+Approximately 10ms polling continued for 3 seconds; clipboard HWND never became visible.
+
+Postcondition:
+Notepad foreground/active/focus/caret: 20712524 / 20712524 / 45550150 / 45550150
+Notepad selection/text: 4,4 / LEFTRIGHT
+
+Conclusion:
+The message was successfully posted to the sole registered global-hotkey window owned by the frozen test process, without disturbing the controlled target. No visible popup or preview was observed, so downstream physical matrices remain untested.

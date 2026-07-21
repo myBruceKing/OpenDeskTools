@@ -3,7 +3,8 @@ import {
   normalizeHotkeyCommandError,
   type GlobalHotkeyId,
   type HotkeyControllerState,
-  type HotkeyEditorState
+  type HotkeyEditorState,
+  type HotkeySnapshot
 } from "./hotkeyModel";
 
 const INITIAL_STATE: HotkeyControllerState = {
@@ -42,6 +43,71 @@ export function canSaveHotkeyEditor(state: HotkeyControllerState) {
     editor.classification.forceOverrideAllowed &&
     editor.forceOverrideSystem
   );
+}
+
+function forceOverrideRequested(editor: HotkeyEditorState) {
+  return editor.classification?.classification === "system_reserved"
+    && editor.classification.forceOverrideAllowed
+    && editor.forceOverrideSystem;
+}
+
+function confirmSavedHotkey(
+  snapshot: HotkeySnapshot,
+  editor: HotkeyEditorState
+) {
+  const action = snapshot.actions.find((candidate) => candidate.actionId === editor.actionId);
+  const requestedBinding = editor.binding.trim().replace(/\s+/g, " ");
+  const requestedForceOverride = forceOverrideRequested(editor);
+
+  if (!action) {
+    return {
+      code: "hotkey_update_not_applied",
+      message: "保存未生效；快捷键服务未返回该功能的配置，请重试。",
+      actualRevision: snapshot.revision
+    };
+  }
+
+  if (action.binding !== requestedBinding) {
+    return {
+      code: "hotkey_update_not_applied",
+      message: `保存未生效；快捷键服务当前仍返回 ${action.binding}，请重试。`,
+      actualRevision: snapshot.revision
+    };
+  }
+
+  if (action.forceOverrideSystem !== requestedForceOverride) {
+    return {
+      code: "hotkey_update_not_applied",
+      message: `保存未生效；快捷键服务未确认 ${action.binding} 的强制覆盖授权，请重试。`,
+      actualRevision: snapshot.revision
+    };
+  }
+
+  if (
+    requestedForceOverride
+    && action.binding === "Win+V"
+    && action.runtimeBackend === null
+  ) {
+    return {
+      code: "hotkey_saved_not_active",
+      message: "配置已保存为 Win+V，但快捷键服务未确认实际运行后端，请重试或重启应用后检查状态。",
+      actualRevision: snapshot.revision
+    };
+  }
+
+  if (
+    action.actionAvailable
+    && action.configuredEnabled
+    && action.runtimeState !== "registered"
+  ) {
+    return {
+      code: "hotkey_saved_not_active",
+      message: `配置已保存为 ${action.binding}，但当前未生效${action.detail ? `：${action.detail}` : "。"}`,
+      actualRevision: snapshot.revision
+    };
+  }
+
+  return null;
 }
 
 export class HotkeyController {
@@ -106,6 +172,7 @@ export class HotkeyController {
       actionId,
       actionAvailable: action.actionAvailable,
       binding: action.binding,
+      inputDirty: false,
       classificationStatus: "loading",
       classification: null,
       forceOverrideSystem: action.forceOverrideSystem,
@@ -135,6 +202,7 @@ export class HotkeyController {
       editor: {
         ...editor,
         binding,
+        inputDirty: true,
         classificationStatus: "loading",
         classification: null,
         forceOverrideSystem: false,
@@ -149,7 +217,7 @@ export class HotkeyController {
     if (!this.active || editor === null || editor.saving) {
       return;
     }
-    this.setBinding(appendHotkeyToken(editor.binding, token));
+    this.setBinding(editor.inputDirty ? appendHotkeyToken(editor.binding, token) : token.trim());
   }
 
   setForceOverrideSystem(forceOverrideSystem: boolean) {
@@ -194,10 +262,15 @@ export class HotkeyController {
       const currentEditor = this.state.editor;
       const sameEditor =
         currentEditor?.actionId === editor.actionId && currentEditor.binding === editor.binding;
+      const confirmationIssue = sameEditor ? confirmSavedHotkey(snapshot, currentEditor) : null;
       this.setState({
         ...this.state,
         snapshot,
-        editor: sameEditor ? null : currentEditor,
+        editor: sameEditor
+          ? confirmationIssue
+            ? { ...currentEditor, saving: false, error: confirmationIssue }
+            : null
+          : currentEditor,
         error: null
       });
     } catch (error: unknown) {

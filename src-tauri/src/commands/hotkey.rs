@@ -121,9 +121,12 @@ pub fn update_hotkey_binding<R: Runtime>(
     runtime: State<'_, ApplicationRuntime>,
     patch: UpdateHotkeyBindingPatch,
 ) -> Result<HotkeySnapshot, HotkeyCommandError> {
-    let registrar = TauriHotkeyRegistrar::new(&app);
+    let event_app = app.clone();
+    let registrar = TauriHotkeyRegistrar::new(&app, runtime.keyboard_hook(), move |event| {
+        crate::queue_forced_hotkey_event(&event_app, event)
+    });
     let action_id = HotkeyActionId::parse(&patch.action_id).map_err(map_validation_error)?;
-    runtime
+    let updated = runtime
         .hotkeys()
         .update_binding(
             UpdateHotkeyBinding {
@@ -134,7 +137,9 @@ pub fn update_hotkey_binding<R: Runtime>(
             },
             &registrar,
         )
-        .map_err(map_error)
+        .map_err(map_error)?;
+    runtime.ordinary_hotkey_latch().clear_action(action_id);
+    Ok(updated)
 }
 
 fn map_error(error: HotkeyError) -> HotkeyCommandError {
@@ -202,16 +207,16 @@ fn map_validation_error(error: HotkeyValidationError) -> HotkeyCommandError {
 
 fn map_capture_error(error: HotkeyCaptureError) -> HotkeyCaptureCommandError {
     let code = match error {
+        HotkeyCaptureError::Hook(
+            crate::infrastructure::keyboard_hook::KeyboardHookError::HookInstall(_),
+        ) => "capture_hook_unavailable",
         #[cfg(not(windows))]
-        HotkeyCaptureError::UnsupportedPlatform => "capture_unsupported_platform",
-        HotkeyCaptureError::HookInstall(_) | HotkeyCaptureError::HookAlreadyActive => {
-            "capture_hook_unavailable"
+        HotkeyCaptureError::Hook(
+            crate::infrastructure::keyboard_hook::KeyboardHookError::UnsupportedPlatform,
+        ) => "capture_unsupported_platform",
+        HotkeyCaptureError::Hook(_) | HotkeyCaptureError::StateLockPoisoned => {
+            "capture_service_unavailable"
         }
-        HotkeyCaptureError::StateLockPoisoned
-        | HotkeyCaptureError::ThreadStart(_)
-        | HotkeyCaptureError::WorkerDisconnected
-        | HotkeyCaptureError::StopSignal(_)
-        | HotkeyCaptureError::WorkerPanicked => "capture_service_unavailable",
     };
     capture_command_error(code)
 }

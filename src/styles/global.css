@@ -65,6 +65,34 @@ body {
   text-rendering: auto;
 }
 
+html[data-window-surface="clipboard"],
+html[data-window-surface="clipboard"] body,
+html[data-window-surface="clipboard"] #root,
+html[data-window-surface="clipboard-preview"],
+html[data-window-surface="clipboard-preview"] body,
+html[data-window-surface="clipboard-preview"] #root {
+  background: var(--border-default);
+}
+
+[data-window-border-layer="true"] {
+  box-sizing: border-box;
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-window);
+  background: var(--surface-window);
+  color: var(--text-primary);
+}
+
+[data-window-border-layer="true"]::after {
+  position: absolute;
+  z-index: 1;
+  inset: var(--border-width);
+  border-radius: calc(var(--radius-window) - var(--border-width));
+  content: "";
+  box-shadow: var(--shadow-window-edge-detail);
+  pointer-events: none;
+}
+
 button,
 input,
 select,

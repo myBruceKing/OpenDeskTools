@@ -1,0 +1,56 @@
+OpenDeskTools CF_HDROP P1 fixed-package rerun
+Timestamp: 2026-07-20 (Asia/Shanghai)
+
+Frozen executable
+- path: <workspace>\src-tauri\target\debug\open-desk-tools.exe
+- SHA-256: CE3FC9DE0621B116ADC14218E0187113475602CB14A05B6C78F73C66A3AAB933
+- size: 18,258,432 bytes
+
+Unique fixture
+- root: %TEMP%\OpenDeskTools-final-files-fixed-255c68d7696e4dd48d1a30c72f9fea64
+- source: source\odt-final-file.md
+- target: target\odt-final-file.md
+- source size: 35,019 bytes
+- source SHA-256: 29F23842EC3763D79B0922AA93B5D7FD1EE92675561CAE86C57D79385F6E9BA1
+- target count before input: 0
+
+Controlled Explorer focus gate
+- target Explorer top HWND: 0xB513FC (decimal 11867132)
+- target Explorer PID / UI thread: 11168 / 96984
+- real blank-file-view click: screen (1332,468)
+- focused descendant HWND after click: 0x6F0828
+- focused descendant PID / UI thread: 11168 / 96984
+- GA_ROOT(focused descendant): 0xB513FC
+- hwndCaret: 0
+- gate result: PASS (same PID, same UI thread, same root; focus is not the top HWND)
+
+Surface capture and single input action
+- Surface process PID: 17268
+- main HWND: 0x914EE (decimal 595182)
+- preview HWND: 0xD1540 (decimal 857408)
+- trace captured target_top=0xB513FC, focus=0x6F0828, focus_kind=descendant
+- before the only input action, the focus gate repeated with the same PID/thread/root and target count 0
+- exactly one controlled double-click was issued on the visible odt-final-file.md row at screen (1450,555)
+- no retry and no external paste were performed
+
+Observed result
+- trace stage restored focus: 0x6F0828
+- trace stage pre_send focus: 0x6F0828
+- trace stage post_send focus: 0x6F0828
+- trace result: clipboard input keys_injected id=1 result=ok
+- close result: input_succeeded; main and preview hidden
+- target count after input: 1
+- target name: odt-final-file.md
+- target size: 35,019 bytes
+- target SHA-256: 29F23842EC3763D79B0922AA93B5D7FD1EE92675561CAE86C57D79385F6E9BA1
+- duplicate files: none
+- clipboard immediately after input: one CF_HDROP, unchanged source path
+- result: PASS
+
+Exact cleanup verification
+- OpenDeskTools PID 17268 stopped only after its executable path matched the frozen executable
+- target Explorer HWND 11867132 closed only after its LocationURL matched the unique fixture target
+- listener PID 46056 was no longer alive
+- controlled target directory retained exactly one output file for evidence
+- pre-existing Notepad-- PID 68492 remained alive
+- Explorer process PID 11168 remained alive

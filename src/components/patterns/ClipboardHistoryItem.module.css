@@ -1,0 +1,141 @@
+.rowContent {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: var(--clipboard-history-icon-size, 40px) minmax(0, 1fr) var(--clipboard-history-meta-width, 52px) 26px;
+  gap: var(--clipboard-history-row-gap, 8px);
+  align-items: center;
+}
+
+.sourceIcon {
+  width: var(--clipboard-history-icon-size, 40px);
+  height: var(--clipboard-history-icon-size, 40px);
+  border-radius: var(--radius-button);
+}
+
+.rowCopy,
+.rowSource,
+.rowMeta {
+  min-width: 0;
+}
+
+.rowCopy {
+  display: grid;
+  align-content: center;
+}
+
+.rowTitle {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-row-title);
+  font-weight: var(--clipboard-history-title-weight, var(--font-weight-medium));
+  line-height: var(--line-height-row-title);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.rowSource {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-size-secondary);
+  line-height: var(--line-height-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowSource > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lockIcon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--status-warning);
+}
+
+.rowMeta {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.rowMeta time {
+  color: var(--text-secondary);
+  font-size: var(--font-size-secondary);
+  line-height: var(--line-height-secondary);
+}
+
+.previewContent {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.previewText {
+  height: 100%;
+  min-height: 100%;
+  padding: var(--clipboard-history-preview-padding, 10px);
+  overflow: auto;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.previewText[role="button"] {
+  cursor: text;
+}
+
+.previewText[role="button"]:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.contextMenu {
+  position: fixed;
+  z-index: calc(var(--z-tooltip) + 1);
+  width: 150px;
+  display: grid;
+  padding: 5px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-button);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-tooltip);
+}
+
+.contextMenu button {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+}
+
+.contextMenu button:hover {
+  background: var(--surface-titlebar-control-hover);
+}
+
+.contextMenu button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.contextDanger {
+  color: var(--status-danger) !important;
+}

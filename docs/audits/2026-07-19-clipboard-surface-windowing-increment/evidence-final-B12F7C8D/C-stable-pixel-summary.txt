@@ -1,0 +1,13 @@
+Stable background: controlled Notepad white editor
+Show/hidden PNG size: 400x540 RGBA
+Window-relative bounds: (10,10)-(390,530)
+
+Middle 60 percent:
+left outside x=9: 0/312 changed; all white
+left edge x=10: 312/312 show pixels #e0dedc
+right outside x=390: 0/312 changed; all white
+top outside y=9: 0/228 changed; all white
+top edge y=10: 228/228 show pixels #e0dedc
+bottom outside y=530: 0/228 changed; all white
+
+No continuous native/DWM black line exists outside any edge. Right x=389 and bottom y=529 are also unchanged white; no #e0dedc right/bottom edge appears in the middle 60 percent. Surface fill exists through x=388/y=528. Conclusion: native black line absent; CSS border is asymmetric (left/top present, right/bottom absent).

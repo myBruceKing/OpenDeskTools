@@ -179,7 +179,7 @@ export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Pr
       <DialogShell
         open={editor !== null}
         title={actionDefinition ? `编辑${actionDefinition.title}快捷键` : "编辑快捷键"}
-        description="按下新组合后会立即分类；系统占用和其他程序冲突会在实际注册时继续检查。"
+        description="第一次录入会替换当前绑定；保存以后端返回的配置和注册状态为准，未持久化或未生效时会保留弹窗并显示原因。"
         onClose={closeEditor}
         footer={
           <>
@@ -248,7 +248,7 @@ export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Pr
             {classification?.classification === "system_reserved" && classification.forceOverrideAllowed && (
               <SwitchRow
                 title="强制覆盖系统热键"
-                description="我了解这可能替换 Windows 或其他系统功能的原有快捷键。"
+                description="确认后允许 OpenDeskTools 接管该系统组合；只有保存后状态显示“已注册”才算生效。"
                 checked={editor.forceOverrideSystem}
                 disabled={editor.saving}
                 onChange={hotkeys.setForceOverrideSystem}

@@ -1,0 +1,33 @@
+Package SHA-256: 1D9361F37118026911E45953BEDD2CA1EE295B6EDE8C87646926C2510D30B71F
+Fixture: %TEMP%\OpenDeskTools-final-files-5c9306b1df8948e3a7f27153e66d9004
+
+Isolation
+- Source Explorer HWND: 13435580
+- Target Explorer HWND: 39982176 / 0x2621460
+- Target LocationURL: file:///%TEMP%/OpenDeskTools-final-files-5c9306b1df8948e3a7f27153e66d9004/target
+- Source file: odt-final-file.md
+- Source size: 35019 bytes
+- Source SHA-256: 29F23842EC3763D79B0922AA93B5D7FD1EE92675561CAE86C57D79385F6E9BA1
+- Target count before input: 0
+
+Seed and capture
+- Real source Explorer Ctrl+C produced one CF_HDROP.
+- Clipboard path exactly matched the isolated source file.
+- The listener persisted a files record and Surface rendered one row named odt-final-file.md.
+- Surface captured target_top=Some(39982176), input_available=true.
+
+Focus snapshots
+- Initial controlled target: foreground/active=0x2621460, focus child=0x2B0145A, caret=0.
+- Immediately before the only double-click: foreground/active=0x2621460, focus=0x2621460, caret=0.
+- After the input attempt: foreground/active/focus=0x2621460, caret=0.
+
+Observed failure
+- Exactly one controlled double-click was sent to the files row.
+- Trace recorded close request reason=input_succeeded and hid main plus preview.
+- Target directory count remained 0 after 12 seconds.
+- No target file, size, or hash existed to compare.
+- Clipboard remained one CF_HDROP pointing to the exact source file.
+- No retry, external Ctrl+V, clipboard rewrite, or recovery action was performed.
+
+Assessment
+The clipboard writer retained the correct CF_HDROP, but Explorer did not consume it. The product reported success and closed despite the captured/restored focus no longer being the original file-view child. This is a false-positive success path and a P1 release blocker.

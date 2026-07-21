@@ -1,0 +1,50 @@
+.filter {
+  --segmented-height: 36px;
+  --segmented-item-padding-x: 10px;
+  --segmented-font-size: 12px;
+  min-width: 0;
+  width: 100%;
+  flex: 1 1 auto;
+}
+
+.filter > * {
+  width: 100%;
+}
+
+.rowActions {
+  width: 26px;
+  display: grid;
+  grid-template-rows: 26px 26px;
+  gap: 2px;
+  align-self: center;
+}
+
+.rowActions button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--status-warning);
+}
+
+.rowActions .deleteButton {
+  color: var(--status-danger);
+}
+
+.rowActions button:hover {
+  background: var(--surface-titlebar-control-hover);
+}
+
+.rowActions button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.rowActions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}

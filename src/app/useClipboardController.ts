@@ -2,8 +2,11 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { clipboardClient } from "./clipboardClient";
 import { ClipboardController } from "./clipboardController";
 
-export function useClipboardController() {
-  const controller = useMemo(() => new ClipboardController(clipboardClient), []);
+export function useClipboardController(surfaceActiveHint = false) {
+  const controller = useMemo(
+    () => new ClipboardController(clipboardClient, surfaceActiveHint),
+    []
+  );
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
@@ -15,11 +18,21 @@ export function useClipboardController() {
     return () => controller.stop();
   }, [controller]);
 
-  return {
-    state,
+  useEffect(() => {
+    controller.setSurfaceActiveHint(surfaceActiveHint);
+  }, [controller, surfaceActiveHint]);
+
+  const actions = useMemo(() => ({
     loadImage: clipboardClient.getImage,
+    loadSourceIcon: clipboardClient.getSourceIcon,
+    copyItem: controller.copyItem.bind(controller),
+    inputItem: controller.inputItem.bind(controller),
+    closeSurface: () => controller.closeSurface(),
     setFavorite: controller.setFavorite.bind(controller),
+    updateText: controller.updateText.bind(controller),
     deleteItem: controller.deleteItem.bind(controller),
     clearUnfavoriteHistory: controller.clearUnfavoriteHistory.bind(controller)
-  };
+  }), [controller]);
+
+  return { state, ...actions };
 }

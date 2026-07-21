@@ -1,0 +1,32 @@
+Frozen SHA-256: FDAF23CD4FE778DBBF2047D9662BC2DCC5EA8AF1EB03B61DAEC5ABB7947F5DE3
+Package size: 17,992,704 bytes
+Package mtime: 2026-07-19 22:36:17.700 +08:00
+Fixture: %TEMP%\OpenDeskTools-windowing-final-FDAF23CD-82d231e53c1940f781ffde107d3e5cf8
+
+Lossless show/hidden comparison
+- Images: 400x540 RGBA; relative window bounds (10,10)-(390,530); middle 60% sampled.
+- left outside x=9: 0/312 changed, white.
+- left edge x=10: 312/312 changed to #e0dedc.
+- right edge x=389: 0/312 changed, white.
+- right outside x=390: 0/312 changed, white.
+- top outside y=9: 0/228 changed, white.
+- top edge y=10: 228/228 changed to #e0dedc.
+- bottom edge y=529: 0/228 changed, white.
+- bottom outside y=530: 0/228 changed, white.
+
+Frontend surface_metrics for clipboard/main
+- devicePixelRatio=1; inner=380x520; visualViewportScale=1.
+- documentElement: rect/client/offset=380x520; background=rgb(224, 222, 220); borders=0px; inset="auto auto auto auto"; zoom=1.
+- body: rect/client/offset=380x520; background=rgb(224, 222, 220); borders=0px; inset="auto auto auto auto"; zoom=1.
+- appRoot: rect/client/offset=380x520; background=rgb(224, 222, 220); borders=0px; inset="auto auto auto auto"; zoom=1.
+- windowRoot: rect/client/offset=380x520; position=relative; background=rgb(224, 222, 220); borders=0px; inset="0px 0px 0px 0px"; zoom=1.
+- surface: rect/offset=380x520; client=378x518; position=absolute; background=rgb(249, 248, 246); computed borders top/right/bottom/left=1/1/1/1px; inset="0px 0px 0px 0px"; radius=12px; zoom=1.
+- Complete raw clipboard and preview metrics are preserved in qa-trace.log.
+
+Native geometry
+- Top HWND 25038544: rect 2512,212,2892,732; rounded region type 3.
+- WRY_WEBVIEW HWND 660306 and Chrome_WidgetWin_0 HWND 18354980: same rect as top.
+
+Conclusion
+- The #e0dedc document underlay is present in computed styles across html/body/#root/windowRoot, but it does not appear at the final right and bottom raster edges.
+- C FAIL. Only C was run as requested; no smoke or B2 was started.

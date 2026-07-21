@@ -24,6 +24,7 @@ function snapshot(
         configuredEnabled: true,
         classification: "ordinary",
         runtimeState: "registered",
+        runtimeBackend: "standard",
         detail: null,
         actionAvailable: true,
         forceOverrideSystem: false,
@@ -72,7 +73,7 @@ function client(overrides: Partial<HotkeyClient> = {}): HotkeyClient {
 }
 
 describe("HotkeyController", () => {
-  it("uses one token append rule for webview and native capture", async () => {
+  it("replaces the saved binding on first capture and appends only later sequence tokens", async () => {
     expect(appendHotkeyToken("F1", "Shift+Win+S")).toBe("F1 Shift+Win+S");
     expect(appendHotkeyToken(" F1  ", "  ")).toBe("F1");
 
@@ -84,8 +85,12 @@ describe("HotkeyController", () => {
     await flush();
     controller.appendBindingToken("Shift+Win+S");
 
-    expect(controller.getSnapshot().editor?.binding).toBe("F1 Shift+Win+S");
-    expect(classify).toHaveBeenLastCalledWith("F1 Shift+Win+S");
+    expect(controller.getSnapshot().editor?.binding).toBe("Shift+Win+S");
+    expect(classify).toHaveBeenLastCalledWith("Shift+Win+S");
+
+    controller.appendBindingToken("F2");
+    expect(controller.getSnapshot().editor?.binding).toBe("Shift+Win+S F2");
+    expect(classify).toHaveBeenLastCalledWith("Shift+Win+S F2");
   });
 
   it("loads a dedicated hotkey snapshot and reports unavailable truthfully", async () => {
@@ -199,11 +204,186 @@ describe("HotkeyController", () => {
       forceOverrideSystem: false
     });
 
-    request.resolve(snapshot(2, { binding: "Ctrl+K", runtimeState: "unavailable" }));
+    request.resolve(snapshot(2, { binding: "Ctrl+K", runtimeState: "registered" }));
     await saving;
     expect(controller.getSnapshot()).toMatchObject({
-      snapshot: snapshot(2, { binding: "Ctrl+K", runtimeState: "unavailable" }),
+      snapshot: snapshot(2, { binding: "Ctrl+K", runtimeState: "registered" }),
       editor: null
+    });
+  });
+
+  it("keeps the editor open when the returned snapshot did not persist the requested binding", async () => {
+    const controller = new HotkeyController(
+      client({ update: async () => snapshot(2, { binding: "F2" }) })
+    );
+    controller.start();
+    await flush();
+    controller.openEditor("capture");
+    await flush();
+    controller.setBinding("Win+V");
+    await flush();
+    controller.setForceOverrideSystem(true);
+
+    await controller.save();
+
+    expect(controller.getSnapshot()).toMatchObject({
+      snapshot: snapshot(2, { binding: "F2" }),
+      editor: {
+        binding: "Win+V",
+        saving: false,
+        error: {
+          code: "hotkey_update_not_applied",
+          message: "保存未生效；快捷键服务当前仍返回 F2，请重试。"
+        }
+      }
+    });
+  });
+
+  it("keeps the editor open when Win+V was returned without the requested force authorization", async () => {
+    const update = vi.fn<HotkeyClient["update"]>(async () => snapshot(2, {
+      binding: "Win+V",
+      classification: "system_reserved",
+      runtimeState: "unavailable",
+      forceOverrideSystem: false
+    }));
+    const controller = new HotkeyController(
+      client({
+        classify: async () => classified("system_reserved", "系统保留"),
+        update
+      })
+    );
+    controller.start();
+    await flush();
+    controller.openEditor("capture");
+    await flush();
+    controller.setBinding("Win+V");
+    await flush();
+    controller.setForceOverrideSystem(true);
+
+    await controller.save();
+
+    expect(update).toHaveBeenCalledWith({
+      actionId: "capture",
+      expectedRevision: 1,
+      binding: "Win+V",
+      forceOverrideSystem: true
+    });
+    expect(controller.getSnapshot().editor).toMatchObject({
+      binding: "Win+V",
+      forceOverrideSystem: true,
+      saving: false,
+      error: {
+        code: "hotkey_update_not_applied",
+        message: "保存未生效；快捷键服务未确认 Win+V 的强制覆盖授权，请重试。"
+      }
+    });
+  });
+
+  it("does not accept forced Win+V as active without a confirmed runtime backend", async () => {
+    const controller = new HotkeyController(
+      client({
+        classify: async () => classified("system_reserved", "系统保留"),
+        update: async () => snapshot(2, {
+          binding: "Win+V",
+          classification: "system_reserved",
+          runtimeState: "registered",
+          runtimeBackend: null,
+          forceOverrideSystem: true
+        })
+      })
+    );
+    controller.start();
+    await flush();
+    controller.openEditor("capture");
+    await flush();
+    controller.setBinding("Win+V");
+    await flush();
+    controller.setForceOverrideSystem(true);
+
+    await controller.save();
+
+    expect(controller.getSnapshot().editor).toMatchObject({
+      binding: "Win+V",
+      forceOverrideSystem: true,
+      saving: false,
+      error: {
+        code: "hotkey_saved_not_active",
+        message: "配置已保存为 Win+V，但快捷键服务未确认实际运行后端，请重试或重启应用后检查状态。"
+      }
+    });
+  });
+
+  it.each(["standard", "low_level_hook"] as const)(
+    "closes after forced Win+V is registered on the %s runtime backend",
+    async (runtimeBackend) => {
+      const controller = new HotkeyController(
+        client({
+          classify: async () => classified("system_reserved", "系统保留"),
+          update: async () => snapshot(2, {
+            binding: "Win+V",
+            classification: "system_reserved",
+            runtimeState: "registered",
+            runtimeBackend,
+            forceOverrideSystem: true
+          })
+        })
+      );
+      controller.start();
+      await flush();
+      controller.openEditor("capture");
+      await flush();
+      controller.setBinding("Win+V");
+      await flush();
+      controller.setForceOverrideSystem(true);
+
+      await controller.save();
+
+      expect(controller.getSnapshot()).toMatchObject({
+        snapshot: snapshot(2, {
+          binding: "Win+V",
+          classification: "system_reserved",
+          runtimeState: "registered",
+          runtimeBackend,
+          forceOverrideSystem: true
+        }),
+        editor: null
+      });
+    }
+  );
+
+  it("keeps the confirmed binding visible when it was saved but registration is not active", async () => {
+    const controller = new HotkeyController(
+      client({
+        update: async () => snapshot(2, {
+          binding: "Ctrl+K",
+          runtimeState: "conflict",
+          detail: "系统拒绝注册。"
+        })
+      })
+    );
+    controller.start();
+    await flush();
+    controller.openEditor("capture");
+    await flush();
+    controller.setBinding("Ctrl+K");
+    await flush();
+
+    await controller.save();
+
+    expect(controller.getSnapshot()).toMatchObject({
+      snapshot: snapshot(2, {
+        binding: "Ctrl+K",
+        runtimeState: "conflict",
+        detail: "系统拒绝注册。"
+      }),
+      editor: {
+        binding: "Ctrl+K",
+        saving: false,
+        error: {
+          code: "hotkey_saved_not_active",
+          message: "配置已保存为 Ctrl+K，但当前未生效：系统拒绝注册。"
+        }
+      }
     });
   });
 

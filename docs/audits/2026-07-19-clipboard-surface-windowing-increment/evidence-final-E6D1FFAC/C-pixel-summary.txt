@@ -1,0 +1,13 @@
+Frozen SHA-256: E6D1FFAC26E14C6D4BC84F09D913077C571BCF72F3D92AAED60A6806E1553E97
+Show/hidden PNG size: 400x540, lossless RGBA
+Window-relative bounds: (10,10)-(390,530)
+
+Middle 60 percent scans:
+left outside x=9: 19/312 pixels changed; dominant show pixel (255,255,255)
+left edge x=10: 312/312 pixels changed; all show pixels (224,222,220) = #e0dedc
+left inner x=11: 312/312 pixels changed; dominant show pixel (250,249,247)
+top outside y=9: 15/228 pixels changed; dominant show pixel (28,30,41)
+top edge y=10: 228/228 pixels changed; all show pixels (224,222,220) = #e0dedc
+top inner y=11: 228/228 pixels changed; all show pixels (250,249,247)
+
+No continuous dark line was found immediately outside the verified left/top edges. Right/bottom comparison was not repeatable against the live background and is intentionally not signed. Native main/preview window regions were complex rounded regions (type=3), with four corners outside and center inside.

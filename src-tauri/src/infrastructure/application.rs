@@ -6,12 +6,15 @@ use tauri::{AppHandle, Manager, Runtime};
 use thiserror::Error;
 
 use super::clipboard::ClipboardService;
+use super::clipboard_input::ClipboardInputCoordinator;
 use super::clipboard_listener::{
     ClipboardHistoryEventSink, ClipboardListenerError, ClipboardListenerManager,
 };
-use super::hotkey::{HotkeyError, HotkeyManager};
+use super::hotkey::{HotkeyError, HotkeyManager, OrdinaryHotkeyLatch};
 use super::hotkey_capture::HotkeyCaptureManager;
+use super::keyboard_hook::KeyboardHookBroker;
 use super::storage::{StorageError, StorageService};
+use super::surface::SurfaceManager;
 use super::theme::{ThemeError, ThemeService};
 
 const DATA_DIR_ARGUMENT: &str = "--data-dir";
@@ -31,7 +34,11 @@ pub struct ApplicationRuntime {
     storage: Arc<StorageService>,
     clipboard: Arc<ClipboardService>,
     clipboard_listener: ClipboardListenerManager,
+    clipboard_input: ClipboardInputCoordinator,
+    surface: Arc<SurfaceManager>,
     hotkeys: HotkeyManager,
+    ordinary_hotkey_latch: OrdinaryHotkeyLatch,
+    keyboard_hook: Arc<KeyboardHookBroker>,
     hotkey_capture: HotkeyCaptureManager,
     theme: ThemeService,
 }
@@ -103,6 +110,14 @@ impl ApplicationRuntime {
         &self.clipboard_listener
     }
 
+    pub(crate) fn clipboard_input(&self) -> &ClipboardInputCoordinator {
+        &self.clipboard_input
+    }
+
+    pub(crate) fn surface(&self) -> &SurfaceManager {
+        &self.surface
+    }
+
     pub(crate) fn start_clipboard_listener(
         &self,
         sink: ClipboardHistoryEventSink,
@@ -119,6 +134,14 @@ impl ApplicationRuntime {
         &self.hotkey_capture
     }
 
+    pub(crate) fn keyboard_hook(&self) -> &KeyboardHookBroker {
+        &self.keyboard_hook
+    }
+
+    pub(crate) fn ordinary_hotkey_latch(&self) -> &OrdinaryHotkeyLatch {
+        &self.ordinary_hotkey_latch
+    }
+
     pub(crate) fn from_app_data_dir(
         app_data_dir: PathBuf,
     ) -> Result<Self, ApplicationRuntimeError> {
@@ -129,12 +152,20 @@ impl ApplicationRuntime {
         );
         let theme = ThemeService::initialize(Arc::clone(&storage))?;
         let hotkeys = HotkeyManager::initialize(Arc::clone(&storage))?;
+        let keyboard_hook = Arc::new(KeyboardHookBroker::default());
+        let surface = Arc::new(SurfaceManager::default());
+        let clipboard_input =
+            ClipboardInputCoordinator::new(Arc::clone(&clipboard), Arc::clone(&surface));
         Ok(Self {
             storage,
             clipboard,
             clipboard_listener: ClipboardListenerManager::default(),
+            clipboard_input,
+            surface,
             hotkeys,
-            hotkey_capture: HotkeyCaptureManager::default(),
+            ordinary_hotkey_latch: OrdinaryHotkeyLatch::default(),
+            hotkey_capture: HotkeyCaptureManager::new(Arc::clone(&keyboard_hook)),
+            keyboard_hook,
             theme,
         })
     }

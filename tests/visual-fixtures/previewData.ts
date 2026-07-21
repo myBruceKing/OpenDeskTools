@@ -33,6 +33,7 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
   items: [
     {
       id: "text-open-desk-tools",
+      revision: 1,
       kind: "text",
       title: "OpenDeskTools 是一款高效的桌面增强工具，帮助你更好地管理剪贴板、快速启动应用...",
       preview:
@@ -45,10 +46,13 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
       favorite: false,
       locked: true,
       privacy: "sensitive",
-      iconTone: "note"
+      sourceIconAvailable: false,
+      iconTone: "note",
+      displayCategory: "text"
     },
     {
       id: "text-url",
+      revision: 1,
       kind: "text",
       title: "https://open-desktools.github.io",
       preview: "https://open-desktools.github.io",
@@ -60,10 +64,13 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
       favorite: false,
       locked: false,
       privacy: "normal",
-      iconTone: "chrome"
+      sourceIconAvailable: false,
+      iconTone: "chrome",
+      displayCategory: "text"
     },
     {
       id: "image-landscape",
+      revision: 1,
       kind: "image",
       title: "2024-05-21_10-22-45.png",
       preview: "图片预览：湖泊、山脉与天空截图，尺寸 960 × 540。",
@@ -75,10 +82,13 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
       favorite: false,
       locked: true,
       privacy: "unknown",
-      iconTone: "image"
+      sourceIconAvailable: false,
+      iconTone: "image",
+      displayCategory: "image"
     },
     {
       id: "text-excel",
+      revision: 1,
       kind: "text",
       title: "销售数据汇总表\n项目,金额,日期,负责人\n产品A,12000,2024-05-20,张三\n产品B,9800,2024-05-20,李四...",
       preview:
@@ -91,10 +101,13 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
       favorite: false,
       locked: false,
       privacy: "normal",
-      iconTone: "excel"
+      sourceIconAvailable: false,
+      iconTone: "excel",
+      displayCategory: "text"
     },
     {
       id: "text-word",
+      revision: 1,
       kind: "text",
       title: "会议纪要：\n1. 确认需求文档\n2. 设计原型评审",
       preview: "会议纪要：\n1. 确认需求文档\n2. 设计原型评审",
@@ -106,10 +119,13 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
       favorite: true,
       locked: true,
       privacy: "unknown",
-      iconTone: "word"
+      sourceIconAvailable: false,
+      iconTone: "word",
+      displayCategory: "text"
     },
     {
       id: "image-snipaste",
+      revision: 1,
       kind: "image",
       title: "Snipaste_2024-05-21_10-19-33.png",
       preview: "图片预览：白色窗口局部截图，尺寸 512 × 256。",
@@ -121,7 +137,9 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
       favorite: false,
       locked: false,
       privacy: "normal",
-      iconTone: "image"
+      sourceIconAvailable: false,
+      iconTone: "image",
+      displayCategory: "image"
     }
   ],
   settings: {
@@ -137,6 +155,7 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
     canFavorite: true,
     canDelete: true,
     canOpenSource: false,
-    canClearHistory: false
+    canClearHistory: false,
+    canEditText: true
   }
 };

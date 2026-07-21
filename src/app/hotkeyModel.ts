@@ -76,12 +76,17 @@ export const HOTKEY_RUNTIME_STATES = [
 
 export type HotkeyRuntimeState = (typeof HOTKEY_RUNTIME_STATES)[number];
 
+export const HOTKEY_RUNTIME_BACKENDS = ["standard", "low_level_hook"] as const;
+
+export type HotkeyRuntimeBackend = (typeof HOTKEY_RUNTIME_BACKENDS)[number];
+
 export type HotkeyActionSnapshot = {
   actionId: GlobalHotkeyId;
   binding: string;
   configuredEnabled: boolean;
   classification: HotkeyClassificationKind;
   runtimeState: HotkeyRuntimeState;
+  runtimeBackend: HotkeyRuntimeBackend | null;
   detail: string | null;
   actionAvailable: boolean;
   forceOverrideSystem: boolean;
@@ -117,6 +122,7 @@ export type HotkeyEditorState = {
   actionId: GlobalHotkeyId;
   actionAvailable: boolean;
   binding: string;
+  inputDirty: boolean;
   classificationStatus: "loading" | "ready" | "error";
   classification: HotkeyClassification | null;
   forceOverrideSystem: boolean;
@@ -166,6 +172,13 @@ function isRuntimeState(value: unknown): value is HotkeyRuntimeState {
   return typeof value === "string" && HOTKEY_RUNTIME_STATES.includes(value as HotkeyRuntimeState);
 }
 
+function isRuntimeBackend(value: unknown): value is HotkeyRuntimeBackend {
+  return (
+    typeof value === "string" &&
+    HOTKEY_RUNTIME_BACKENDS.includes(value as HotkeyRuntimeBackend)
+  );
+}
+
 function isClassification(value: unknown): value is HotkeyClassificationKind {
   return typeof value === "string" && HOTKEY_CLASSIFICATIONS.includes(value as HotkeyClassificationKind);
 }
@@ -189,6 +202,9 @@ function parseAction(value: unknown): HotkeyActionSnapshot {
   if (!isRuntimeState(value.runtimeState)) {
     throw new Error("Invalid hotkey payload field: runtimeState");
   }
+  if (value.runtimeBackend !== null && !isRuntimeBackend(value.runtimeBackend)) {
+    throw new Error("Invalid hotkey payload field: runtimeBackend");
+  }
   if (typeof value.detail !== "string" && value.detail !== null) {
     throw new Error("Invalid hotkey payload field: detail");
   }
@@ -205,6 +221,7 @@ function parseAction(value: unknown): HotkeyActionSnapshot {
     configuredEnabled: value.configuredEnabled,
     classification: value.classification,
     runtimeState: value.runtimeState,
+    runtimeBackend: value.runtimeBackend,
     detail: value.detail,
     actionAvailable: value.actionAvailable,
     forceOverrideSystem: value.forceOverrideSystem

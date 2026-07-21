@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri_plugin_global_shortcut::{Error as GlobalShortcutError, GlobalShortcutExt};
 use thiserror::Error;
 
+use super::keyboard_hook::{KeyboardHookBroker, RuntimeHotkeyEvent};
 use super::storage::{StorageError, StorageService};
 
 const HOTKEY_SNAPSHOT_KEY: &str = "hotkeys.snapshot.v1";
@@ -307,6 +308,76 @@ pub enum HotkeyRuntimeState {
     Degraded,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrdinaryHotkeyTransition {
+    Pressed,
+    Released,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrdinaryHotkeyPress {
+    binding: String,
+    registration_revision: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct OrdinaryHotkeyLatch {
+    active: Mutex<HashMap<HotkeyActionId, OrdinaryHotkeyPress>>,
+}
+
+impl OrdinaryHotkeyLatch {
+    /// Returns true only for the first Pressed and its exactly matching Released.
+    /// A newer registration replaces an older held state; stale events can neither
+    /// execute nor unlock the newer registration.
+    pub fn consume(
+        &self,
+        action_id: HotkeyActionId,
+        binding: &str,
+        registration_revision: u64,
+        transition: OrdinaryHotkeyTransition,
+    ) -> Result<bool, HotkeyError> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| HotkeyError::StateLockPoisoned)?;
+        let incoming = OrdinaryHotkeyPress {
+            binding: binding.to_owned(),
+            registration_revision,
+        };
+        match transition {
+            OrdinaryHotkeyTransition::Pressed => match active.get(&action_id) {
+                Some(current) if current == &incoming => Ok(false),
+                Some(current) if current.registration_revision >= registration_revision => {
+                    Ok(false)
+                }
+                _ => {
+                    active.insert(action_id, incoming);
+                    Ok(true)
+                }
+            },
+            OrdinaryHotkeyTransition::Released => {
+                if active.get(&action_id) != Some(&incoming) {
+                    return Ok(false);
+                }
+                active.remove(&action_id);
+                Ok(true)
+            }
+        }
+    }
+
+    pub fn clear_action(&self, action_id: HotkeyActionId) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(&action_id);
+        }
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut active) = self.active.lock() {
+            active.clear();
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyRegistrationSnapshot {
@@ -317,7 +388,15 @@ pub struct HotkeyRegistrationSnapshot {
     pub action_available: bool,
     pub classification: HotkeyBindingClassification,
     pub runtime_state: HotkeyRuntimeState,
+    pub runtime_backend: Option<HotkeyRuntimeBackend>,
     pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HotkeyRuntimeBackend {
+    Standard,
+    LowLevelHook,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -353,6 +432,22 @@ struct HotkeyState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistrationToken {
     binding: String,
+    backend: RegistrationBackend,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RegistrationBackend {
+    Standard,
+    ForcedWinV { generation: u64 },
+}
+
+impl RegistrationBackend {
+    fn runtime_backend(&self) -> HotkeyRuntimeBackend {
+        match self {
+            Self::Standard => HotkeyRuntimeBackend::Standard,
+            Self::ForcedWinV { .. } => HotkeyRuntimeBackend::LowLevelHook,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,6 +467,7 @@ pub trait HotkeyRegistrar: Send + Sync {
         &self,
         action_id: HotkeyActionId,
         binding: &HotkeyChord,
+        force_override_system: bool,
     ) -> Result<RegistrationToken, RegistrarFailure>;
 
     fn unregister(&self, token: &RegistrationToken) -> Result<(), RegistrarFailure>;
@@ -379,11 +475,24 @@ pub trait HotkeyRegistrar: Send + Sync {
 
 pub struct TauriHotkeyRegistrar<'a, R: Runtime> {
     app: &'a AppHandle<R>,
+    keyboard_hook: &'a KeyboardHookBroker,
+    forced_sink: Arc<dyn Fn(RuntimeHotkeyEvent) + Send + Sync + 'static>,
 }
 
 impl<'a, R: Runtime> TauriHotkeyRegistrar<'a, R> {
-    pub fn new(app: &'a AppHandle<R>) -> Self {
-        Self { app }
+    pub fn new<F>(
+        app: &'a AppHandle<R>,
+        keyboard_hook: &'a KeyboardHookBroker,
+        forced_sink: F,
+    ) -> Self
+    where
+        F: Fn(RuntimeHotkeyEvent) + Send + Sync + 'static,
+    {
+        Self {
+            app,
+            keyboard_hook,
+            forced_sink: Arc::new(forced_sink),
+        }
     }
 }
 
@@ -392,28 +501,90 @@ impl<R: Runtime> HotkeyRegistrar for TauriHotkeyRegistrar<'_, R> {
         &self,
         _action_id: HotkeyActionId,
         binding: &HotkeyChord,
+        force_override_system: bool,
     ) -> Result<RegistrationToken, RegistrarFailure> {
+        let normalized = binding.normalized();
         let plugin_binding = binding.plugin_binding();
-        self.app
+        let standard_result = self
+            .app
             .global_shortcut()
             .register(plugin_binding.as_str())
             .map_err(|error| RegistrarFailure {
-                kind: RegistrarFailureKind::Conflict,
+                kind: match error {
+                    GlobalShortcutError::GlobalHotkey(_) => RegistrarFailureKind::Conflict,
+                    GlobalShortcutError::RecvError(_) | GlobalShortcutError::Tauri(_) => {
+                        RegistrarFailureKind::Unavailable
+                    }
+                    _ => RegistrarFailureKind::Unavailable,
+                },
                 detail: error.to_string(),
-            })?;
-        Ok(RegistrationToken {
-            binding: plugin_binding,
-        })
+            });
+        register_with_optional_win_v_fallback(
+            normalized,
+            plugin_binding,
+            force_override_system,
+            standard_result,
+            || {
+                let sink = Arc::clone(&self.forced_sink);
+                self.keyboard_hook
+                    .register_win_v(move |event| sink(event))
+                    .map_err(|error| RegistrarFailure {
+                        kind: RegistrarFailureKind::Unavailable,
+                        detail: error.to_string(),
+                    })
+            },
+        )
     }
 
     fn unregister(&self, token: &RegistrationToken) -> Result<(), RegistrarFailure> {
-        self.app
-            .global_shortcut()
-            .unregister(token.binding.as_str())
-            .map_err(|error| RegistrarFailure {
-                kind: RegistrarFailureKind::Unavailable,
-                detail: error.to_string(),
+        match token.backend {
+            RegistrationBackend::Standard => self
+                .app
+                .global_shortcut()
+                .unregister(token.binding.as_str())
+                .map_err(|error| RegistrarFailure {
+                    kind: RegistrarFailureKind::Unavailable,
+                    detail: error.to_string(),
+                }),
+            RegistrationBackend::ForcedWinV { generation } => self
+                .keyboard_hook
+                .unregister_win_v(generation)
+                .map(|_| ())
+                .map_err(|error| RegistrarFailure {
+                    kind: RegistrarFailureKind::Unavailable,
+                    detail: error.to_string(),
+                }),
+        }
+    }
+}
+
+fn register_with_optional_win_v_fallback<F>(
+    normalized: String,
+    plugin_binding: String,
+    force_override_system: bool,
+    standard_result: Result<(), RegistrarFailure>,
+    register_hook: F,
+) -> Result<RegistrationToken, RegistrarFailure>
+where
+    F: FnOnce() -> Result<u64, RegistrarFailure>,
+{
+    match standard_result {
+        Ok(()) => Ok(RegistrationToken {
+            binding: plugin_binding,
+            backend: RegistrationBackend::Standard,
+        }),
+        Err(error)
+            if normalized == "Win+V"
+                && force_override_system
+                && error.kind == RegistrarFailureKind::Conflict =>
+        {
+            let generation = register_hook()?;
+            Ok(RegistrationToken {
+                binding: normalized,
+                backend: RegistrationBackend::ForcedWinV { generation },
             })
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -492,7 +663,10 @@ impl HotkeyManager {
         }
         let registrations = preferences
             .into_iter()
-            .map(|preference| build_registration(preference, false))
+            .map(|preference| {
+                let action_available = preference.action_id == HotkeyActionId::ClipboardOpenPanel;
+                build_registration(preference, action_available)
+            })
             .collect();
         Ok(Self {
             store,
@@ -581,10 +755,51 @@ impl HotkeyManager {
             .registrations
             .iter()
             .find(|entry| {
+                let Some(token) = entry.token.as_ref() else {
+                    return false;
+                };
                 entry.runtime_state == HotkeyRuntimeState::Registered
-                    && entry.preference.binding.normalized() == normalized
+                    && token.backend == RegistrationBackend::Standard
+                    && HotkeyBinding::parse(&token.binding)
+                        .ok()
+                        .is_some_and(|token_binding| token_binding.normalized() == normalized)
             })
             .map(|entry| (entry.preference.action_id, state.revision))
+    }
+
+    pub fn registered_action_for_forced_generation(
+        &self,
+        generation: u64,
+    ) -> Option<(HotkeyActionId, u64)> {
+        let state = self.state.lock().ok()?;
+        state.registrations.iter().find_map(|entry| {
+            let token = entry.token.as_ref()?;
+            (entry.runtime_state == HotkeyRuntimeState::Registered
+                && token.backend == RegistrationBackend::ForcedWinV { generation })
+            .then_some((entry.preference.action_id, state.revision))
+        })
+    }
+
+    pub fn mark_forced_generation_degraded(
+        &self,
+        generation: u64,
+        detail: impl Into<String>,
+    ) -> Result<bool, HotkeyError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| HotkeyError::StateLockPoisoned)?;
+        let Some(entry) = state.registrations.iter_mut().find(|entry| {
+            entry.token.as_ref().is_some_and(|token| {
+                token.backend == RegistrationBackend::ForcedWinV { generation }
+            })
+        }) else {
+            return Ok(false);
+        };
+        entry.token = None;
+        entry.runtime_state = HotkeyRuntimeState::Degraded;
+        entry.detail = Some(detail.into());
+        Ok(true)
     }
 }
 
@@ -639,8 +854,9 @@ fn reconcile_locked(state: &mut HotkeyState, registrar: &dyn HotkeyRegistrar) {
         };
 
         if let Some(token) = entry.token.as_ref() {
-            let token_is_current =
-                desired_binding.is_some_and(|chord| token.binding == chord.plugin_binding());
+            let token_is_current = desired_binding.is_some_and(|chord| {
+                token.binding == chord.plugin_binding() || token.binding == chord.normalized()
+            });
             if token_is_current {
                 entry.runtime_state = HotkeyRuntimeState::Registered;
                 entry.detail = None;
@@ -678,7 +894,11 @@ fn reconcile_locked(state: &mut HotkeyState, registrar: &dyn HotkeyRegistrar) {
         let HotkeyBinding::Chord(chord) = &entry.preference.binding else {
             unreachable!("registration policy excludes sequences")
         };
-        match registrar.register(entry.preference.action_id, chord) {
+        match registrar.register(
+            entry.preference.action_id,
+            chord,
+            entry.preference.force_override_system,
+        ) {
             Ok(token) => {
                 entry.token = Some(token);
                 entry.runtime_state = HotkeyRuntimeState::Registered;
@@ -757,6 +977,10 @@ fn snapshot_from_state(state: &HotkeyState) -> HotkeySnapshot {
                 classification: classify_parsed_binding(&entry.preference.binding)
                     .expect("state bindings are validated"),
                 runtime_state: entry.runtime_state,
+                runtime_backend: entry
+                    .token
+                    .as_ref()
+                    .map(|token| token.backend.runtime_backend()),
                 detail: entry.detail.clone(),
             })
             .collect(),
@@ -930,16 +1154,122 @@ mod tests {
             &self,
             _action_id: HotkeyActionId,
             binding: &HotkeyChord,
+            _force_override_system: bool,
         ) -> Result<RegistrationToken, RegistrarFailure> {
             self.registrations.fetch_add(1, Ordering::SeqCst);
             Ok(RegistrationToken {
                 binding: binding.normalized(),
+                backend: RegistrationBackend::Standard,
             })
         }
 
         fn unregister(&self, _token: &RegistrationToken) -> Result<(), RegistrarFailure> {
             Ok(())
         }
+    }
+
+    #[derive(Default)]
+    struct ForcedRegistrar {
+        registrations: AtomicUsize,
+        unregistrations: AtomicUsize,
+    }
+
+    impl HotkeyRegistrar for ForcedRegistrar {
+        fn register(
+            &self,
+            _action_id: HotkeyActionId,
+            binding: &HotkeyChord,
+            force_override_system: bool,
+        ) -> Result<RegistrationToken, RegistrarFailure> {
+            self.registrations.fetch_add(1, Ordering::SeqCst);
+            let backend = if binding.normalized() == "Win+V" && force_override_system {
+                RegistrationBackend::ForcedWinV { generation: 41 }
+            } else {
+                RegistrationBackend::Standard
+            };
+            Ok(RegistrationToken {
+                binding: binding.normalized(),
+                backend,
+            })
+        }
+
+        fn unregister(&self, _token: &RegistrationToken) -> Result<(), RegistrarFailure> {
+            self.unregistrations.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn win_v_uses_standard_backend_when_standard_registration_succeeds() {
+        let hook_called = AtomicBool::new(false);
+        let token = register_with_optional_win_v_fallback(
+            "Win+V".to_owned(),
+            "Super+V".to_owned(),
+            true,
+            Ok(()),
+            || {
+                hook_called.store(true, Ordering::SeqCst);
+                Ok(9)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(token.backend, RegistrationBackend::Standard);
+        assert_eq!(token.binding, "Super+V");
+        assert!(!hook_called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn win_v_falls_back_only_for_explicit_force_and_standard_conflict() {
+        let conflict = RegistrarFailure {
+            kind: RegistrarFailureKind::Conflict,
+            detail: "occupied".to_owned(),
+        };
+        let token = register_with_optional_win_v_fallback(
+            "Win+V".to_owned(),
+            "Super+V".to_owned(),
+            true,
+            Err(conflict.clone()),
+            || Ok(17),
+        )
+        .unwrap();
+        assert_eq!(
+            token.backend,
+            RegistrationBackend::ForcedWinV { generation: 17 }
+        );
+
+        let hook_called = AtomicBool::new(false);
+        let error = register_with_optional_win_v_fallback(
+            "Win+V".to_owned(),
+            "Super+V".to_owned(),
+            false,
+            Err(conflict),
+            || {
+                hook_called.store(true, Ordering::SeqCst);
+                Ok(18)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, RegistrarFailureKind::Conflict);
+        assert!(!hook_called.load(Ordering::SeqCst));
+
+        let unavailable = RegistrarFailure {
+            kind: RegistrarFailureKind::Unavailable,
+            detail: "backend down".to_owned(),
+        };
+        let error = register_with_optional_win_v_fallback(
+            "Win+V".to_owned(),
+            "Super+V".to_owned(),
+            true,
+            Err(unavailable),
+            || {
+                hook_called.store(true, Ordering::SeqCst);
+                Ok(19)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, RegistrarFailureKind::Unavailable);
+        assert!(!hook_called.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -999,6 +1329,68 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_latch_coalesces_repeat_and_matching_release_rearms() {
+        let latch = OrdinaryHotkeyLatch::default();
+        let action = HotkeyActionId::ClipboardOpenPanel;
+        assert!(latch
+            .consume(action, "Alt+V", 4, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+        assert!(!latch
+            .consume(action, "Alt+V", 4, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+        assert!(latch
+            .consume(action, "Alt+V", 4, OrdinaryHotkeyTransition::Released)
+            .unwrap());
+        assert!(latch
+            .consume(action, "Alt+V", 4, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+    }
+
+    #[test]
+    fn ordinary_latch_rejects_stale_revision_without_polluting_new_registration() {
+        let latch = OrdinaryHotkeyLatch::default();
+        let action = HotkeyActionId::ClipboardOpenPanel;
+        assert!(latch
+            .consume(action, "Alt+V", 8, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+        assert!(!latch
+            .consume(action, "Alt+V", 7, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+        assert!(!latch
+            .consume(action, "Alt+V", 7, OrdinaryHotkeyTransition::Released)
+            .unwrap());
+        assert!(!latch
+            .consume(action, "Alt+V", 8, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+        assert!(latch
+            .consume(action, "Alt+V", 8, OrdinaryHotkeyTransition::Released)
+            .unwrap());
+    }
+
+    #[test]
+    fn ordinary_latch_new_revision_replaces_held_old_binding_and_clear_unhooks_action() {
+        let latch = OrdinaryHotkeyLatch::default();
+        let action = HotkeyActionId::ClipboardOpenPanel;
+        assert!(latch
+            .consume(action, "Alt+V", 2, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+        assert!(latch
+            .consume(action, "Ctrl+V", 3, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+        assert!(!latch
+            .consume(action, "Alt+V", 2, OrdinaryHotkeyTransition::Released)
+            .unwrap());
+        latch.clear_action(action);
+        assert!(latch
+            .consume(action, "Ctrl+V", 3, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+        latch.clear();
+        assert!(latch
+            .consume(action, "Ctrl+V", 3, OrdinaryHotkeyTransition::Pressed)
+            .unwrap());
+    }
+
+    #[test]
     fn chord_parser_normalizes_aliases_and_modifier_order() {
         assert!(matches!(
             HotkeyBinding::parse(""),
@@ -1013,7 +1405,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_persisted_and_all_unavailable_actions_skip_registrar() {
+    fn defaults_persist_with_only_clipboard_panel_available_and_reserved_default_inactive() {
         let temp = tempdir().unwrap();
         let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
         let manager = HotkeyManager::initialize(Arc::clone(&storage)).unwrap();
@@ -1023,9 +1415,19 @@ mod tests {
 
         assert_eq!(snapshot.revision, 0);
         assert_eq!(snapshot.actions.len(), 5);
-        assert!(snapshot.actions.iter().all(|entry| entry.configured_enabled
-            && !entry.action_available
-            && !entry.force_override_system));
+        assert!(snapshot
+            .actions
+            .iter()
+            .all(|entry| entry.configured_enabled && !entry.force_override_system));
+        assert_eq!(
+            snapshot
+                .actions
+                .iter()
+                .filter(|entry| entry.action_available)
+                .map(|entry| entry.action_id)
+                .collect::<Vec<_>>(),
+            vec![HotkeyActionId::ClipboardOpenPanel]
+        );
         assert_eq!(registrar.registrations.load(Ordering::SeqCst), 0);
         assert!(storage.read_setting(HOTKEY_SNAPSHOT_KEY).unwrap().is_some());
         assert_eq!(
@@ -1071,7 +1473,7 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_system_binding_can_store_explicit_force_without_registering() {
+    fn clipboard_system_binding_registers_only_after_explicit_force_opt_in() {
         let temp = tempdir().unwrap();
         let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
         let manager = HotkeyManager::initialize(storage).unwrap();
@@ -1097,9 +1499,167 @@ mod tests {
         );
         assert_eq!(
             updated.actions[4].runtime_state,
-            HotkeyRuntimeState::Unavailable
+            HotkeyRuntimeState::Registered
         );
-        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            updated.actions[4].runtime_backend,
+            Some(HotkeyRuntimeBackend::Standard)
+        );
+        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn forced_win_v_persists_and_reconciles_after_restart() {
+        let temp = tempdir().unwrap();
+        let data_root = temp.path().join("data");
+        let storage = Arc::new(StorageService::initialize(&data_root).unwrap());
+        let manager = HotkeyManager::initialize(Arc::clone(&storage)).unwrap();
+        let registrar = ForcedRegistrar::default();
+
+        let updated = manager
+            .update_binding(
+                UpdateHotkeyBinding {
+                    action_id: HotkeyActionId::ClipboardOpenPanel,
+                    expected_revision: 0,
+                    binding: "Win+V".to_owned(),
+                    force_override_system: true,
+                },
+                &registrar,
+            )
+            .unwrap();
+        assert_eq!(
+            updated.actions[4].runtime_backend,
+            Some(HotkeyRuntimeBackend::LowLevelHook)
+        );
+        drop(manager);
+        drop(storage);
+
+        let reopened_storage = Arc::new(StorageService::initialize(&data_root).unwrap());
+        let reopened = HotkeyManager::initialize(reopened_storage).unwrap();
+        let reconciled = reopened.reconcile(&registrar).unwrap();
+        assert_eq!(reconciled.revision, 1);
+        assert!(reconciled.actions[4].force_override_system);
+        assert_eq!(reconciled.actions[4].binding, "Win+V");
+        assert_eq!(
+            reconciled.actions[4].runtime_backend,
+            Some(HotkeyRuntimeBackend::LowLevelHook)
+        );
+    }
+
+    #[test]
+    fn forced_generation_failure_degrades_only_the_matching_token() {
+        let temp = tempdir().unwrap();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        let manager = HotkeyManager::initialize(storage).unwrap();
+        let registrar = ForcedRegistrar::default();
+        manager
+            .update_binding(
+                UpdateHotkeyBinding {
+                    action_id: HotkeyActionId::ClipboardOpenPanel,
+                    expected_revision: 0,
+                    binding: "Win+V".to_owned(),
+                    force_override_system: true,
+                },
+                &registrar,
+            )
+            .unwrap();
+
+        assert!(!manager
+            .mark_forced_generation_degraded(40, "stale")
+            .unwrap());
+        assert_eq!(
+            manager.snapshot().unwrap().actions[4].runtime_state,
+            HotkeyRuntimeState::Registered
+        );
+        assert_eq!(manager.registered_action_for_plugin_binding("Win+V"), None);
+        assert_eq!(
+            manager.registered_action_for_plugin_binding("Super+V"),
+            None
+        );
+        assert!(manager
+            .mark_forced_generation_degraded(41, "route failed; input restored")
+            .unwrap());
+        let degraded = manager.snapshot().unwrap();
+        assert_eq!(
+            degraded.actions[4].runtime_state,
+            HotkeyRuntimeState::Degraded
+        );
+        assert_eq!(degraded.actions[4].runtime_backend, None);
+        assert_eq!(
+            degraded.actions[4].detail.as_deref(),
+            Some("route failed; input restored")
+        );
+        assert_eq!(manager.registered_action_for_forced_generation(41), None);
+    }
+
+    #[test]
+    fn rebinding_from_forced_hook_unregisters_it_and_reports_standard_backend() {
+        let temp = tempdir().unwrap();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        let manager = HotkeyManager::initialize(storage).unwrap();
+        let registrar = ForcedRegistrar::default();
+        manager
+            .update_binding(
+                UpdateHotkeyBinding {
+                    action_id: HotkeyActionId::ClipboardOpenPanel,
+                    expected_revision: 0,
+                    binding: "Win+V".to_owned(),
+                    force_override_system: true,
+                },
+                &registrar,
+            )
+            .unwrap();
+
+        let rebound = manager
+            .update_binding(
+                UpdateHotkeyBinding {
+                    action_id: HotkeyActionId::ClipboardOpenPanel,
+                    expected_revision: 1,
+                    binding: "Ctrl+Alt+V".to_owned(),
+                    force_override_system: false,
+                },
+                &registrar,
+            )
+            .unwrap();
+
+        assert_eq!(registrar.unregistrations.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            rebound.actions[4].runtime_backend,
+            Some(HotkeyRuntimeBackend::Standard)
+        );
+        assert_eq!(
+            rebound.actions[4].runtime_state,
+            HotkeyRuntimeState::Registered
+        );
+    }
+
+    #[test]
+    fn clipboard_panel_ordinary_binding_registers_and_routes_to_the_action() {
+        let temp = tempdir().unwrap();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        let manager = HotkeyManager::initialize(storage).unwrap();
+        let registrar = FakeRegistrar::default();
+
+        let updated = manager
+            .update_binding(
+                UpdateHotkeyBinding {
+                    action_id: HotkeyActionId::ClipboardOpenPanel,
+                    expected_revision: 0,
+                    binding: "Ctrl+Alt+V".to_owned(),
+                    force_override_system: false,
+                },
+                &registrar,
+            )
+            .unwrap();
+
+        assert_eq!(
+            updated.actions[4].runtime_state,
+            HotkeyRuntimeState::Registered
+        );
+        assert_eq!(
+            manager.registered_action_for_plugin_binding("Ctrl+Alt+V"),
+            Some((HotkeyActionId::ClipboardOpenPanel, 1))
+        );
     }
 
     #[test]
@@ -1115,6 +1675,10 @@ mod tests {
         assert_eq!(json["actions"][0]["configuredEnabled"], true);
         assert_eq!(json["actions"][0]["actionAvailable"], false);
         assert_eq!(json["actions"][0]["runtimeState"], "unavailable");
+        assert_eq!(
+            json["actions"][0]["runtimeBackend"],
+            serde_json::Value::Null
+        );
         assert_eq!(json["actions"][4]["actionId"], "clipboard.open_panel");
     }
 

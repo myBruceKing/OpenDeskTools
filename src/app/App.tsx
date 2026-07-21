@@ -29,6 +29,8 @@ function ClipboardRoute() {
     <ClipboardPage
       state={clipboard.state}
       loadImage={clipboard.loadImage}
+      loadSourceIcon={clipboard.loadSourceIcon}
+      onUpdateText={clipboard.updateText}
       onSetFavorite={clipboard.setFavorite}
       onDelete={clipboard.deleteItem}
       onClearUnfavoriteHistory={clipboard.clearUnfavoriteHistory}
@@ -78,10 +80,13 @@ function App() {
     };
   }, [refreshOverview]);
 
-  function navigate(routeId: AppRoute) {
+  const navigate = useCallback((routeId: AppRoute) => {
+    if (routeId === route) {
+      return;
+    }
     setRoute(routeId);
     window.history.replaceState(null, "", `#${routeId}`);
-  }
+  }, [route]);
 
   const page = route;
 

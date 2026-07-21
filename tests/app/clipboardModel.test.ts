@@ -27,13 +27,15 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
   it("derives text presentation from raw content without fabricating source or privacy", () => {
     const item = toClipboardItemViewModel({
       id: "1",
+      revision: 1,
       kind: "text",
       textContent: "\n  第一行标题  \n第二行内容",
       sourceApplication: null,
       sourceProcess: null,
       capturedAtMs: 1_720_000_000_000,
       byteSize: 32,
-      isFavorite: false
+      isFavorite: false,
+      sourceIconAvailable: false
     });
 
     expect(item).toMatchObject({
@@ -52,28 +54,73 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
   it("does not invent an image preview when a future image record is received", () => {
     const item = toClipboardItemViewModel({
       id: "2",
+      revision: 1,
       kind: "image",
       textContent: null,
       sourceApplication: null,
       sourceProcess: null,
       capturedAtMs: Number.MAX_SAFE_INTEGER,
       byteSize: 2048,
-      isFavorite: true
+      isFavorite: true,
+      sourceIconAvailable: false
     });
     expect(item.preview).toBe("图片预览暂不可用");
     expect(item.capturedAt).toBe("时间不可用");
   });
 
+  it("accepts file drops only with safe basenames and preserves their display category", () => {
+    const parsed = parseClipboardHistoryResult({
+      items: [{
+        id: "3",
+        revision: 1,
+        kind: "files",
+        textContent: null,
+        sourceApplication: "Explorer",
+        sourceProcess: "explorer.exe",
+        capturedAtMs: 1,
+        byteSize: 5,
+        isFavorite: false,
+        sourceIconAvailable: false,
+        fileCount: 1,
+        fileNames: ["notes.txt"],
+        displayCategory: "text"
+      }],
+      totalCount: 1,
+      monitoring: "running",
+      surfaceActive: true,
+      inputAvailable: true
+    });
+    expect(parsed.items[0]).toMatchObject({
+      kind: "files",
+      fileNames: ["notes.txt"],
+      displayCategory: "text"
+    });
+    expect(toClipboardItemViewModel(parsed.items[0])).toMatchObject({
+      kind: "files",
+      title: "notes.txt",
+      displayCategory: "text"
+    });
+
+    for (const fileNames of [["C:\\private\\notes.txt"], ["folder/notes.txt"], []]) {
+      expect(() => parseClipboardHistoryResult({
+        ...parsed,
+        items: [{ ...parsed.items[0], fileNames }]
+      })).toThrow();
+    }
+  });
+
   it("rejects duplicate ids, invalid counts, and text records without text", () => {
     const valid = {
       id: "1",
+      revision: 1,
       kind: "text",
       textContent: "内容",
       sourceApplication: null,
       sourceProcess: null,
       capturedAtMs: 1,
       byteSize: 6,
-      isFavorite: false
+      isFavorite: false,
+      sourceIconAvailable: false
     };
     expect(() => parseClipboardHistoryResult({ items: [valid, valid], totalCount: 2, monitoring: "running" })).toThrow("duplicate id");
     expect(() => parseClipboardHistoryResult({ items: [valid], totalCount: 0, monitoring: "running" })).toThrow("totalCount");
@@ -110,13 +157,54 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
     });
   });
 
+  it.each([
+    ["clipboard_input_cleanup_failed", "按键释放未确认，输入已暂停。"],
+    ["clipboard_files_unavailable", "一个或多个原文件已不存在，无法复制或输入。"]
+  ] as const)("maps high-risk %s failures to short nonretryable alerts", (code, message) => {
+    expect(normalizeClipboardCommandError({
+      code,
+      message: "internal Windows failure at C:\\private",
+      retryable: true
+    })).toEqual({ code, message, retryable: false });
+  });
+
+  it("maps an explicit clipboard data write failure as retryable", () => {
+    expect(normalizeClipboardCommandError({
+      code: "clipboard_write_failed",
+      message: "internal",
+      retryable: false
+    })).toEqual({
+      code: "clipboard_write_failed",
+      message: "Windows 未完成剪贴板写入，请重试该记录。",
+      retryable: true
+    });
+  });
+
   it.each(["running", "unavailable"] as const)(
     "accepts the backend monitoring truth %s",
     (monitoring) => {
-      expect(parseClipboardHistoryResult({ items: [], totalCount: 0, monitoring }).monitoring)
+      expect(parseClipboardHistoryResult({
+        items: [], totalCount: 0, monitoring, surfaceActive: false, inputAvailable: false
+      }).monitoring)
         .toBe(monitoring);
     }
   );
+
+  it("requires independent surface and target availability truth", () => {
+    expect(parseClipboardHistoryResult({
+      items: [],
+      totalCount: 0,
+      monitoring: "running",
+      surfaceActive: true,
+      inputAvailable: false
+    })).toMatchObject({ surfaceActive: true, inputAvailable: false });
+    expect(() => parseClipboardHistoryResult({
+      items: [], totalCount: 0, monitoring: "running", inputAvailable: false
+    })).toThrow("surfaceActive");
+    expect(() => parseClipboardHistoryResult({
+      items: [], totalCount: 0, monitoring: "running", surfaceActive: false
+    })).toThrow("inputAvailable");
+  });
 
   it.each(["paused", "RUNNING", null, true])(
     "rejects invalid backend monitoring %s",

@@ -61,6 +61,9 @@
   --shadow-tool-dock: 0 8px 20px rgb(36 42 50 / 8%);
   --shadow-tool-dock-hover: 0 12px 26px rgb(36 42 50 / 12%);
   --shadow-tooltip: 0 8px 24px rgb(0 0 0 / 18%);
+  --shadow-window-edge-detail:
+    inset 0 1px 0 rgb(255 255 255 / 82%),
+    inset 0 -1px 0 rgb(69 61 53 / 7%);
   --z-tooltip: 9999;
 }
 
@@ -123,6 +126,9 @@
   --shadow-tool-dock: 0 10px 24px rgb(0 0 0 / 22%);
   --shadow-tool-dock-hover: 0 14px 32px rgb(0 0 0 / 28%);
   --shadow-tooltip: 0 8px 24px rgb(0 0 0 / 42%);
+  --shadow-window-edge-detail:
+    inset 0 1px 0 rgb(255 255 255 / 8%),
+    inset 0 -1px 0 rgb(0 0 0 / 32%);
 }
 
 [data-accent] {

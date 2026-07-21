@@ -1,0 +1,35 @@
+Frozen SHA-256: A15904C7501BD6F55F8F1DF21A1CF599E7A3DECAFE8814F44D5968B454F8661B
+Package size: 17,992,704 bytes
+Package mtime: 2026-07-19 22:29:10.286 +08:00
+Fixture: %TEMP%\OpenDeskTools-windowing-final-A15904C7-28a021002fa8438e8c769623dfecff9c
+
+Native geometry
+- Top HWND 1970704: WindowRect 2512,212,2892,732; ClientRect 0,0,380,520; client screen origin 2512,212.
+- WRY_WEBVIEW HWND 13176764: WindowRect 2512,212,2892,732; ClientRect 0,0,380,520; client screen origin 2512,212.
+- Chrome_WidgetWin_0 HWND 528904: WindowRect 2512,212,2892,732; ClientRect 0,0,380,520; client screen origin 2512,212.
+- Top region type 3; all four corner points outside the rounded region; center inside.
+
+Lossless show/hidden image comparison
+- Images: 400x540 RGBA; relative window bounds (10,10)-(390,530); middle 60% sampled.
+- left outside x=9: 0/312 changed, white.
+- left edge x=10: 312/312 changed to #e0dedc.
+- right edge x=389: 0/312 changed, white.
+- right outside x=390: 0/312 changed, white.
+- top outside y=9: 0/228 changed, white.
+- top edge y=10: 228/228 changed to #e0dedc.
+- bottom edge y=529: 0/228 changed, white.
+- bottom outside y=530: 0/228 changed, white.
+
+Frontend surface_metrics for clipboard/main
+- cause=mounted; devicePixelRatio=1; innerWidth=380; innerHeight=520; visualViewportScale=1.
+- documentElement: rect=(0,0)-(380,520), client=380x520, offset=380x520; position=static; inset="auto auto auto auto"; boxSizing=border-box; borders=0/0/0/0px; radius=0; background=transparent; zoom=1.
+- body: rect=(0,0)-(380,520), client=380x520, offset=380x520; position=static; inset="auto auto auto auto"; boxSizing=border-box; borders=0/0/0/0px; radius=0; background=transparent; zoom=1.
+- appRoot: rect=(0,0)-(380,520), client=380x520, offset=380x520; position=static; inset="auto auto auto auto"; boxSizing=border-box; borders=0/0/0/0px; radius=0; background=transparent; zoom=1.
+- windowRoot: rect=(0,0)-(380,520), client=380x520, offset=380x520; position=relative; inset="0px 0px 0px 0px"; boxSizing=border-box; borders=0/0/0/0px; radius=0; background=transparent; zoom=1.
+- surface: rect=(0,0)-(380,520), client=378x518, offset=380x520; position=absolute; inset="0px 0px 0px 0px"; boxSizing=border-box; computed borders top/right/bottom/left=1/1/1/1px; radius=12px; background=rgb(249, 248, 246); zoom=1.
+- The complete raw clipboard and clipboard-preview surface_metrics events are preserved in qa-trace.log.
+
+Conclusion
+- DOM metrics and computed styles report a symmetric four-sided 1px border, but the final raster still omits the right and bottom inner edges.
+- No native/DWM continuous outside line is present, and native/client/WRY/Chrome geometry is identical.
+- C FAIL. Per fail-fast, preview/B3/D smoke was not run; B2 was not started.

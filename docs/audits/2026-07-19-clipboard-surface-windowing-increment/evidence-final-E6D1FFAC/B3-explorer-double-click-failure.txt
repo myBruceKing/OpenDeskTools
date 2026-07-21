@@ -1,0 +1,11 @@
+Controlled Explorer HWND: 2953682
+Controlled Explorer LocationURL: file:///%TEMP%/OpenDeskTools-windowing-final-E6D1FFAC-dc3765942bd647d0a1df66bd161e9974/target/
+Excluded user Explorer HWND: 11013508
+QA ODT PID: 107356
+Clipboard popup HWND: 529020 (hex 0x8127c)
+Captured target_top: Some(2953682)
+Input available: true
+Target directory file count before double click: 0
+Target directory file count after double click: 0
+
+During the real files-row double click, the foreground watcher observed top HWND 0x8127c, which is the clipboard popup itself, and closed the main surface as a different root before input handoff completed. The subsequent preview open failed because the main surface was already hidden. Expected one copied file; actual zero files. B3 FAIL.

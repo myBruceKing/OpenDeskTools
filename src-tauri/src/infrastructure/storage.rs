@@ -8,7 +8,7 @@ use thiserror::Error;
 
 const DATABASE_FILE_NAME: &str = "opendesktools.sqlite3";
 const FILES_DIRECTORY_NAME: &str = "files";
-const LATEST_SCHEMA_VERSION: u32 = 3;
+const LATEST_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -325,6 +325,81 @@ fn run_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
     }
 
+    if current_version < 4 {
+        transaction.execute_batch(
+            "ALTER TABLE clipboard_history
+                ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1
+                CHECK (content_revision > 0 AND content_revision <= 9007199254740991);
+             ALTER TABLE clipboard_history ADD COLUMN source_icon_path TEXT;",
+        )?;
+        transaction.execute(
+            "INSERT INTO schema_migrations (version) VALUES (?1)",
+            [4_u32],
+        )?;
+    }
+
+    if current_version < 5 {
+        transaction.execute_batch(
+            "ALTER TABLE clipboard_history RENAME TO clipboard_history_v4;
+             CREATE TABLE clipboard_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id > 0),
+                content_type TEXT NOT NULL CHECK (content_type IN ('text', 'image', 'files')),
+                text_content TEXT,
+                file_path TEXT,
+                content_hash TEXT NOT NULL CHECK (
+                    length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*'
+                ),
+                source_application TEXT CHECK (
+                    source_application IS NULL OR length(source_application) <= 256
+                ),
+                source_process TEXT CHECK (
+                    source_process IS NULL OR length(source_process) <= 512
+                ),
+                captured_at_ms INTEGER NOT NULL CHECK (
+                    captured_at_ms >= 0 AND captured_at_ms <= 9007199254740991
+                ),
+                byte_size INTEGER NOT NULL CHECK (
+                    byte_size >= 0 AND byte_size <= 9007199254740991
+                ),
+                is_favorite INTEGER NOT NULL DEFAULT 0 CHECK (is_favorite IN (0, 1)),
+                content_revision INTEGER NOT NULL DEFAULT 1 CHECK (
+                    content_revision > 0 AND content_revision <= 9007199254740991
+                ),
+                source_icon_path TEXT,
+                file_paths_json TEXT,
+                CHECK (
+                    (content_type = 'text' AND text_content IS NOT NULL AND file_path IS NULL
+                        AND file_paths_json IS NULL
+                        AND length(CAST(text_content AS BLOB)) <= 4194304
+                        AND byte_size = length(CAST(text_content AS BLOB)))
+                    OR (content_type = 'image' AND text_content IS NULL AND file_path IS NOT NULL
+                        AND file_paths_json IS NULL)
+                    OR (content_type = 'files' AND text_content IS NULL AND file_path IS NULL
+                        AND file_paths_json IS NOT NULL)
+                ),
+                UNIQUE (content_type, content_hash)
+             );
+             INSERT INTO clipboard_history (
+                id, content_type, text_content, file_path, content_hash,
+                source_application, source_process, captured_at_ms, byte_size,
+                is_favorite, content_revision, source_icon_path, file_paths_json
+             ) SELECT
+                id, content_type, text_content, file_path, content_hash,
+                source_application, source_process, captured_at_ms, byte_size,
+                is_favorite, content_revision, source_icon_path, NULL
+             FROM clipboard_history_v4;
+             DROP TABLE clipboard_history_v4;
+             CREATE INDEX clipboard_history_recency_idx
+                ON clipboard_history (captured_at_ms DESC, id DESC);
+             CREATE INDEX clipboard_history_favorite_recency_idx
+                ON clipboard_history (is_favorite, captured_at_ms DESC, id DESC);",
+        )?;
+        transaction.execute(
+            "INSERT INTO schema_migrations (version) VALUES (?1)",
+            [5_u32],
+        )?;
+    }
+
     transaction.commit()?;
     Ok(())
 }
@@ -417,7 +492,7 @@ mod tests {
 
         let storage = StorageService::initialize(&data_root).unwrap();
 
-        assert_eq!(storage.migration_version().unwrap(), 3);
+        assert_eq!(storage.migration_version().unwrap(), 5);
         assert_eq!(
             storage.read_setting("theme.mode").unwrap().as_deref(),
             Some("dark")
@@ -426,6 +501,68 @@ mod tests {
             storage
                 .query_i64(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'clipboard_history'",
+                    &[]
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn version_three_clipboard_rows_migrate_with_initial_revision_and_no_icon_path() {
+        let temp = tempdir().unwrap();
+        let data_root = temp.path().join("app-data");
+        fs::create_dir_all(&data_root).unwrap();
+        let connection = Connection::open(data_root.join(DATABASE_FILE_NAME)).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY NOT NULL,
+                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );
+                 INSERT INTO schema_migrations (version) VALUES (1), (2), (3);
+                 CREATE TABLE application_settings (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );
+                 CREATE TABLE clipboard_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id > 0),
+                    content_type TEXT NOT NULL,
+                    text_content TEXT,
+                    file_path TEXT,
+                    content_hash TEXT NOT NULL,
+                    source_application TEXT,
+                    source_process TEXT,
+                    captured_at_ms INTEGER NOT NULL,
+                    byte_size INTEGER NOT NULL,
+                    is_favorite INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE (content_type, content_hash)
+                 );
+                 INSERT INTO clipboard_history (
+                    content_type, text_content, content_hash, captured_at_ms, byte_size
+                 ) VALUES (
+                    'text', 'legacy',
+                    'c49fea7425fa7f8699897a97c159c6690267d9003bb78c53c61283aab5a767c8',
+                    1, 6
+                 );",
+            )
+            .unwrap();
+        drop(connection);
+
+        let storage = StorageService::initialize(&data_root).unwrap();
+
+        assert_eq!(storage.migration_version().unwrap(), 5);
+        assert_eq!(
+            storage
+                .query_i64("SELECT content_revision FROM clipboard_history", &[])
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            storage
+                .query_i64(
+                    "SELECT source_icon_path IS NULL FROM clipboard_history",
                     &[]
                 )
                 .unwrap(),

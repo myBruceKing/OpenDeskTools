@@ -1,11 +1,13 @@
 export type ClipboardFilter = "all" | "text" | "image" | "favorite";
 
-export type ClipboardItemKind = "text" | "image";
+export type ClipboardItemKind = "text" | "image" | "files";
+export type ClipboardDisplayCategory = "text" | "image" | "files";
 
 export type ClipboardPrivacy = "normal" | "sensitive" | "unknown";
 
 export type ClipboardItemViewModel = {
   id: string;
+  revision: number;
   kind: ClipboardItemKind;
   title: string;
   preview: string;
@@ -17,7 +19,9 @@ export type ClipboardItemViewModel = {
   favorite: boolean;
   locked: boolean;
   privacy: ClipboardPrivacy;
+  sourceIconAvailable: boolean;
   iconTone: "note" | "chrome" | "image" | "excel" | "word";
+  displayCategory?: ClipboardDisplayCategory;
 };
 
 export type ClipboardSettingsViewModel = {
@@ -38,6 +42,7 @@ export type ClipboardHistoryQuery = {
 
 export type ClipboardHistoryItem = {
   id: string;
+  revision: number;
   kind: ClipboardItemKind;
   textContent: string | null;
   sourceApplication: string | null;
@@ -45,17 +50,52 @@ export type ClipboardHistoryItem = {
   capturedAtMs: number;
   byteSize: number;
   isFavorite: boolean;
+  sourceIconAvailable: boolean;
+  fileCount?: number | null;
+  fileNames?: string[] | null;
+  displayCategory?: ClipboardDisplayCategory;
 };
 
 export type ClipboardHistoryResult = {
   items: ClipboardHistoryItem[];
   totalCount: number;
   monitoring: "running" | "unavailable";
+  surfaceActive: boolean;
+  inputAvailable: boolean;
 };
 
 export type ClipboardCommandError = {
   code: string;
   message: string;
+  retryable: boolean;
+};
+
+export type ClipboardItemAction = "copy" | "input";
+
+export type ClipboardItemActionResult = {
+  action: "copied" | "input";
+  clipboardUpdated: true;
+};
+
+export type ClipboardSurfaceCloseResult = {
+  closed: true;
+  inputAvailable: false;
+};
+
+export type ClipboardItemActionState = {
+  action: ClipboardItemAction;
+  itemId: string;
+  status: "pending" | "success" | "error";
+  message: string;
+  code: string | null;
+  retryable: boolean;
+};
+
+export type ClipboardTextEditState = {
+  itemId: string;
+  status: "pending" | "success" | "error";
+  message: string;
+  code: string | null;
   retryable: boolean;
 };
 
@@ -78,6 +118,7 @@ export type ClipboardActionAvailability = {
   canDelete: boolean;
   canOpenSource: boolean;
   canClearHistory: boolean;
+  canEditText: boolean;
 };
 
 export type ClipboardPageViewModel = {
@@ -96,6 +137,11 @@ export type ClipboardControllerState = {
   error: ClipboardCommandError | null;
   realtimeError: ClipboardCommandError | null;
   pendingItemIds: readonly string[];
+  itemAction: ClipboardItemActionState | null;
+  textEdit: ClipboardTextEditState | null;
+  surfaceActive: boolean;
+  surfaceClosing: boolean;
+  surfaceError: ClipboardCommandError | null;
   clearing: boolean;
 };
 
@@ -113,14 +159,17 @@ const DISABLED_ACTIONS: ClipboardActionAvailability = {
   canFavorite: false,
   canDelete: false,
   canOpenSource: false,
-  canClearHistory: false
+  canClearHistory: false,
+  canEditText: false
 };
 
 const READY_ACTIONS: ClipboardActionAvailability = {
   ...DISABLED_ACTIONS,
+  canCopy: true,
   canFavorite: true,
   canDelete: true,
-  canClearHistory: true
+  canClearHistory: true,
+  canEditText: true
 };
 
 export const EMPTY_CLIPBOARD_VIEW_MODEL: ClipboardPageViewModel = {
@@ -137,7 +186,7 @@ export const EMPTY_CLIPBOARD_VIEW_MODEL: ClipboardPageViewModel = {
   actions: DISABLED_ACTIONS
 };
 
-export function createClipboardLoadingState(): ClipboardControllerState {
+export function createClipboardLoadingState(surfaceActive = false): ClipboardControllerState {
   return {
     status: "loading",
     viewModel: {
@@ -148,6 +197,11 @@ export function createClipboardLoadingState(): ClipboardControllerState {
     error: null,
     realtimeError: null,
     pendingItemIds: [],
+    itemAction: null,
+    textEdit: null,
+    surfaceActive,
+    surfaceClosing: false,
+    surfaceError: null,
     clearing: false
   };
 }
@@ -186,10 +240,12 @@ export function toClipboardItemViewModel(item: ClipboardHistoryItem): ClipboardI
   const sourceApp = item.sourceApplication?.trim() || "来源不可用";
   const sourceProcess = item.sourceProcess?.trim() || "来源不可用";
   const date = formatDateParts(item.capturedAtMs);
+  const displayCategory = item.displayCategory ?? item.kind;
 
   if (item.kind === "image") {
     return {
       id: item.id,
+      revision: item.revision,
       kind: "image",
       title: "图片内容",
       preview: "图片预览暂不可用",
@@ -200,7 +256,31 @@ export function toClipboardItemViewModel(item: ClipboardHistoryItem): ClipboardI
       favorite: item.isFavorite,
       locked: false,
       privacy: "unknown",
-      iconTone: "image"
+      sourceIconAvailable: item.sourceIconAvailable,
+      iconTone: "image",
+      displayCategory
+    };
+  }
+
+  if (item.kind === "files") {
+    const names = item.fileNames ?? [];
+    const count = item.fileCount ?? names.length;
+    return {
+      id: item.id,
+      revision: item.revision,
+      kind: "files",
+      title: count === 1 ? (names[0] ?? "文件") : `${count} 个文件`,
+      preview: names.join("\n"),
+      sourceApp,
+      sourceProcess,
+      ...date,
+      size: formatBytes(item.byteSize),
+      favorite: item.isFavorite,
+      locked: false,
+      privacy: "unknown",
+      sourceIconAvailable: item.sourceIconAvailable,
+      iconTone: displayCategory === "image" ? "image" : "note",
+      displayCategory
     };
   }
 
@@ -214,6 +294,7 @@ export function toClipboardItemViewModel(item: ClipboardHistoryItem): ClipboardI
 
   return {
     id: item.id,
+    revision: item.revision,
     kind: "text",
     title,
     preview,
@@ -224,7 +305,9 @@ export function toClipboardItemViewModel(item: ClipboardHistoryItem): ClipboardI
     favorite: item.isFavorite,
     locked: false,
     privacy: "unknown",
-    iconTone: "note"
+    sourceIconAvailable: item.sourceIconAvailable,
+    iconTone: "note",
+    displayCategory
   };
 }
 
@@ -234,7 +317,10 @@ export function createClipboardReadyViewModel(result: ClipboardHistoryResult): C
     totalCount: result.totalCount,
     items: result.items.map(toClipboardItemViewModel),
     settings: READY_SETTINGS,
-    actions: READY_ACTIONS
+    actions: {
+      ...READY_ACTIONS,
+      canTypeIntoTarget: result.inputAvailable
+    }
   };
 }
 
@@ -279,29 +365,68 @@ export function parseClipboardHistoryItem(value: unknown): ClipboardHistoryItem 
     throw new Error("Invalid clipboard item payload");
   }
   const kind = value.kind;
-  if (kind !== "text" && kind !== "image") {
+  if (kind !== "text" && kind !== "image" && kind !== "files") {
     throw new Error("Invalid clipboard payload field: kind");
   }
   const textContent = nullableString(value, "textContent");
   if (
     (kind === "text" && textContent === null)
-    || (kind === "image" && textContent !== null)
+    || ((kind === "image" || kind === "files") && textContent !== null)
   ) {
     throw new Error("Invalid clipboard payload field: textContent");
   }
   if (typeof value.isFavorite !== "boolean") {
     throw new Error("Invalid clipboard payload field: isFavorite");
   }
+  const rawFileCount = value.fileCount;
+  const rawFileNames = value.fileNames;
+  const fileCount = rawFileCount === undefined || rawFileCount === null
+    ? null
+    : nonNegativeInteger(value, "fileCount");
+  const fileNames = rawFileNames === undefined || rawFileNames === null
+    ? null
+    : (() => {
+      if (!Array.isArray(rawFileNames) || rawFileNames.some((name) => (
+        typeof name !== "string" || name.length === 0 || /[\\/]/.test(name)
+      ))) {
+        throw new Error("Invalid clipboard payload field: fileNames");
+      }
+      return [...rawFileNames];
+    })();
+  if (kind === "files") {
+    if (fileCount === null || fileCount <= 0 || fileNames === null || fileNames.length !== fileCount) {
+      throw new Error("Invalid clipboard payload field: fileCount");
+    }
+  } else if (fileCount !== null || fileNames !== null) {
+    throw new Error("Invalid clipboard payload field: fileNames");
+  }
+  const displayCategory = value.displayCategory ?? (kind === "files" ? null : kind);
+  if (displayCategory !== "text" && displayCategory !== "image" && displayCategory !== "files") {
+    throw new Error("Invalid clipboard payload field: displayCategory");
+  }
+  if (kind !== "files" && displayCategory !== kind) {
+    throw new Error("Invalid clipboard payload field: displayCategory");
+  }
 
   return {
     id: canonicalPositiveI64(value, "id"),
+    revision: nonNegativeInteger(value, "revision"),
     kind,
     textContent,
     sourceApplication: nullableString(value, "sourceApplication"),
     sourceProcess: nullableString(value, "sourceProcess"),
     capturedAtMs: nonNegativeInteger(value, "capturedAtMs"),
     byteSize: nonNegativeInteger(value, "byteSize"),
-    isFavorite: value.isFavorite
+    isFavorite: value.isFavorite,
+    sourceIconAvailable: (() => {
+      if (typeof value.sourceIconAvailable !== "boolean") {
+        throw new Error("Invalid clipboard payload field: sourceIconAvailable");
+      }
+      return value.sourceIconAvailable;
+    })(),
+    fileCount,
+    fileNames,
+    displayCategory
   };
 }
 
@@ -321,7 +446,19 @@ export function parseClipboardHistoryResult(value: unknown): ClipboardHistoryRes
   if (value.monitoring !== "running" && value.monitoring !== "unavailable") {
     throw new Error("Invalid clipboard payload field: monitoring");
   }
-  return { items, totalCount, monitoring: value.monitoring };
+  if (typeof value.inputAvailable !== "boolean") {
+    throw new Error("Invalid clipboard payload field: inputAvailable");
+  }
+  if (typeof value.surfaceActive !== "boolean") {
+    throw new Error("Invalid clipboard payload field: surfaceActive");
+  }
+  return {
+    items,
+    totalCount,
+    monitoring: value.monitoring,
+    surfaceActive: value.surfaceActive,
+    inputAvailable: value.inputAvailable
+  };
 }
 
 export function parseClipboardDeleteResult(value: unknown): { deleted: boolean } {
@@ -336,6 +473,34 @@ export function parseClipboardClearResult(value: unknown): { deletedCount: numbe
     throw new Error("Invalid clipboard clear payload");
   }
   return { deletedCount: nonNegativeInteger(value, "deletedCount") };
+}
+
+export function parseClipboardItemActionResult(
+  value: unknown,
+  expectedAction: ClipboardItemActionResult["action"]
+): ClipboardItemActionResult {
+  if (
+    !isRecord(value)
+    || value.action !== expectedAction
+    || value.clipboardUpdated !== true
+  ) {
+    throw new Error("Invalid clipboard item action payload");
+  }
+  return {
+    action: expectedAction,
+    clipboardUpdated: true
+  };
+}
+
+export function parseClipboardSurfaceCloseResult(value: unknown): ClipboardSurfaceCloseResult {
+  if (
+    !isRecord(value)
+    || value.closed !== true
+    || value.inputAvailable !== false
+  ) {
+    throw new Error("Invalid clipboard surface close payload");
+  }
+  return { closed: true, inputAvailable: false };
 }
 
 export function normalizeClipboardCommandError(value: unknown): ClipboardCommandError {
@@ -371,9 +536,53 @@ export function normalizeClipboardCommandError(value: unknown): ClipboardCommand
       message: "剪贴板操作未完成，请刷新后重试。",
       retryable: true
     },
+    clipboard_write_unavailable: {
+      message: "无法写入系统剪贴板，请重试。",
+      retryable: true
+    },
+    clipboard_write_failed: {
+      message: "Windows 未完成剪贴板写入，请重试该记录。",
+      retryable: true
+    },
+    clipboard_target_unavailable: {
+      message: "目标窗口已不可用，请重新选择目标。",
+      retryable: false
+    },
+    clipboard_target_focus_denied: {
+      message: "暂时无法聚焦目标窗口，请重试。",
+      retryable: true
+    },
+    clipboard_input_denied: {
+      message: "权限级别不一致，无法输入到目标窗口。",
+      retryable: false
+    },
+    clipboard_input_cleanup_failed: {
+      message: "按键释放未确认，输入已暂停。",
+      retryable: false
+    },
     clipboard_subscription_unavailable: {
       message: "剪贴板实时更新暂时不可用，当前历史仍可查看。",
       retryable: true
+    },
+    clipboard_edit_empty: {
+      message: "内容不能为空。",
+      retryable: false
+    },
+    clipboard_edit_duplicate: {
+      message: "已存在相同内容，未保存。",
+      retryable: false
+    },
+    clipboard_revision_conflict: {
+      message: "内容已在其他位置更新，请重新编辑。",
+      retryable: true
+    },
+    clipboard_source_icon_unavailable: {
+      message: "来源图标暂不可用。",
+      retryable: false
+    },
+    clipboard_files_unavailable: {
+      message: "一个或多个原文件已不存在，无法复制或输入。",
+      retryable: false
     }
   };
   const presentation = known[code];

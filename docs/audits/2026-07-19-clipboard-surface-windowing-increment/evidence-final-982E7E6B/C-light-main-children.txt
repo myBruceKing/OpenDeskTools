@@ -1,0 +1,5 @@
+hwnd=791378|tid=19352|pid=42664|title=|class=WRY_WEBVIEW|rect=2512,212,2892,732
+hwnd=207490452|tid=19352|pid=42664|title=|class=Chrome_WidgetWin_0|rect=2512,212,2892,732
+hwnd=61869952|tid=31780|pid=85828|title=OpenDeskTools|class=Chrome_WidgetWin_1|rect=2512,212,2892,732
+hwnd=34082630|tid=31780|pid=85828|title=Chrome Legacy Window|class=Chrome_RenderWidgetHostHWND|rect=2512,212,2892,732
+hwnd=6820402|tid=25640|pid=38052|title=|class=Intermediate D3D Window|rect=2512,212,2892,732
