@@ -105,6 +105,17 @@ export type HotkeyClassification = {
   forceOverrideAllowed: boolean;
 };
 
+export type SystemHotkeyNotice = {
+  binding: string;
+  letter: string;
+  restartRequired: boolean;
+};
+
+export type HotkeyUpdateResult = {
+  snapshot: HotkeySnapshot;
+  systemHotkeyNotice: SystemHotkeyNotice | null;
+};
+
 export type HotkeyUpdatePatch = {
   actionId: GlobalHotkeyId;
   expectedRevision: number;
@@ -135,6 +146,7 @@ export type HotkeyControllerState = {
   snapshot: HotkeySnapshot | null;
   editor: HotkeyEditorState | null;
   error: HotkeyCommandError | null;
+  systemHotkeyNotice: SystemHotkeyNotice | null;
 };
 
 export type StableHotkeyActionId =
@@ -252,6 +264,39 @@ export function parseHotkeySnapshot(value: unknown): HotkeySnapshot {
   return {
     revision: Number(value.revision),
     actions: value.actions.map(parseAction)
+  };
+}
+
+export function parseSystemHotkeyNotice(value: unknown): SystemHotkeyNotice | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    throw new Error("Invalid system hotkey notice payload");
+  }
+  if (typeof value.binding !== "string") {
+    throw new Error("Invalid system hotkey notice field: binding");
+  }
+  if (typeof value.letter !== "string") {
+    throw new Error("Invalid system hotkey notice field: letter");
+  }
+  if (typeof value.restartRequired !== "boolean") {
+    throw new Error("Invalid system hotkey notice field: restartRequired");
+  }
+  return {
+    binding: value.binding,
+    letter: value.letter,
+    restartRequired: value.restartRequired
+  };
+}
+
+export function parseHotkeyUpdateResult(value: unknown): HotkeyUpdateResult {
+  if (!isRecord(value)) {
+    throw new Error("Invalid hotkey update payload");
+  }
+  return {
+    snapshot: parseHotkeySnapshot(value.snapshot),
+    systemHotkeyNotice: parseSystemHotkeyNotice(value.systemHotkeyNotice ?? null)
   };
 }
 

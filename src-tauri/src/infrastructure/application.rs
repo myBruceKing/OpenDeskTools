@@ -5,12 +5,18 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
 use thiserror::Error;
 
+use super::autostart::{AutostartError, AutostartManager};
 use super::clipboard::ClipboardService;
 use super::clipboard_input::ClipboardInputCoordinator;
 use super::clipboard_listener::{
     ClipboardHistoryEventSink, ClipboardListenerError, ClipboardListenerManager,
 };
-use super::hotkey::{HotkeyError, HotkeyManager, OrdinaryHotkeyLatch};
+use super::debug_qa;
+use super::disabled_hotkeys::{
+    self, DisabledHotkeysOutcome, OwnedLettersStore, SystemHotkeyDisabler,
+};
+use super::general_settings;
+use super::hotkey::{HotkeyError, HotkeyManager, HotkeySnapshot, OrdinaryHotkeyLatch};
 use super::hotkey_capture::HotkeyCaptureManager;
 use super::keyboard_hook::KeyboardHookBroker;
 use super::storage::{StorageError, StorageService};
@@ -24,11 +30,6 @@ pub enum ApplicationStatus {
     Running,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StartupMode {
-    Manual,
-}
-
 #[derive(Debug)]
 pub struct ApplicationRuntime {
     storage: Arc<StorageService>,
@@ -40,6 +41,8 @@ pub struct ApplicationRuntime {
     ordinary_hotkey_latch: OrdinaryHotkeyLatch,
     keyboard_hook: Arc<KeyboardHookBroker>,
     hotkey_capture: HotkeyCaptureManager,
+    system_hotkeys: SystemHotkeyDisabler,
+    autostart: AutostartManager,
     theme: ThemeService,
 }
 
@@ -63,6 +66,8 @@ pub enum ApplicationRuntimeError {
     Storage(#[from] StorageError),
     #[error("failed to initialize theme service: {0}")]
     Theme(#[from] ThemeError),
+    #[error("failed to initialize the autostart manager: {0}")]
+    Autostart(#[from] AutostartError),
     #[error("failed to initialize hotkey manager: {0}")]
     Hotkey(#[from] HotkeyError),
     #[error("failed to initialize clipboard service: {0}")]
@@ -86,11 +91,6 @@ impl ApplicationRuntime {
 
     pub fn status(&self) -> ApplicationStatus {
         ApplicationStatus::Running
-    }
-
-    pub fn startup_mode(&self) -> StartupMode {
-        // The minimal shell does not register an operating-system startup entry.
-        StartupMode::Manual
     }
 
     #[allow(dead_code)]
@@ -142,6 +142,61 @@ impl ApplicationRuntime {
         &self.ordinary_hotkey_latch
     }
 
+    pub(crate) fn system_hotkeys(&self) -> &SystemHotkeyDisabler {
+        &self.system_hotkeys
+    }
+
+    pub(crate) fn autostart(&self) -> &AutostartManager {
+        &self.autostart
+    }
+
+    /// Whether a normal (non-autostart) launch should stay hidden in the tray.
+    /// Defaults to showing the window when the preference cannot be read.
+    pub(crate) fn start_minimized(&self) -> bool {
+        general_settings::start_minimized(&self.storage).unwrap_or(false)
+    }
+
+    pub(crate) fn set_start_minimized(&self, enabled: bool) -> Result<(), StorageError> {
+        general_settings::set_start_minimized(&self.storage, enabled)
+    }
+
+    /// Whether closing the main window hides it to the tray (default) instead of
+    /// quitting the application. Defaults to hiding so the background services
+    /// survive a stray close when the preference cannot be read.
+    pub(crate) fn close_to_tray(&self) -> bool {
+        general_settings::close_to_tray(&self.storage).unwrap_or(true)
+    }
+
+    pub(crate) fn set_close_to_tray(&self, enabled: bool) -> Result<(), StorageError> {
+        general_settings::set_close_to_tray(&self.storage, enabled)
+    }
+
+    /// Keeps the system `DisabledHotkeys` registry value aligned with the
+    /// current hotkey configuration. Registry management is a best-effort
+    /// enhancement: failures are logged and yield `None` but never block hotkey
+    /// persistence, because the standard/low-level-hook registration paths still
+    /// apply. The returned outcome lets callers surface an Explorer-restart
+    /// notice only when the registry value actually changed.
+    pub(crate) fn sync_system_hotkey_disable(
+        &self,
+        snapshot: &HotkeySnapshot,
+    ) -> Option<DisabledHotkeysOutcome> {
+        let desired = disabled_hotkeys::desired_disabled_letters(snapshot);
+        match self.system_hotkeys.reconcile(&desired) {
+            Ok(outcome) => {
+                debug_qa::trace(format!(
+                    "disabled-hotkeys reconciled changed={} value={:?} managed={:?}",
+                    outcome.changed, outcome.registry_value, outcome.managed_letters
+                ));
+                Some(outcome)
+            }
+            Err(error) => {
+                eprintln!("failed to reconcile the DisabledHotkeys registry value: {error}");
+                None
+            }
+        }
+    }
+
     pub(crate) fn from_app_data_dir(
         app_data_dir: PathBuf,
     ) -> Result<Self, ApplicationRuntimeError> {
@@ -156,6 +211,9 @@ impl ApplicationRuntime {
         let surface = Arc::new(SurfaceManager::default());
         let clipboard_input =
             ClipboardInputCoordinator::new(Arc::clone(&clipboard), Arc::clone(&surface));
+        let system_hotkeys =
+            SystemHotkeyDisabler::for_system(Arc::clone(&storage) as Arc<dyn OwnedLettersStore>);
+        let autostart = AutostartManager::for_system()?;
         Ok(Self {
             storage,
             clipboard,
@@ -166,6 +224,8 @@ impl ApplicationRuntime {
             ordinary_hotkey_latch: OrdinaryHotkeyLatch::default(),
             hotkey_capture: HotkeyCaptureManager::new(Arc::clone(&keyboard_hook)),
             keyboard_hook,
+            system_hotkeys,
+            autostart,
             theme,
         })
     }
@@ -341,7 +401,11 @@ mod tests {
             super::super::theme::ThemeSnapshot::default()
         );
         assert_eq!(runtime.status(), ApplicationStatus::Running);
-        assert_eq!(runtime.startup_mode(), StartupMode::Manual);
+        // General preferences default before any write (backed by temp storage,
+        // deterministic). Autostart state is intentionally not asserted here
+        // because it reads the real per-user registry.
+        assert!(!runtime.start_minimized());
+        assert!(runtime.close_to_tray());
         assert_eq!(
             runtime.clipboard_listener().status(),
             super::super::clipboard_listener::ClipboardListenerStatus::Stopped

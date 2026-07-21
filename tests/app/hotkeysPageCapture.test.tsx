@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   appendBindingToken: vi.fn(),
   setForceOverrideSystem: vi.fn(),
   openEditor: vi.fn(),
+  dismissSystemHotkeyNotice: vi.fn(),
   controllerState: null as HotkeyControllerState | null
 }));
 
@@ -34,7 +35,8 @@ vi.mock("../../src/app/useHotkeyController", () => ({
     setBinding: mocks.setBinding,
     appendBindingToken: mocks.appendBindingToken,
     setForceOverrideSystem: mocks.setForceOverrideSystem,
-    save: mocks.saveEditor
+    save: mocks.saveEditor,
+    dismissSystemHotkeyNotice: mocks.dismissSystemHotkeyNotice
   })
 }));
 
@@ -175,8 +177,45 @@ describe("HotkeysPage native capture lifecycle", () => {
     expect(dialog.textContent).toContain("未持久化或未生效时会保留弹窗并显示原因");
     expect(dialog.textContent).toContain("只有保存后状态显示“已注册”才算生效");
     expect(dialog.textContent).toContain("此组合由 Windows 使用，需要明确确认强制覆盖");
+    expect(dialog.textContent).toContain("DisabledHotkeys");
+    expect(dialog.textContent).toContain("需重启资源管理器或重启电脑");
     expect(document.querySelector("[role='switch']")?.getAttribute("aria-checked")).toBe("true");
     expect(getButton("保存").disabled).toBe(false);
+  });
+
+  it("omits the DisabledHotkeys notice for system combos that are not bare Win+letter", async () => {
+    mocks.controllerState = readyEditorState({
+      actionId: "clipboardPanel",
+      binding: "Win+Shift+S",
+      classification: "system_reserved",
+      forceOverrideSystem: true
+    });
+    await act(async () => {
+      root.render(<HotkeysPage onSnapshotChanged={async () => undefined} />);
+    });
+
+    const dialog = document.querySelector<HTMLElement>("[role='dialog']")!;
+    expect(dialog.textContent).toContain("此组合由 Windows 使用，需要明确确认强制覆盖");
+    expect(dialog.textContent).not.toContain("DisabledHotkeys");
+  });
+
+  it("shows the Explorer restart popup when a system hotkey notice is present", async () => {
+    const base = readyEditorState();
+    mocks.controllerState = {
+      ...base,
+      editor: null,
+      systemHotkeyNotice: { binding: "Win+V", letter: "V", restartRequired: true }
+    };
+    await act(async () => {
+      root.render(<HotkeysPage onSnapshotChanged={async () => undefined} />);
+    });
+
+    const dialog = document.querySelector<HTMLElement>("[role='dialog']")!;
+    expect(dialog.textContent).toContain("需要重启资源管理器");
+    expect(dialog.textContent).toContain("已在系统层禁用 Win+V");
+
+    await act(async () => getButton("知道了").click());
+    expect(mocks.dismissSystemHotkeyNotice).toHaveBeenCalledOnce();
   });
 });
 
@@ -226,7 +265,8 @@ function readyEditorState({
       forceOverrideSystem,
       saving: false,
       error: null
-    }
+    },
+    systemHotkeyNotice: null
   };
 }
 

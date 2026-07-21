@@ -1,4 +1,5 @@
 pub mod application;
+pub mod autostart;
 pub mod clipboard;
 pub mod clipboard_input;
 pub mod clipboard_listener;
@@ -7,6 +8,8 @@ pub mod clipboard_surface_pointer;
 pub mod clipboard_surface_window;
 pub mod clipboard_writer;
 pub mod debug_qa;
+pub mod disabled_hotkeys;
+pub mod general_settings;
 pub mod hotkey;
 pub mod hotkey_capture;
 pub mod image;

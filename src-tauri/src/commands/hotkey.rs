@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::infrastructure::application::ApplicationRuntime;
+use crate::infrastructure::disabled_hotkeys::{self, DisabledHotkeysOutcome};
 use crate::infrastructure::hotkey::{
     classify_binding, HotkeyActionId, HotkeyBinding, HotkeyBindingClassification, HotkeyError,
     HotkeySnapshot, HotkeyValidationError, TauriHotkeyRegistrar, UpdateHotkeyBinding,
@@ -29,6 +30,21 @@ pub struct HotkeyBindingClassificationResponse {
     classification: HotkeyBindingClassification,
     message: String,
     force_override_allowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemHotkeyNotice {
+    binding: String,
+    letter: String,
+    restart_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateHotkeyBindingResponse {
+    snapshot: HotkeySnapshot,
+    system_hotkey_notice: Option<SystemHotkeyNotice>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -120,7 +136,7 @@ pub fn update_hotkey_binding<R: Runtime>(
     app: AppHandle<R>,
     runtime: State<'_, ApplicationRuntime>,
     patch: UpdateHotkeyBindingPatch,
-) -> Result<HotkeySnapshot, HotkeyCommandError> {
+) -> Result<UpdateHotkeyBindingResponse, HotkeyCommandError> {
     let event_app = app.clone();
     let registrar = TauriHotkeyRegistrar::new(&app, runtime.keyboard_hook(), move |event| {
         crate::queue_forced_hotkey_event(&event_app, event)
@@ -139,7 +155,42 @@ pub fn update_hotkey_binding<R: Runtime>(
         )
         .map_err(map_error)?;
     runtime.ordinary_hotkey_latch().clear_action(action_id);
-    Ok(updated)
+    let outcome = runtime.sync_system_hotkey_disable(&updated);
+    let system_hotkey_notice = build_system_hotkey_notice(action_id, &updated, outcome.as_ref());
+    Ok(UpdateHotkeyBindingResponse {
+        snapshot: updated,
+        system_hotkey_notice,
+    })
+}
+
+/// Produces an Explorer-restart notice only when saving this action actually
+/// added a bare `Win+<letter>` to the system `DisabledHotkeys` value. When the
+/// letter was already disabled (no registry change) no notice is emitted.
+fn build_system_hotkey_notice(
+    action_id: HotkeyActionId,
+    snapshot: &HotkeySnapshot,
+    outcome: Option<&DisabledHotkeysOutcome>,
+) -> Option<SystemHotkeyNotice> {
+    let outcome = outcome?;
+    if !outcome.changed {
+        return None;
+    }
+    let action = snapshot
+        .actions
+        .iter()
+        .find(|candidate| candidate.action_id == action_id)?;
+    if !action.configured_enabled || !action.force_override_system || !action.action_available {
+        return None;
+    }
+    let letter = disabled_hotkeys::win_single_letter(&action.binding)?;
+    if !outcome.managed_letters.contains(&letter) {
+        return None;
+    }
+    Some(SystemHotkeyNotice {
+        binding: action.binding.clone(),
+        letter: letter.to_string(),
+        restart_required: true,
+    })
 }
 
 fn map_error(error: HotkeyError) -> HotkeyCommandError {
@@ -237,6 +288,101 @@ fn capture_command_error(code: &'static str) -> HotkeyCaptureCommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::hotkey::{HotkeyRegistrationSnapshot, HotkeyRuntimeState};
+
+    fn win_v_snapshot(
+        configured_enabled: bool,
+        force_override_system: bool,
+        action_available: bool,
+        binding: &str,
+    ) -> HotkeySnapshot {
+        HotkeySnapshot {
+            revision: 1,
+            actions: vec![HotkeyRegistrationSnapshot {
+                action_id: HotkeyActionId::ClipboardOpenPanel,
+                binding: binding.to_owned(),
+                configured_enabled,
+                force_override_system,
+                action_available,
+                classification: HotkeyBindingClassification::SystemReserved,
+                runtime_state: HotkeyRuntimeState::Registered,
+                runtime_backend: None,
+                detail: None,
+            }],
+        }
+    }
+
+    fn outcome(changed: bool, managed: &str) -> DisabledHotkeysOutcome {
+        DisabledHotkeysOutcome {
+            changed,
+            managed_letters: managed.chars().collect(),
+            registry_value: managed.to_owned(),
+        }
+    }
+
+    #[test]
+    fn notice_emitted_only_when_registry_added_the_saved_win_letter() {
+        let snapshot = win_v_snapshot(true, true, true, "Win+V");
+        let notice = build_system_hotkey_notice(
+            HotkeyActionId::ClipboardOpenPanel,
+            &snapshot,
+            Some(&outcome(true, "V")),
+        )
+        .expect("a changed registry with the managed letter should produce a notice");
+        assert_eq!(notice.binding, "Win+V");
+        assert_eq!(notice.letter, "V");
+        assert!(notice.restart_required);
+    }
+
+    #[test]
+    fn notice_suppressed_when_registry_unchanged_or_letter_not_managed() {
+        let snapshot = win_v_snapshot(true, true, true, "Win+V");
+        // No change means the letter was already disabled: no restart needed.
+        assert!(build_system_hotkey_notice(
+            HotkeyActionId::ClipboardOpenPanel,
+            &snapshot,
+            Some(&outcome(false, "V")),
+        )
+        .is_none());
+        // Changed but the saved letter is not among the managed letters.
+        assert!(build_system_hotkey_notice(
+            HotkeyActionId::ClipboardOpenPanel,
+            &snapshot,
+            Some(&outcome(true, "R")),
+        )
+        .is_none());
+        // No reconcile outcome at all (registry access failed).
+        assert!(
+            build_system_hotkey_notice(HotkeyActionId::ClipboardOpenPanel, &snapshot, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn notice_suppressed_for_disabled_unforced_or_non_win_letter_bindings() {
+        let managed = outcome(true, "V");
+        // Disabled binding.
+        assert!(build_system_hotkey_notice(
+            HotkeyActionId::ClipboardOpenPanel,
+            &win_v_snapshot(false, true, true, "Win+V"),
+            Some(&managed),
+        )
+        .is_none());
+        // Force override not requested.
+        assert!(build_system_hotkey_notice(
+            HotkeyActionId::ClipboardOpenPanel,
+            &win_v_snapshot(true, false, true, "Win+V"),
+            Some(&managed),
+        )
+        .is_none());
+        // Not a bare Win+letter combination.
+        assert!(build_system_hotkey_notice(
+            HotkeyActionId::ClipboardOpenPanel,
+            &win_v_snapshot(true, true, true, "Win+Shift+S"),
+            Some(&outcome(true, "")),
+        )
+        .is_none());
+    }
 
     #[test]
     fn classification_response_is_normalized_and_marks_force_capability() {

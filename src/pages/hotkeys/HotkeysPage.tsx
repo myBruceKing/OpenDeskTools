@@ -15,12 +15,13 @@ import { HotkeyList, type HotkeyListItem } from "../../components/patterns/Hotke
 import { ListRowDescription, ListRowTitle } from "../../components/patterns/ListRow";
 import { SectionTitle } from "../../components/patterns/Section";
 import { Button } from "../../components/primitives/Button";
-import { DialogShell } from "../../components/primitives/Dialog";
+import { DialogShell, NoticeDialog } from "../../components/primitives/Dialog";
 import {
   ShortcutCaptureField,
   type ShortcutCaptureFieldHandle
 } from "../../components/primitives/Field";
 import { HintTooltip } from "../../components/primitives/HintTooltip";
+import { InlineNotice, type InlineNoticeVariant } from "../../components/primitives/InlineNotice";
 import { SwitchRow } from "../static/SettingsRows";
 import styles from "../static/SettingsPages.module.css";
 
@@ -53,14 +54,20 @@ const classificationFallback: Record<HotkeyClassificationKind, string> = {
   unsupported_sequence: "当前连续按键序列不支持注册为全局快捷键，不能保存。"
 };
 
-function classificationClass(classification: HotkeyClassificationKind) {
+const WIN_SINGLE_LETTER_BINDING = /^Win\+[A-Za-z0-9]$/;
+
+function isWinSingleLetterBinding(normalizedBinding: string) {
+  return WIN_SINGLE_LETTER_BINDING.test(normalizedBinding);
+}
+
+function classificationVariant(classification: HotkeyClassificationKind): InlineNoticeVariant {
   if (classification === "ordinary") {
-    return styles.hotkeyClassificationSuccess;
+    return "success";
   }
   if (classification === "system_reserved") {
-    return styles.hotkeyClassificationWarning;
+    return "warning";
   }
-  return styles.hotkeyClassificationError;
+  return "error";
 }
 
 export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Promise<void> }) {
@@ -137,7 +144,7 @@ export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Pr
 
   return (
     <PageScaffold title="快捷键" description={description}>
-      {state.error && <div className={styles.hotkeyPageError} role="alert">{state.error.message}</div>}
+      {state.error && <InlineNotice variant="error">{state.error.message}</InlineNotice>}
       <div className={styles.hotkeyLayout}>
         <SettingsCard fill>
           <div className={styles.panelHeader}>
@@ -215,34 +222,28 @@ export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Pr
             />
 
             {nativeCapture.status === "starting" && (
-              <div className={styles.hotkeyClassificationPending} role="status">
-                正在准备系统组合捕获…
-              </div>
+              <InlineNotice variant="pending">正在准备系统组合捕获…</InlineNotice>
             )}
             {nativeCapture.status === "stopping" && (
-              <div className={styles.hotkeyClassificationPending} role="status">
-                正在停止系统组合捕获…
-              </div>
+              <InlineNotice variant="pending">正在停止系统组合捕获…</InlineNotice>
             )}
             {nativeCapture.message && (
-              <div className={styles.hotkeyClassificationWarning} role="status">
-                {nativeCapture.message}
-              </div>
+              <InlineNotice variant="warning">{nativeCapture.message}</InlineNotice>
             )}
 
             {editor.classificationStatus === "loading" && (
-              <div className={styles.hotkeyClassificationPending} role="status">正在检测快捷键组合…</div>
+              <InlineNotice variant="pending">正在检测快捷键组合…</InlineNotice>
             )}
             {classification && (
-              <div
-                className={classificationClass(classification.classification)}
+              <InlineNotice
+                variant={classificationVariant(classification.classification)}
                 role={classification.classification === "ordinary" ? "status" : "alert"}
               >
                 {classification.message || classificationFallback[classification.classification]}
-              </div>
+              </InlineNotice>
             )}
             {editor.classificationStatus === "error" && editor.error && (
-              <div className={styles.hotkeyClassificationError} role="alert">{editor.error.message}</div>
+              <InlineNotice variant="error">{editor.error.message}</InlineNotice>
             )}
 
             {classification?.classification === "system_reserved" && classification.forceOverrideAllowed && (
@@ -255,17 +256,36 @@ export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Pr
               />
             )}
 
+            {classification?.classification === "system_reserved" &&
+              editor.forceOverrideSystem &&
+              isWinSingleLetterBinding(classification.normalizedBinding) && (
+                <InlineNotice variant="warning" role="note">
+                  保存后会在系统层禁用该 Win 组合（写入 DisabledHotkeys 注册表），需重启资源管理器或重启电脑才能完全生效；解绑此快捷键或退出 OpenDeskTools 时会自动移除，不会影响你手动禁用的其它组合。
+                </InlineNotice>
+              )}
+
             {!editor.actionAvailable && (
-              <div className={styles.hotkeyActionUnavailable} role="note">
+              <InlineNotice variant="info">
                 当前功能尚未接入；可以保存配置，功能接入后生效。当前状态不会显示为已注册。
-              </div>
+              </InlineNotice>
             )}
             {editor.error && editor.classificationStatus !== "error" && (
-              <div className={styles.hotkeyClassificationError} role="alert">{editor.error.message}</div>
+              <InlineNotice variant="error">{editor.error.message}</InlineNotice>
             )}
           </div>
         )}
       </DialogShell>
+
+      <NoticeDialog
+        open={state.systemHotkeyNotice !== null}
+        title="需要重启资源管理器"
+        description={
+          state.systemHotkeyNotice
+            ? `已在系统层禁用 ${state.systemHotkeyNotice.binding}（写入 DisabledHotkeys 注册表）。请重启资源管理器或重启电脑后，OpenDeskTools 的接管才会完全生效；解绑此快捷键或退出 OpenDeskTools 时会自动移除。`
+            : undefined
+        }
+        onClose={hotkeys.dismissSystemHotkeyNotice}
+      />
     </PageScaffold>
   );
 }

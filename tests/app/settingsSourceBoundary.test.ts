@@ -60,7 +60,7 @@ describe("settings production source boundary", () => {
     expect(overviewPage).toContain("getToolWheelShortcutLabel");
   });
 
-  it("routes loaded overview truth into hotkeys and general pages", () => {
+  it("routes loaded backend truth into hotkeys and general pages", () => {
     const app = source("src/app/App.tsx");
     const hotkeysPage = source("src/pages/hotkeys/HotkeysPage.tsx");
     const generalPage = source("src/pages/general/GeneralPage.tsx");
@@ -68,11 +68,14 @@ describe("settings production source boundary", () => {
     expect(app).toContain("<HotkeysPage onSnapshotChanged={refreshOverview} />");
     expect(hotkeysPage).toContain("useHotkeyController");
     expect(hotkeysPage).toContain("onSnapshotChanged");
-    expect(app).toContain("<GeneralPage version={overview.version} startupEnabled={overview.startupEnabled}");
+    expect(app).toContain("<GeneralPage />");
     expect(hotkeysPage).not.toContain("EMPTY_OVERVIEW_VIEW_MODEL");
     expect(hotkeysPage).not.toContain("OverviewHotkeyViewModel");
-    expect(generalPage).toContain("startupEnabled: boolean | null");
-    expect(generalPage).toContain("version: string | null");
+    // The general page sources real backend truth (autostart Run key + data
+    // directory) through its own controller instead of fake local state.
+    expect(generalPage).toContain("useGeneralSettings");
+    expect(generalPage).toContain("viewModel.autostartEnabled");
+    expect(generalPage).not.toContain("useState");
   });
 
   it("renders all backend classification branches without pretending unavailable actions registered", () => {

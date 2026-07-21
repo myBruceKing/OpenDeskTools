@@ -141,9 +141,28 @@ pub fn run() {
                 runtime_state.keyboard_hook(),
                 move |event| queue_forced_hotkey_event(&forced_app, event),
             );
-            runtime_state.hotkeys().reconcile(&registrar)?;
+            let hotkey_snapshot = runtime_state.hotkeys().reconcile(&registrar)?;
+            runtime_state.sync_system_hotkey_disable(&hotkey_snapshot);
+            // Keep the registered login command pointed at the current
+            // executable (self-heals across moves/updates) without ever
+            // re-enabling autostart from a login launch.
+            if let Err(error) = runtime_state.autostart().sync_if_enabled() {
+                eprintln!("failed to reconcile the autostart command: {error}");
+            }
+            let autostart_launch =
+                infrastructure::autostart::is_autostart_launch(std::env::args_os());
+            let start_minimized = runtime_state.start_minimized();
             if let Some(window) = app.get_webview_window("main") {
                 configure_main_window(&window)?;
+                // The main window ships hidden (`visible: false`) so a login
+                // autostart launch stays silent in the tray. A normal launch
+                // reveals it explicitly unless the user asked to start
+                // minimized, avoiding a startup flash either way.
+                if !autostart_launch && !start_minimized {
+                    if let Err(error) = window.show() {
+                        eprintln!("failed to reveal the main window on launch: {error}");
+                    }
+                }
             }
             app.manage(TrayLifecycle::default());
             infrastructure::tray::install(app.handle())?;
@@ -198,6 +217,11 @@ pub fn run() {
             commands::hotkey::classify_hotkey_binding,
             commands::hotkey::update_hotkey_binding,
             commands::overview::get_overview_view_model,
+            commands::general::get_general_settings,
+            commands::general::set_autostart_enabled,
+            commands::general::set_start_minimized,
+            commands::general::set_close_to_tray,
+            commands::general::open_data_directory,
             commands::theme::get_theme_preferences,
             commands::theme::update_theme_preferences
         ])
@@ -267,7 +291,11 @@ fn handle_main_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri
         .app_handle()
         .try_state::<TrayLifecycle>()
         .is_some_and(|lifecycle| lifecycle.is_exit_requested());
-    let route = route_window_lifecycle(input, exit_requested);
+    let close_to_tray = window
+        .app_handle()
+        .try_state::<ApplicationRuntime>()
+        .is_none_or(|runtime| runtime.close_to_tray());
+    let route = route_window_lifecycle(input, exit_requested, close_to_tray);
     execute_main_window_route(window, event, route);
 }
 
@@ -293,6 +321,10 @@ fn execute_main_window_route<R: Runtime>(
         if let Err(error) = window.hide() {
             eprintln!("failed to hide the main window to the tray: {error}");
         }
+    }
+    if route.exit_app {
+        // "Close to tray" is disabled: run the full teardown sequence and quit.
+        infrastructure::tray::exit_application(window.app_handle());
     }
 }
 

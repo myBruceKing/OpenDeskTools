@@ -103,7 +103,7 @@ function App() {
       case "floatingTheme":
         return <ThemePage state={themeController.state} onUpdate={themeController.update} />;
       case "general":
-        return <GeneralPage version={overview.version} startupEnabled={overview.startupEnabled} />;
+        return <GeneralPage />;
       case "overview":
       default:
         return <OverviewPage viewModel={overview} />;

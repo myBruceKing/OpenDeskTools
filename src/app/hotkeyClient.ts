@@ -2,10 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   parseHotkeyClassification,
   parseHotkeySnapshot,
+  parseHotkeyUpdateResult,
   toStableHotkeyActionId,
   type HotkeyClassification,
   type HotkeySnapshot,
-  type HotkeyUpdatePatch
+  type HotkeyUpdatePatch,
+  type HotkeyUpdateResult
 } from "./hotkeyModel";
 
 type InvokeFunction = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -13,7 +15,7 @@ type InvokeFunction = (command: string, args?: Record<string, unknown>) => Promi
 export type HotkeyClient = {
   getSnapshot: () => Promise<HotkeySnapshot>;
   classify: (binding: string) => Promise<HotkeyClassification>;
-  update: (patch: HotkeyUpdatePatch) => Promise<HotkeySnapshot>;
+  update: (patch: HotkeyUpdatePatch) => Promise<HotkeyUpdateResult>;
 };
 
 export function createHotkeyClient({
@@ -33,7 +35,7 @@ export function createHotkeyClient({
     },
 
     async update(patch) {
-      return parseHotkeySnapshot(
+      return parseHotkeyUpdateResult(
         await invokeFunction("update_hotkey_binding", {
           patch: { ...patch, actionId: toStableHotkeyActionId(patch.actionId) }
         })

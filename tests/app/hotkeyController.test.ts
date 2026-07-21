@@ -8,8 +8,17 @@ import {
 import type {
   HotkeyClassification,
   HotkeySnapshot,
-  HotkeyUpdatePatch
+  HotkeyUpdatePatch,
+  HotkeyUpdateResult,
+  SystemHotkeyNotice
 } from "../../src/app/hotkeyModel";
+
+function updateResult(
+  snap: HotkeySnapshot,
+  systemHotkeyNotice: SystemHotkeyNotice | null = null
+): HotkeyUpdateResult {
+  return { snapshot: snap, systemHotkeyNotice };
+}
 
 function snapshot(
   revision = 1,
@@ -67,7 +76,7 @@ function client(overrides: Partial<HotkeyClient> = {}): HotkeyClient {
   return {
     getSnapshot: async () => snapshot(),
     classify: async () => classified("ordinary"),
-    update: async () => snapshot(2),
+    update: async () => updateResult(snapshot(2)),
     ...overrides
   };
 }
@@ -183,8 +192,8 @@ describe("HotkeyController", () => {
   });
 
   it("does not update the list optimistically and adopts only the returned backend snapshot", async () => {
-    const request = deferred<HotkeySnapshot>();
-    const update = vi.fn<(patch: HotkeyUpdatePatch) => Promise<HotkeySnapshot>>(
+    const request = deferred<HotkeyUpdateResult>();
+    const update = vi.fn<(patch: HotkeyUpdatePatch) => Promise<HotkeyUpdateResult>>(
       () => request.promise
     );
     const controller = new HotkeyController(client({ update }));
@@ -204,7 +213,7 @@ describe("HotkeyController", () => {
       forceOverrideSystem: false
     });
 
-    request.resolve(snapshot(2, { binding: "Ctrl+K", runtimeState: "registered" }));
+    request.resolve(updateResult(snapshot(2, { binding: "Ctrl+K", runtimeState: "registered" })));
     await saving;
     expect(controller.getSnapshot()).toMatchObject({
       snapshot: snapshot(2, { binding: "Ctrl+K", runtimeState: "registered" }),
@@ -214,7 +223,7 @@ describe("HotkeyController", () => {
 
   it("keeps the editor open when the returned snapshot did not persist the requested binding", async () => {
     const controller = new HotkeyController(
-      client({ update: async () => snapshot(2, { binding: "F2" }) })
+      client({ update: async () => updateResult(snapshot(2, { binding: "F2" })) })
     );
     controller.start();
     await flush();
@@ -240,12 +249,12 @@ describe("HotkeyController", () => {
   });
 
   it("keeps the editor open when Win+V was returned without the requested force authorization", async () => {
-    const update = vi.fn<HotkeyClient["update"]>(async () => snapshot(2, {
+    const update = vi.fn<HotkeyClient["update"]>(async () => updateResult(snapshot(2, {
       binding: "Win+V",
       classification: "system_reserved",
       runtimeState: "unavailable",
       forceOverrideSystem: false
-    }));
+    })));
     const controller = new HotkeyController(
       client({
         classify: async () => classified("system_reserved", "系统保留"),
@@ -283,13 +292,13 @@ describe("HotkeyController", () => {
     const controller = new HotkeyController(
       client({
         classify: async () => classified("system_reserved", "系统保留"),
-        update: async () => snapshot(2, {
+        update: async () => updateResult(snapshot(2, {
           binding: "Win+V",
           classification: "system_reserved",
           runtimeState: "registered",
           runtimeBackend: null,
           forceOverrideSystem: true
-        })
+        }))
       })
     );
     controller.start();
@@ -319,13 +328,13 @@ describe("HotkeyController", () => {
       const controller = new HotkeyController(
         client({
           classify: async () => classified("system_reserved", "系统保留"),
-          update: async () => snapshot(2, {
+          update: async () => updateResult(snapshot(2, {
             binding: "Win+V",
             classification: "system_reserved",
             runtimeState: "registered",
             runtimeBackend,
             forceOverrideSystem: true
-          })
+          }))
         })
       );
       controller.start();
@@ -354,11 +363,11 @@ describe("HotkeyController", () => {
   it("keeps the confirmed binding visible when it was saved but registration is not active", async () => {
     const controller = new HotkeyController(
       client({
-        update: async () => snapshot(2, {
+        update: async () => updateResult(snapshot(2, {
           binding: "Ctrl+K",
           runtimeState: "conflict",
           detail: "系统拒绝注册。"
-        })
+        }))
       })
     );
     controller.start();
@@ -442,6 +451,72 @@ describe("HotkeyController", () => {
         error: { code: "hotkey_revision_conflict" }
       }
     });
+  });
+
+  it("surfaces the Explorer restart notice after a clean Win+V save and clears it on dismiss", async () => {
+    const controller = new HotkeyController(
+      client({
+        classify: async () => classified("system_reserved", "系统保留"),
+        update: async () =>
+          updateResult(
+            snapshot(2, {
+              binding: "Win+V",
+              classification: "system_reserved",
+              runtimeState: "registered",
+              runtimeBackend: "standard",
+              forceOverrideSystem: true
+            }),
+            { binding: "Win+V", letter: "V", restartRequired: true }
+          )
+      })
+    );
+    controller.start();
+    await flush();
+    controller.openEditor("capture");
+    await flush();
+    controller.setBinding("Win+V");
+    await flush();
+    controller.setForceOverrideSystem(true);
+
+    await controller.save();
+
+    expect(controller.getSnapshot()).toMatchObject({
+      editor: null,
+      systemHotkeyNotice: { binding: "Win+V", letter: "V", restartRequired: true }
+    });
+
+    controller.dismissSystemHotkeyNotice();
+    expect(controller.getSnapshot().systemHotkeyNotice).toBeNull();
+  });
+
+  it("does not surface a restart notice when the registry did not change", async () => {
+    const controller = new HotkeyController(
+      client({
+        classify: async () => classified("system_reserved", "系统保留"),
+        update: async () =>
+          updateResult(
+            snapshot(2, {
+              binding: "Win+V",
+              classification: "system_reserved",
+              runtimeState: "registered",
+              runtimeBackend: "standard",
+              forceOverrideSystem: true
+            }),
+            null
+          )
+      })
+    );
+    controller.start();
+    await flush();
+    controller.openEditor("capture");
+    await flush();
+    controller.setBinding("Win+V");
+    await flush();
+    controller.setForceOverrideSystem(true);
+
+    await controller.save();
+
+    expect(controller.getSnapshot().systemHotkeyNotice).toBeNull();
   });
 
   it("does not classify or save after stop", async () => {

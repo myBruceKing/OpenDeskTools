@@ -11,7 +11,8 @@ const INITIAL_STATE: HotkeyControllerState = {
   status: "loading",
   snapshot: null,
   editor: null,
-  error: null
+  error: null,
+  systemHotkeyNotice: null
 };
 
 export function appendHotkeyToken(binding: string, token: string) {
@@ -138,7 +139,13 @@ export class HotkeyController {
         if (!this.active || session !== this.session) {
           return;
         }
-        this.setState({ status: "ready", snapshot, editor: null, error: null });
+        this.setState({
+          status: "ready",
+          snapshot,
+          editor: null,
+          error: null,
+          systemHotkeyNotice: this.state.systemHotkeyNotice
+        });
       })
       .catch((error: unknown) => {
         if (!this.active || session !== this.session) {
@@ -148,7 +155,8 @@ export class HotkeyController {
           status: "unavailable",
           snapshot: null,
           editor: null,
-          error: normalizeHotkeyCommandError(error)
+          error: normalizeHotkeyCommandError(error),
+          systemHotkeyNotice: null
         });
       });
   }
@@ -247,7 +255,7 @@ export class HotkeyController {
     this.setState({ ...this.state, editor: { ...editor, saving: true, error: null } });
 
     try {
-      const snapshot = await this.client.update({
+      const { snapshot, systemHotkeyNotice } = await this.client.update({
         actionId: editor.actionId,
         expectedRevision,
         binding: editor.binding,
@@ -263,6 +271,7 @@ export class HotkeyController {
       const sameEditor =
         currentEditor?.actionId === editor.actionId && currentEditor.binding === editor.binding;
       const confirmationIssue = sameEditor ? confirmSavedHotkey(snapshot, currentEditor) : null;
+      const savedCleanly = sameEditor && confirmationIssue === null;
       this.setState({
         ...this.state,
         snapshot,
@@ -271,7 +280,11 @@ export class HotkeyController {
             ? { ...currentEditor, saving: false, error: confirmationIssue }
             : null
           : currentEditor,
-        error: null
+        error: null,
+        systemHotkeyNotice:
+          savedCleanly && systemHotkeyNotice?.restartRequired
+            ? systemHotkeyNotice
+            : this.state.systemHotkeyNotice
       });
     } catch (error: unknown) {
       if (!this.active || session !== this.session) {
@@ -300,6 +313,13 @@ export class HotkeyController {
         this.setState({ ...this.state, error: issue });
       }
     }
+  }
+
+  dismissSystemHotkeyNotice() {
+    if (this.state.systemHotkeyNotice === null) {
+      return;
+    }
+    this.setState({ ...this.state, systemHotkeyNotice: null });
   }
 
   private classifyBinding(binding: string, actionId: GlobalHotkeyId) {

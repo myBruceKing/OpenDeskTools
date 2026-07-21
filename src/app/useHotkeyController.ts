@@ -22,6 +22,7 @@ export function useHotkeyController() {
     setBinding: controller.setBinding.bind(controller),
     appendBindingToken: controller.appendBindingToken.bind(controller),
     setForceOverrideSystem: controller.setForceOverrideSystem.bind(controller),
-    save: controller.save.bind(controller)
+    save: controller.save.bind(controller),
+    dismissSystemHotkeyNotice: controller.dismissSystemHotkeyNotice.bind(controller)
   };
 }

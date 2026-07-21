@@ -1,7 +1,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
-use crate::infrastructure::application::{ApplicationRuntime, ApplicationStatus, StartupMode};
+use crate::infrastructure::application::{ApplicationRuntime, ApplicationStatus};
 use crate::infrastructure::hotkey::HotkeyRuntimeState;
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -38,10 +38,18 @@ pub fn get_overview_view_model(
     app: AppHandle,
     runtime: State<'_, ApplicationRuntime>,
 ) -> OverviewViewModel {
-    build_view_model(&runtime, app.package_info().version.to_string())
+    build_view_model(
+        &runtime,
+        app.package_info().version.to_string(),
+        runtime.autostart().is_enabled().unwrap_or(false),
+    )
 }
 
-fn build_view_model(runtime: &ApplicationRuntime, version: String) -> OverviewViewModel {
+fn build_view_model(
+    runtime: &ApplicationRuntime,
+    version: String,
+    startup_enabled: bool,
+) -> OverviewViewModel {
     let hotkeys = runtime.hotkeys().snapshot().ok().map(|snapshot| {
         snapshot
             .actions
@@ -80,9 +88,7 @@ fn build_view_model(runtime: &ApplicationRuntime, version: String) -> OverviewVi
         service_state: match runtime.status() {
             ApplicationStatus::Running => "running",
         },
-        startup_enabled: match runtime.startup_mode() {
-            StartupMode::Manual => false,
-        },
+        startup_enabled,
         hotkeys,
         statistics: None,
     }
@@ -105,7 +111,7 @@ mod tests {
     fn view_model_uses_runtime_state_and_supplied_package_version() {
         let (_temp, runtime) = test_runtime();
 
-        let view_model = build_view_model(&runtime, "1.2.3".to_owned());
+        let view_model = build_view_model(&runtime, "1.2.3".to_owned(), false);
 
         assert_eq!(view_model.version, "1.2.3");
         assert_eq!(view_model.service_state, "running");
@@ -129,7 +135,7 @@ mod tests {
     #[test]
     fn view_model_serializes_real_hotkeys_with_the_legacy_overview_ids() {
         let (_temp, runtime) = test_runtime();
-        let response = build_view_model(&runtime, "0.1.0".to_owned())
+        let response = build_view_model(&runtime, "0.1.0".to_owned(), false)
             .body()
             .expect("overview view model should serialize");
 

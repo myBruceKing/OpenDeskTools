@@ -627,6 +627,38 @@
   color: var(--status-danger);
 }
 
+.inlineNotice {
+  padding: 9px 11px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-button);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+.inlineNoticeError {
+  border-color: color-mix(in srgb, var(--status-danger) 42%, var(--border-default));
+  background: color-mix(in srgb, var(--status-danger) 10%, var(--surface-card));
+  color: var(--status-danger);
+}
+
+.inlineNoticePending,
+.inlineNoticeInfo {
+  background: var(--surface-card-subtle);
+  color: var(--text-secondary);
+}
+
+.inlineNoticeSuccess {
+  border-color: var(--border-success);
+  background: var(--surface-success);
+  color: var(--text-primary);
+}
+
+.inlineNoticeWarning {
+  border-color: color-mix(in srgb, var(--status-warning) 42%, var(--border-default));
+  background: var(--surface-warning);
+  color: var(--text-primary);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .toggleThumb {
     transition: none;

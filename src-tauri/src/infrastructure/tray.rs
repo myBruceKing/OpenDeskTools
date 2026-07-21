@@ -40,6 +40,7 @@ pub struct WindowLifecycleRoute {
     pub stop_capture: bool,
     pub prevent_close: bool,
     pub hide_main: bool,
+    pub exit_app: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,15 +50,17 @@ enum ExitStep {
     StopKeyboardHook,
     StopSurfaceMonitors,
     UnregisterGlobalShortcuts,
+    RestoreSystemHotkeys,
     ExitApplication,
 }
 
-const EXIT_STEPS: [ExitStep; 6] = [
+const EXIT_STEPS: [ExitStep; 7] = [
     ExitStep::StopClipboardListener,
     ExitStep::StopCapture,
     ExitStep::StopKeyboardHook,
     ExitStep::StopSurfaceMonitors,
     ExitStep::UnregisterGlobalShortcuts,
+    ExitStep::RestoreSystemHotkeys,
     ExitStep::ExitApplication,
 ];
 
@@ -104,12 +107,25 @@ pub fn pointer_input_for(button: MouseButton, button_state: MouseButtonState) ->
 pub fn route_window_lifecycle(
     input: WindowLifecycleInput,
     exit_requested: bool,
+    close_to_tray: bool,
 ) -> WindowLifecycleRoute {
     match input {
+        WindowLifecycleInput::CloseRequested if !exit_requested && close_to_tray => {
+            WindowLifecycleRoute {
+                stop_capture: true,
+                prevent_close: true,
+                hide_main: true,
+                exit_app: false,
+            }
+        }
+        // When the user opted out of "close to tray", closing the main window
+        // quits the whole application (with the full teardown sequence) instead
+        // of hiding it.
         WindowLifecycleInput::CloseRequested if !exit_requested => WindowLifecycleRoute {
             stop_capture: true,
             prevent_close: true,
-            hide_main: true,
+            hide_main: false,
+            exit_app: true,
         },
         WindowLifecycleInput::CloseRequested
         | WindowLifecycleInput::FocusLost
@@ -205,7 +221,7 @@ pub(crate) fn open_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<
     })
 }
 
-fn exit_application<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn exit_application<R: Runtime>(app: &AppHandle<R>) {
     let Some(lifecycle) = app.try_state::<TrayLifecycle>() else {
         eprintln!("tray exit ignored because TrayLifecycle state is unavailable");
         return;
@@ -253,6 +269,15 @@ fn exit_application<R: Runtime>(app: &AppHandle<R>) {
                 }
                 if let Err(error) = app.global_shortcut().unregister_all() {
                     eprintln!("failed to unregister global shortcuts during exit: {error}");
+                }
+            }
+            ExitStep::RestoreSystemHotkeys => {
+                if let Some(runtime) = app.try_state::<ApplicationRuntime>() {
+                    if let Err(error) = runtime.system_hotkeys().restore_all() {
+                        eprintln!(
+                            "failed to restore the DisabledHotkeys registry value during exit: {error}"
+                        );
+                    }
                 }
             }
             ExitStep::ExitApplication => {
@@ -303,27 +328,44 @@ mod tests {
     }
 
     #[test]
-    fn close_request_hides_main_window_when_exit_is_not_requested() {
+    fn close_request_hides_main_window_when_close_to_tray_is_enabled() {
         assert_eq!(
-            route_window_lifecycle(WindowLifecycleInput::CloseRequested, false),
+            route_window_lifecycle(WindowLifecycleInput::CloseRequested, false, true),
             WindowLifecycleRoute {
                 stop_capture: true,
                 prevent_close: true,
                 hide_main: true,
+                exit_app: false,
+            }
+        );
+    }
+
+    #[test]
+    fn close_request_exits_the_app_when_close_to_tray_is_disabled() {
+        assert_eq!(
+            route_window_lifecycle(WindowLifecycleInput::CloseRequested, false, false),
+            WindowLifecycleRoute {
+                stop_capture: true,
+                prevent_close: true,
+                hide_main: false,
+                exit_app: true,
             }
         );
     }
 
     #[test]
     fn close_request_does_not_block_or_hide_during_real_exit() {
-        assert_eq!(
-            route_window_lifecycle(WindowLifecycleInput::CloseRequested, true),
-            WindowLifecycleRoute {
-                stop_capture: true,
-                prevent_close: false,
-                hide_main: false,
-            }
-        );
+        for close_to_tray in [true, false] {
+            assert_eq!(
+                route_window_lifecycle(WindowLifecycleInput::CloseRequested, true, close_to_tray),
+                WindowLifecycleRoute {
+                    stop_capture: true,
+                    prevent_close: false,
+                    hide_main: false,
+                    exit_app: false,
+                }
+            );
+        }
     }
 
     #[test]
@@ -333,7 +375,7 @@ mod tests {
             WindowLifecycleInput::Destroyed,
         ] {
             assert_eq!(
-                route_window_lifecycle(input, false),
+                route_window_lifecycle(input, false, true),
                 WindowLifecycleRoute {
                     stop_capture: true,
                     ..WindowLifecycleRoute::default()
@@ -341,7 +383,7 @@ mod tests {
             );
         }
         assert_eq!(
-            route_window_lifecycle(WindowLifecycleInput::Other, false),
+            route_window_lifecycle(WindowLifecycleInput::Other, false, true),
             WindowLifecycleRoute::default()
         );
     }
@@ -356,6 +398,7 @@ mod tests {
                 ExitStep::StopKeyboardHook,
                 ExitStep::StopSurfaceMonitors,
                 ExitStep::UnregisterGlobalShortcuts,
+                ExitStep::RestoreSystemHotkeys,
                 ExitStep::ExitApplication,
             ]
         );

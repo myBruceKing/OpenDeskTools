@@ -36,6 +36,12 @@ describe("hotkeyClient", () => {
           forceOverrideAllowed: true
         };
       }
+      if (command === "update_hotkey_binding") {
+        return {
+          snapshot: backendSnapshot,
+          systemHotkeyNotice: { binding: "Win+V", letter: "V", restartRequired: true }
+        };
+      }
       return backendSnapshot;
     });
     const client = createHotkeyClient({ invokeFunction });
@@ -55,7 +61,10 @@ describe("hotkeyClient", () => {
         binding: "Win+V",
         forceOverrideSystem: true
       })
-    ).resolves.toEqual(snapshot);
+    ).resolves.toEqual({
+      snapshot,
+      systemHotkeyNotice: { binding: "Win+V", letter: "V", restartRequired: true }
+    });
 
     expect(invokeFunction).toHaveBeenNthCalledWith(1, "get_hotkey_snapshot");
     expect(invokeFunction).toHaveBeenNthCalledWith(2, "classify_hotkey_binding", {
