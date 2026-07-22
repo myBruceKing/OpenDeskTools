@@ -1,0 +1,23 @@
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: var(--z-index-toast);
+  max-width: min(360px, calc(100vw - 40px));
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+  color: var(--text-primary);
+  font-size: var(--font-size-secondary);
+  line-height: var(--line-height-body);
+}
+
+.toast > svg {
+  flex: 0 0 auto;
+  color: var(--accent-primary);
+}

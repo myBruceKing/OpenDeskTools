@@ -3,18 +3,21 @@ import {
   ScanQrCode24Regular,
   Screenshot24Regular
 } from "@fluentui/react-icons";
+import { useQrConversion } from "../../app/qrConversionModel";
 import { PageScaffold } from "../../components/layout/PageScaffold";
 import { SettingsCard } from "../../components/layout/SettingsCard";
 import { SectionTitle } from "../../components/patterns/Section";
 import { SelectField, TextField } from "../../components/primitives/Field";
+import { Button } from "../../components/primitives/Button";
 import { FieldRow, SwitchRow } from "../static/SettingsRows";
 import styles from "../static/SettingsPages.module.css";
 
 export function CaptureQrPage() {
   const unavailableValue = "—";
+  const qr = useQrConversion();
 
   return (
-    <PageScaffold title="截图与二维码" description="原生截图、贴图和二维码服务未接入，当前仅展示能力结构。">
+    <PageScaffold title="截图与二维码" description="F4 使用内置剪贴板最新记录进行二维码互转；截图和贴图将在后续接入。">
       <div className={styles.captureGrid}>
         <SettingsCard fill>
           <div className={styles.featureTitle}>
@@ -35,18 +38,23 @@ export function CaptureQrPage() {
             <SectionTitle>F4 剪贴板二维码</SectionTitle>
           </div>
           <div className={styles.qrFlow}>
-            <span>剪贴板文本</span>
+            <span>最新内部文本 / 链接</span>
             <span className={styles.arrow}>→</span>
             <span className={styles.qrBox}>▦</span>
             <span>生成二维码图片</span>
           </div>
           <div className={styles.qrFlow}>
-            <span>剪贴板图片</span>
+            <span>最新内部图片</span>
             <span className={styles.arrow}>→</span>
             <span className={styles.qrBox}>⌗</span>
             <span>识别二维码文本</span>
           </div>
-          <SwitchRow title="保留原始剪贴板内容" description="处理失败时不覆盖原内容" checked={null} disabled />
+          <div className={styles.qrActionFooter}>
+            <span>{qr.message ?? "结果会保存到内置历史，并尝试同步系统剪贴板。"}</span>
+            <Button variant="primary" disabled={qr.pending} onClick={() => void qr.convertLatest()}>
+              {qr.pending ? "正在转换" : "转换最新记录"}
+            </Button>
+          </div>
         </SettingsCard>
         <SettingsCard fill>
           <div className={styles.featureTitle}>

@@ -54,14 +54,21 @@ impl SourceIconService {
     }
 
     pub fn cache_executable(&self, executable: &Path) -> Result<Option<String>, SourceIconError> {
+        self.cache_icon(executable, 0)
+    }
+
+    /// Caches a concrete Shell icon location. Shortcut resolution supplies an
+    /// explicit resource path and index; ordinary clipboard sources use index
+    /// zero through [`Self::cache_executable`].
+    pub fn cache_icon(&self, icon_path: &Path, icon_index: i32) -> Result<Option<String>, SourceIconError> {
         #[cfg(not(windows))]
         {
-            let _ = executable;
+            let _ = (icon_path, icon_index);
             Ok(None)
         }
         #[cfg(windows)]
         {
-            let Some(rgba) = extract_windows_icon(executable) else {
+            let Some(rgba) = extract_windows_icon(icon_path, icon_index) else {
                 return Ok(None);
             };
             let png = encode_png(ICON_SIZE, ICON_SIZE, &rgba)?;
@@ -210,7 +217,7 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, SourceIco
 }
 
 #[cfg(windows)]
-fn extract_windows_icon(executable: &Path) -> Option<Vec<u8>> {
+fn extract_windows_icon(icon_path: &Path, icon_index: i32) -> Option<Vec<u8>> {
     use std::mem;
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::null_mut;
@@ -220,12 +227,12 @@ fn extract_windows_icon(executable: &Path) -> Option<Vec<u8>> {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{DrawIconEx, DI_NORMAL};
 
-    let path = executable
+    let path = icon_path
         .as_os_str()
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
-    let icon = extract_high_resolution_icon(&path)?;
+    let icon = extract_high_resolution_icon(&path, icon_index)?;
     let dc = unsafe { CreateCompatibleDC(null_mut()) };
     let mut pixels = null_mut();
     let mut info: BITMAPINFO = unsafe { mem::zeroed() };
@@ -299,15 +306,18 @@ impl Drop for OwnedIcon {
 }
 
 #[cfg(windows)]
-fn extract_high_resolution_icon(path: &[u16]) -> Option<OwnedIcon> {
-    use std::ptr::null_mut;
-    use windows_sys::Win32::UI::Shell::{ExtractIconExW, SHDefExtractIconW};
+fn extract_high_resolution_icon(path: &[u16], icon_index: i32) -> Option<OwnedIcon> {
+    use std::{mem, ptr::null_mut};
+    use windows_sys::Win32::UI::Shell::{
+        ExtractIconExW, SHDefExtractIconW, SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON,
+        SHGFI_LARGEICON,
+    };
 
     let mut requested = null_mut();
     let result = unsafe {
         SHDefExtractIconW(
             path.as_ptr(),
-            0,
+            icon_index,
             0,
             &mut requested,
             null_mut(),
@@ -324,10 +334,26 @@ fn extract_high_resolution_icon(path: &[u16]) -> Option<OwnedIcon> {
     // Keep compatibility through ExtractIconExW, but request only its large
     // icon so a system-small bitmap can never be selected and enlarged.
     let mut large = null_mut();
-    if unsafe { ExtractIconExW(path.as_ptr(), 0, &mut large, null_mut(), 1) } == 0 {
-        return None;
+    if unsafe { ExtractIconExW(path.as_ptr(), icon_index, &mut large, null_mut(), 1) } != 0 {
+        if let Some(icon) = OwnedIcon::new(large) {
+            return Some(icon);
+        }
     }
-    OwnedIcon::new(large)
+
+    // Some signed / packaged executables reject both resource extraction APIs.
+    // Ask the Shell for its actual large file icon as a final availability
+    // fallback. The normal route above remains the high-resolution path.
+    let mut info: SHFILEINFOW = unsafe { mem::zeroed() };
+    let result = unsafe {
+        SHGetFileInfoW(
+            path.as_ptr(),
+            0,
+            &mut info,
+            mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_ICON | SHGFI_LARGEICON,
+        )
+    };
+    (result != 0).then(|| OwnedIcon::new(info.hIcon)).flatten()
 }
 
 #[cfg(windows)]

@@ -64,7 +64,7 @@ impl HotkeyActionId {
             Self::ScreenshotCapture => "F1",
             Self::ClipboardPinImage => "F3",
             Self::ClipboardQrConvert => "F4",
-            Self::LauncherOpen => "Alt+Space",
+            Self::LauncherOpen => "Ctrl+Shift+Space",
             Self::ClipboardOpenPanel => "Win+V",
         }
     }
@@ -657,14 +657,17 @@ impl HotkeyManager {
     pub(crate) fn initialize_with_store(
         store: Arc<dyn HotkeySettingsStore>,
     ) -> Result<Self, HotkeyError> {
-        let (preferences, revision, missing) = load_preferences(store.as_ref())?;
-        if missing {
+        let (preferences, revision, needs_persist) = load_preferences(store.as_ref())?;
+        if needs_persist {
             persist_preferences(store.as_ref(), &preferences, revision)?;
         }
         let registrations = preferences
             .into_iter()
             .map(|preference| {
-                let action_available = preference.action_id == HotkeyActionId::ClipboardOpenPanel;
+                let action_available = matches!(
+                    preference.action_id,
+                    HotkeyActionId::ClipboardOpenPanel | HotkeyActionId::LauncherOpen
+                );
                 build_registration(preference, action_available)
             })
             .collect();
@@ -1024,6 +1027,7 @@ fn load_preferences(
             })?;
             let mut seen = HashSet::new();
             let mut preferences = Vec::with_capacity(HotkeyActionId::ALL.len());
+            let mut needs_persist = false;
             for registration in persisted.registrations {
                 if !seen.insert(registration.action_id) {
                     return Err(corrupt(
@@ -1031,7 +1035,7 @@ fn load_preferences(
                         format!("duplicate action {}", registration.action_id),
                     ));
                 }
-                let binding = HotkeyBinding::parse(&registration.binding)
+                let mut binding = HotkeyBinding::parse(&registration.binding)
                     .map_err(|error| corrupt(HOTKEY_SNAPSHOT_KEY, error.to_string()))?;
                 let classification = classify_parsed_binding(&binding)
                     .map_err(|error| corrupt(HOTKEY_SNAPSHOT_KEY, error.to_string()))?;
@@ -1046,6 +1050,14 @@ fn load_preferences(
                         HOTKEY_SNAPSHOT_KEY,
                         format!("invalid persisted policy for {}", registration.action_id),
                     ));
+                }
+                if registration.action_id == HotkeyActionId::LauncherOpen
+                    && !registration.force_override_system
+                    && matches!(binding.normalized().as_str(), "Alt+Space" | "Ctrl+Alt+Space")
+                {
+                    binding = HotkeyBinding::parse(HotkeyActionId::LauncherOpen.default_binding())
+                        .expect("built-in launcher binding must be valid");
+                    needs_persist = true;
                 }
                 preferences.push(HotkeyPreference {
                     action_id: registration.action_id,
@@ -1070,7 +1082,7 @@ fn load_preferences(
                     .position(|action| *action == preference.action_id)
                     .expect("validated action")
             });
-            Ok((preferences, revision, false))
+            Ok((preferences, revision, needs_persist))
         }
     }
 }
@@ -1405,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_persist_with_only_clipboard_panel_available_and_reserved_default_inactive() {
+    fn defaults_persist_with_launcher_and_clipboard_panel_available() {
         let temp = tempdir().unwrap();
         let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
         let manager = HotkeyManager::initialize(Arc::clone(&storage)).unwrap();
@@ -1426,9 +1438,16 @@ mod tests {
                 .filter(|entry| entry.action_available)
                 .map(|entry| entry.action_id)
                 .collect::<Vec<_>>(),
-            vec![HotkeyActionId::ClipboardOpenPanel]
+            vec![
+                HotkeyActionId::LauncherOpen,
+                HotkeyActionId::ClipboardOpenPanel
+            ]
         );
-        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 0);
+        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            manager.registered_action_for_plugin_binding("Ctrl+Shift+Space"),
+            Some((HotkeyActionId::LauncherOpen, 0))
+        );
         assert!(storage.read_setting(HOTKEY_SNAPSHOT_KEY).unwrap().is_some());
         assert_eq!(
             storage
@@ -1461,14 +1480,15 @@ mod tests {
 
         assert_eq!(updated.revision, 1);
         assert_eq!(updated.actions[0].binding, "Ctrl+Shift+S");
-        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 0);
+        // The launcher is now a separately available default registration;
+        // changing an unavailable screenshot action must not add another one.
+        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 1);
+        assert_eq!(updated.actions[0].runtime_state, HotkeyRuntimeState::Unavailable);
         drop(manager);
         drop(storage);
         let reopened = Arc::new(StorageService::initialize(&data_root).unwrap());
-        let restored = HotkeyManager::initialize(reopened)
-            .unwrap()
-            .snapshot()
-            .unwrap();
+        let restored_manager = HotkeyManager::initialize(reopened).unwrap();
+        let restored = restored_manager.reconcile(&registrar).unwrap();
         assert_eq!(restored, updated);
     }
 
@@ -1505,7 +1525,7 @@ mod tests {
             updated.actions[4].runtime_backend,
             Some(HotkeyRuntimeBackend::Standard)
         );
-        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 1);
+        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 2);
     }
 
     #[test]

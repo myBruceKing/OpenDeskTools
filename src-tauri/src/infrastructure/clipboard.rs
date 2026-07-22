@@ -132,6 +132,8 @@ pub enum ClipboardError {
     InvalidLimit,
     #[error("clipboard history item was not found")]
     NotFound,
+    #[error("clipboard history has no usable latest item")]
+    NoLatestItem,
     #[error("clipboard text duplicates another history item")]
     DuplicateText,
     #[error("clipboard item revision conflict")]
@@ -853,6 +855,23 @@ impl ClipboardService {
                 })
             }
         }
+    }
+
+    /// Returns the newest persisted internal history item. F4 deliberately
+    /// uses this instead of re-reading Windows' current clipboard so its input
+    /// stays consistent with the toolbox history the user can see and manage.
+    pub fn latest_content_for_write(&self) -> Result<ClipboardWriteContent, ClipboardError> {
+        let page = self.history(ClipboardHistoryQuery {
+            favorites_only: false,
+            search: None,
+            limit: 1,
+        })?;
+        let item = page
+            .items
+            .into_iter()
+            .next()
+            .ok_or(ClipboardError::NoLatestItem)?;
+        self.content_for_write(item.id)
     }
 
     fn reconcile_images(&self) -> Result<(), ClipboardError> {

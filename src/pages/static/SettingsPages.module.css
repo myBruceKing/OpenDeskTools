@@ -85,8 +85,23 @@
 }
 
 .quickPreviewDialogStage {
-  --preview-frame-min-height: 280px;
+  --preview-frame-min-height: 360px;
   width: min(420px, 100%);
+}
+
+.quickPreviewKeepOpen,
+.quickPreviewFooterActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quickPreviewKeepOpen {
+  min-width: 0;
+  margin-right: auto;
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
 }
 
 .appRow,
@@ -99,8 +114,7 @@
 }
 
 .appRow {
-  grid-template-columns: 18px 34px minmax(0, 1fr) var(--toggle-width);
-  cursor: grab;
+  grid-template-columns: 18px 34px minmax(0, 1fr) var(--toggle-width) auto;
   transition:
     background-color var(--motion-duration-standard) ease,
     border-color var(--motion-duration-standard) ease,
@@ -111,10 +125,6 @@
 
 .appRow:hover {
   background: color-mix(in srgb, var(--accent-primary) 5%, var(--surface-card));
-}
-
-.appRow:active {
-  cursor: grabbing;
 }
 
 .appRowDragging {
@@ -133,8 +143,31 @@
   grid-template-columns: 18px 34px minmax(0, 1fr) 60px;
 }
 
+.quickLaunchActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quickLaunchStatus {
+  padding: 8px 10px;
+  border: var(--border-width) solid color-mix(in srgb, var(--status-danger) 42%, var(--border-default));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--status-danger) 10%, var(--surface-card));
+  color: var(--status-danger);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
 .rowMain {
   min-width: 0;
+}
+
+.lazyAppIcon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
 }
 
 .optionStack {
@@ -199,10 +232,21 @@
   color: var(--text-secondary);
   font-size: 0;
   cursor: grab;
+  touch-action: none;
+  user-select: none;
   transition:
     color var(--motion-duration-standard) ease,
     opacity var(--motion-duration-standard) ease,
     transform var(--motion-duration-standard) ease;
+}
+
+.dragDots[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.dragDots:active {
+  cursor: grabbing;
 }
 
 .dragDots::before {
@@ -296,6 +340,20 @@
   border-radius: var(--radius-button);
   background: var(--surface-card-subtle);
   font-size: 22px;
+}
+
+.qrActionFooter {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-secondary);
+}
+
+.qrActionFooter > span {
+  min-width: 0;
 }
 
 .swatches {

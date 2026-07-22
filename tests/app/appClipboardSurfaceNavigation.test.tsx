@@ -97,7 +97,7 @@ describe("App clipboard surface isolation", () => {
 
     expect(document.querySelector("[data-active-route]")?.getAttribute("data-active-route")).toBe("overview");
     expect(window.location.hash).toBe("#overview");
-    expect(mocks.listen).not.toHaveBeenCalled();
+    expect(mocks.listen).toHaveBeenCalledWith("qr://conversion-result", expect.any(Function));
   });
 
   it("opens the management page only through normal navigation and leaves without surface cleanup", async () => {

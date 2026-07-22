@@ -41,7 +41,7 @@ export const GLOBAL_HOTKEY_DEFINITIONS: ReadonlyArray<GlobalHotkeyDefinition> = 
     id: "toolWheel",
     title: "工具盘",
     description: "按住呼出圆盘菜单",
-    defaultBinding: "Alt+Space",
+    defaultBinding: "Ctrl+Shift+Space",
     showInOverview: true
   },
   {

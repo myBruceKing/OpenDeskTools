@@ -1,23 +1,12 @@
 .wheel {
   position: relative;
-  width: var(--tool-menu-wheel-size);
-  height: var(--tool-menu-wheel-size);
+  width: var(--wheel-layout-diameter, var(--tool-menu-wheel-size));
+  height: var(--wheel-layout-diameter, var(--tool-menu-wheel-size));
   flex: 0 0 auto;
   overflow: hidden;
   border: var(--border-width) solid var(--border-tool-wheel);
   border-radius: 50%;
-  background:
-    radial-gradient(
-      circle at center,
-      var(--surface-tool-wheel-center) 0 27.2%,
-      var(--border-tool-wheel-divider) 27.6% 28.4%,
-      transparent 28.8%
-    ),
-    repeating-conic-gradient(
-      from -90deg,
-      var(--surface-tool-wheel-segment) 0deg 59.15deg,
-      var(--border-tool-wheel-divider) 59.15deg 60deg
-    );
+  background: var(--surface-tool-wheel-segment);
   box-shadow: var(--shadow-tool-wheel);
   transition:
     box-shadow var(--motion-duration-emphasized) ease,
@@ -29,12 +18,25 @@
   box-shadow: var(--shadow-tool-wheel-hover);
 }
 
+.wheelRingDivider {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 0;
+  width: var(--wheel-ring-divider-size);
+  height: var(--wheel-ring-divider-size);
+  border: var(--border-width) solid var(--border-tool-wheel-divider);
+  border-radius: 50%;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
 .wheelCenter {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: calc(var(--tool-menu-wheel-size) * 0.31);
-  height: calc(var(--tool-menu-wheel-size) * 0.31);
+  width: var(--wheel-center-size, calc(var(--tool-menu-wheel-size) * 0.31));
+  height: var(--wheel-center-size, calc(var(--tool-menu-wheel-size) * 0.31));
   display: grid;
   place-items: center;
   border: var(--border-width) solid color-mix(in srgb, var(--border-tool-wheel-divider) 80%, transparent);
@@ -45,11 +47,29 @@
     inset 0 1px 0 rgb(255 255 255 / 42%),
     0 2px 8px rgb(36 42 50 / 8%);
   transform: translate(-50%, -50%);
+  z-index: 2;
+}
+
+button.wheelItem {
+  cursor: pointer;
 }
 
 .wheelCenter svg {
-  width: calc(var(--tool-menu-wheel-size) * 0.16);
-  height: calc(var(--tool-menu-wheel-size) * 0.16);
+  width: var(--wheel-center-icon-size, calc(var(--tool-menu-wheel-size) * 0.16));
+  height: var(--wheel-center-icon-size, calc(var(--tool-menu-wheel-size) * 0.16));
+}
+
+.wheelSpoke {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 0;
+  width: var(--wheel-spoke-length);
+  height: var(--border-width);
+  pointer-events: none;
+  background: var(--border-tool-wheel-divider);
+  transform: rotate(var(--wheel-spoke-angle)) translateX(var(--wheel-spoke-start));
+  transform-origin: left center;
 }
 
 .wheelItem {
@@ -57,18 +77,43 @@
   top: var(--wheel-item-y);
   left: var(--wheel-item-x);
   z-index: 1;
+  width: var(--wheel-item-size, clamp(38px, calc(var(--tool-menu-wheel-size) * 0.19), 50px));
+  height: var(--wheel-item-size, clamp(38px, calc(var(--tool-menu-wheel-size) * 0.19), 50px));
   display: grid;
   place-items: center;
+  padding: 0;
+  appearance: none;
+  border: var(--border-width) solid transparent;
+  border-radius: clamp(11px, calc(var(--tool-menu-wheel-size) * 0.055), 14px);
+  background: transparent;
   transform: translate(-50%, -50%);
+  transition:
+    background-color var(--motion-duration-standard) ease,
+    border-color var(--motion-duration-standard) ease,
+    box-shadow var(--motion-duration-standard) ease,
+    transform var(--motion-duration-standard) ease;
+}
+
+
+.wheelItem:hover {
+  z-index: 2;
+  border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-tool-wheel-divider));
+  background: color-mix(in srgb, var(--surface-shortcut) 58%, var(--surface-card));
+  box-shadow: 0 4px 12px rgb(36 42 50 / 16%);
+  transform: translate(-50%, -50%) scale(1.12);
 }
 
 .dock {
+  width: fit-content;
   min-width: 0;
-  min-height: 58px;
-  display: flex;
+  min-height: calc(var(--tool-menu-dock-slot) + var(--tool-menu-dock-padding) * 2 + var(--border-width) * 2);
+  display: grid;
+  grid-template-columns: repeat(var(--tool-menu-items-per-group), var(--tool-menu-dock-slot));
+  grid-auto-rows: var(--tool-menu-dock-slot);
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  justify-content: center;
+  gap: var(--tool-menu-dock-gap);
+  padding: var(--tool-menu-dock-padding);
   border: var(--border-width) solid var(--border-tool-wheel);
   border-radius: var(--radius-card);
   background:
@@ -83,11 +128,13 @@
 .vertical {
   min-width: 0;
   min-height: 0;
-  display: inline-flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: repeat(var(--tool-menu-items-per-group), var(--tool-menu-dock-slot));
+  grid-auto-columns: var(--tool-menu-dock-slot);
+  grid-auto-flow: column;
   align-items: center;
-  gap: clamp(6px, 1.4cqw, 10px);
-  padding: clamp(10px, 2.2cqw, 14px);
+  gap: var(--tool-menu-vertical-gap);
+  padding: var(--tool-menu-dock-padding);
   border: var(--border-width) solid var(--border-tool-wheel);
   border-radius: var(--radius-card);
   background:
@@ -101,14 +148,31 @@
 
 .sizeOverview {
   --tool-menu-wheel-size: clamp(174px, 56cqw, 260px);
+  --tool-menu-dock-slot: clamp(40px, 8.5cqw, 52px);
+  --tool-menu-dock-padding: clamp(8px, 1.8cqw, 12px);
+  --tool-menu-dock-size: 336px;
 }
 
 .sizeSettings {
-  --tool-menu-wheel-size: clamp(154px, 42cqw, 224px);
+  --tool-menu-wheel-size: clamp(210px, 58cqw, 264px);
+  --tool-menu-dock-slot: 52px;
+  --tool-menu-dock-padding: 12px;
+  --tool-menu-dock-size: 336px;
 }
 
 .sizeCompact {
   --tool-menu-wheel-size: 132px;
+  --tool-menu-dock-slot: 34px;
+  --tool-menu-dock-padding: 9px;
+  --tool-menu-dock-size: 222px;
+}
+
+.sizeOverview,
+.sizeSettings,
+.sizeCompact {
+  --tool-menu-items-per-group: 6;
+  --tool-menu-dock-gap: 10px;
+  --tool-menu-vertical-gap: 10px;
 }
 
 .fitContainer {
@@ -116,14 +180,12 @@
 }
 
 .wheel.fitContainer {
-  width: min(var(--tool-menu-wheel-size), 100%);
+  width: min(var(--wheel-layout-diameter, var(--tool-menu-wheel-size)), 100%);
   height: auto;
   aspect-ratio: 1;
 }
 
 .dock.fitContainer {
-  width: 100%;
-  justify-content: center;
   overflow: hidden;
 }
 
@@ -140,29 +202,34 @@
 }
 
 .dock.sizeCompact {
-  min-height: 52px;
-  gap: 5px;
-  padding: 9px 10px;
+  min-height: calc(var(--tool-menu-dock-slot) + var(--tool-menu-dock-padding) * 2 + var(--border-width) * 2);
+  padding: var(--tool-menu-dock-padding);
 }
 
 .dockItem {
-  width: 40px;
-  height: 40px;
+  width: var(--tool-menu-dock-slot);
+  height: var(--tool-menu-dock-slot);
   display: grid;
   place-items: center;
-  border: var(--border-width) solid color-mix(in srgb, var(--border-tool-wheel-divider) 70%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-card) 72%, transparent);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 44%);
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
   transition:
     background-color var(--motion-duration-standard) ease,
     border-color var(--motion-duration-standard) ease,
     transform var(--motion-duration-standard) ease;
 }
 
+button.dockItem,
+button.verticalItem {
+  cursor: pointer;
+}
+
+.dockItem,
 .verticalItem {
-  width: clamp(40px, 8.5cqw, 52px);
-  height: clamp(40px, 8.5cqw, 52px);
+  width: var(--tool-menu-dock-slot);
+  height: var(--tool-menu-dock-slot);
   display: grid;
   place-items: center;
   border: var(--border-width) solid color-mix(in srgb, var(--border-tool-wheel-divider) 70%, transparent);
@@ -176,26 +243,14 @@
 }
 
 .dock.sizeCompact .dockItem {
-  width: 34px;
-  height: 34px;
+  width: var(--tool-menu-dock-slot);
+  height: var(--tool-menu-dock-slot);
   border-radius: 10px;
 }
 
 .dock.sizeSettings {
-  min-height: clamp(58px, 12cqw, 72px);
-  gap: clamp(8px, 1.8cqw, 12px);
-  padding: clamp(10px, 2.2cqw, 14px) clamp(12px, 2.6cqw, 18px);
-  justify-content: center;
-}
-
-.dock.sizeSettings .dockItem {
-  width: clamp(40px, 8.5cqw, 52px);
-  height: clamp(40px, 8.5cqw, 52px);
-  border-radius: clamp(12px, 2.2cqw, 15px);
-}
-
-.dock.sizeSettings .appIconpreview {
-  --tool-icon-slot: clamp(36px, 7.4cqw, 46px);
+  min-height: calc(var(--tool-menu-dock-slot) + var(--tool-menu-dock-padding) * 2 + var(--border-width) * 2);
+  padding: var(--tool-menu-dock-padding);
 }
 
 .dock.sizeCompact {
@@ -232,7 +287,7 @@
 }
 
 .wheel .appIconpreview {
-  --tool-icon-slot: clamp(36px, calc(var(--tool-menu-wheel-size) * 0.18), 48px);
+  --tool-icon-slot: var(--wheel-icon-size, clamp(36px, calc(var(--tool-menu-wheel-size) * 0.18), 48px));
 }
 
 .appIcon img {

@@ -808,6 +808,11 @@ fn map_error(error: ClipboardError) -> ClipboardCommandErrorDto {
             message: "Clipboard history item was not found.",
             retryable: false,
         },
+        ClipboardError::NoLatestItem => ClipboardCommandErrorDto {
+            code: "clipboard_history_empty",
+            message: "Clipboard history has no usable latest item.",
+            retryable: false,
+        },
         ClipboardError::EmptyText => ClipboardCommandErrorDto {
             code: "clipboard_edit_empty",
             message: "Clipboard text must not be empty.",

@@ -10,6 +10,7 @@ use infrastructure::clipboard_surface_window::{
     self, ClipboardPreviewCloseReason, ClipboardSurfaceCloseReason,
     CLIPBOARD_PREVIEW_SURFACE_LABEL, CLIPBOARD_SURFACE_LABEL,
 };
+use infrastructure::tool_menu_surface_window::{self, TOOL_MENU_SURFACE_LABEL};
 use infrastructure::debug_qa;
 #[cfg(debug_assertions)]
 use infrastructure::debug_qa::DebugQaOptions;
@@ -24,6 +25,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent, ShortcutState};
 
 const HOTKEY_ACTION_EVENT: &str = "hotkey://action";
+const QR_CONVERSION_EVENT: &str = "qr://conversion-result";
 const CLIPBOARD_HISTORY_CHANGED_EVENT: &str = "clipboard://history-changed";
 const MAIN_WEBVIEW_LABEL: &str = "main";
 
@@ -176,6 +178,9 @@ pub fn run() {
                     "clipboard surface window group unavailable; the main toolbox will continue: {error}"
                 );
             }
+            if let Err(error) = tool_menu_surface_window::prepare(app.handle()) {
+                eprintln!("tool menu surface unavailable: {error}");
+            }
             #[cfg(debug_assertions)]
             schedule_debug_qa(app.handle(), qa_options);
             #[cfg(not(debug_assertions))]
@@ -196,6 +201,8 @@ pub fn run() {
                 handle_clipboard_surface_window_event(window, event);
             } else if window.label() == CLIPBOARD_PREVIEW_SURFACE_LABEL {
                 handle_clipboard_preview_surface_window_event(window, event);
+            } else if window.label() == TOOL_MENU_SURFACE_LABEL {
+                handle_tool_menu_surface_window_event(window, event);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -222,6 +229,18 @@ pub fn run() {
             commands::hotkey::classify_hotkey_binding,
             commands::hotkey::update_hotkey_binding,
             commands::overview::get_overview_view_model,
+            commands::qr::convert_latest_clipboard_qr,
+            commands::quick_launch::get_quick_launch_snapshot,
+            commands::quick_launch::rescan_quick_launch,
+            commands::quick_launch::pin_quick_launch_app,
+            commands::quick_launch::unpin_quick_launch_app,
+            commands::quick_launch::set_quick_launch_visible,
+            commands::quick_launch::reorder_quick_launch_apps,
+            commands::quick_launch::update_tool_menu_preferences,
+            commands::quick_launch::launch_quick_launch_app,
+            commands::quick_launch::get_quick_launch_icon,
+            commands::quick_launch::select_quick_launch_app,
+            commands::quick_launch::close_tool_menu_surface,
             commands::general::get_general_settings,
             commands::general::set_autostart_enabled,
             commands::general::set_start_minimized,
@@ -277,6 +296,50 @@ fn handle_clipboard_preview_surface_window_event<R: Runtime>(
         }
         _ => {}
     }
+}
+
+fn handle_tool_menu_surface_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
+    match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            if let Err(error) = tool_menu_surface_window::request_hide(window.app_handle()) {
+                eprintln!("failed to hide tool menu surface: {error}");
+            }
+        }
+        // A retained menu is intentionally still dismissed by clicking any
+        // other application or surface, rather than remaining above it.
+        tauri::WindowEvent::Focused(false) => {
+            if let Err(error) = tool_menu_surface_window::request_hide(window.app_handle()) {
+                eprintln!("failed to hide unfocused tool menu surface: {error}");
+            }
+        }
+        _ => {}
+    }
+}
+
+fn show_tool_menu_surface<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime: &ApplicationRuntime,
+) -> Result<(), tool_menu_surface_window::ToolMenuSurfaceError> {
+    let snapshot = runtime
+        .quick_launch()
+        .snapshot()
+        .map_err(|error| tool_menu_surface_window::ToolMenuSurfaceError::QuickLaunch(error.to_string()))?;
+    tool_menu_surface_window::show(app, &snapshot)
+}
+
+fn release_tool_menu_surface<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime: &ApplicationRuntime,
+) -> Result<(), tool_menu_surface_window::ToolMenuSurfaceError> {
+    let preferences = runtime
+        .quick_launch()
+        .tool_menu_preferences()
+        .map_err(|error| tool_menu_surface_window::ToolMenuSurfaceError::QuickLaunch(error.to_string()))?;
+    if !preferences.keep_open_on_key_release {
+        tool_menu_surface_window::request_hide(app)?;
+    }
+    Ok(())
 }
 
 fn should_stop_capture_on_page_load(
@@ -437,6 +500,20 @@ fn handle_global_shortcut<R: Runtime>(
             eprintln!("failed to process clipboard surface hotkey request: {error}");
         }
     }
+    if action_id == HotkeyActionId::ClipboardQrConvert
+        && matches!(phase, HotkeyActionPhase::Pressed)
+    {
+        trigger_qr_conversion(app, &runtime);
+    }
+    if action_id == HotkeyActionId::LauncherOpen {
+        let result = match phase {
+            HotkeyActionPhase::Pressed => show_tool_menu_surface(app, &runtime),
+            HotkeyActionPhase::Released => release_tool_menu_surface(app, &runtime),
+        };
+        if let Err(error) = result {
+            eprintln!("failed to process tool menu hotkey: {error}");
+        }
+    }
     if !should_broadcast_hotkey_action(action_id) {
         return;
     }
@@ -530,6 +607,25 @@ pub(crate) fn handle_forced_hotkey_event<R: Runtime>(
             }
         }
     }
+    if action_id == HotkeyActionId::ClipboardQrConvert
+        && matches!(phase, HotkeyActionPhase::Pressed)
+    {
+        trigger_qr_conversion(app, &runtime);
+    }
+    if action_id == HotkeyActionId::LauncherOpen {
+        let result = match phase {
+            HotkeyActionPhase::Pressed => show_tool_menu_surface(app, &runtime),
+            HotkeyActionPhase::Released => release_tool_menu_surface(app, &runtime),
+        };
+        if let Err(error) = result {
+            disable_forced_hotkey_after_route_failure(
+                app,
+                event.generation,
+                format!("工具盘窗口操作失败：{error}"),
+            );
+            return;
+        }
+    }
     if !should_broadcast_hotkey_action(action_id) {
         return;
     }
@@ -545,6 +641,25 @@ pub(crate) fn handle_forced_hotkey_event<R: Runtime>(
             registration_revision,
         },
     );
+}
+
+fn trigger_qr_conversion<R: Runtime>(app: &AppHandle<R>, runtime: &ApplicationRuntime) {
+    let payload = match commands::qr::convert_latest(runtime) {
+        Ok(result) => serde_json::json!({
+            "success": true,
+            "kind": result.kind,
+            "systemClipboardSynced": result.system_clipboard_synced,
+            "message": result.message,
+        }),
+        Err(error) => serde_json::json!({
+            "success": false,
+            "kind": null,
+            "systemClipboardSynced": false,
+            "message": error.message,
+            "code": error.code,
+        }),
+    };
+    let _ = app.emit(QR_CONVERSION_EVENT, payload);
 }
 
 pub(crate) fn queue_forced_hotkey_event<R: Runtime>(app: &AppHandle<R>, event: RuntimeHotkeyEvent) {

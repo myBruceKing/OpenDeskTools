@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell, type AppRoute } from "../components/shell/AppShell";
 import { ClipboardPage } from "../pages/clipboard/ClipboardPage";
+import { QrConversionToast } from "../components/patterns/QrConversionToast";
 import { CaptureQrPage } from "../pages/capture-qr/CaptureQrPage";
 import { GeneralPage } from "../pages/general/GeneralPage";
 import { HotkeysPage } from "../pages/hotkeys/HotkeysPage";
@@ -122,6 +123,7 @@ function App() {
       footerVariant={page === "clipboard" ? "clipboard" : "overview"}
     >
       {pageContent}
+      <QrConversionToast />
     </AppShell>
   );
 }

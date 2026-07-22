@@ -23,6 +23,8 @@ use super::general_settings;
 use super::hotkey::{HotkeyError, HotkeyManager, HotkeySnapshot, OrdinaryHotkeyLatch};
 use super::hotkey_capture::HotkeyCaptureManager;
 use super::keyboard_hook::KeyboardHookBroker;
+use super::qr::QrService;
+use super::quick_launch::{QuickLaunchError, QuickLaunchService};
 use super::storage::{StorageError, StorageService};
 use super::surface::SurfaceManager;
 use super::theme::{ThemeError, ThemeService};
@@ -40,6 +42,8 @@ pub struct ApplicationRuntime {
     clipboard: Arc<ClipboardService>,
     clipboard_listener: ClipboardListenerManager,
     clipboard_input: ClipboardInputCoordinator,
+    qr: QrService,
+    quick_launch: Arc<QuickLaunchService>,
     surface: Arc<SurfaceManager>,
     hotkeys: HotkeyManager,
     ordinary_hotkey_latch: OrdinaryHotkeyLatch,
@@ -79,6 +83,8 @@ pub enum ApplicationRuntimeError {
     Hotkey(#[from] HotkeyError),
     #[error("failed to initialize clipboard service: {0}")]
     Clipboard(String),
+    #[error("failed to initialize quick launch service: {0}")]
+    QuickLaunch(#[from] QuickLaunchError),
 }
 
 #[derive(Debug, Error)]
@@ -129,6 +135,14 @@ impl ApplicationRuntime {
 
     pub(crate) fn clipboard_input(&self) -> &ClipboardInputCoordinator {
         &self.clipboard_input
+    }
+
+    pub(crate) fn qr(&self) -> &QrService {
+        &self.qr
+    }
+
+    pub(crate) fn quick_launch(&self) -> Arc<QuickLaunchService> {
+        Arc::clone(&self.quick_launch)
     }
 
     pub(crate) fn surface(&self) -> &SurfaceManager {
@@ -289,6 +303,8 @@ impl ApplicationRuntime {
         let surface = Arc::new(SurfaceManager::default());
         let clipboard_input =
             ClipboardInputCoordinator::new(Arc::clone(&clipboard), Arc::clone(&surface));
+        let qr = QrService::new(Arc::clone(&clipboard));
+        let quick_launch = Arc::new(QuickLaunchService::initialize(Arc::clone(&storage))?);
         let system_hotkeys =
             SystemHotkeyDisabler::for_system(Arc::clone(&storage) as Arc<dyn OwnedLettersStore>);
         let autostart = AutostartManager::for_system()?;
@@ -297,6 +313,8 @@ impl ApplicationRuntime {
             clipboard,
             clipboard_listener: ClipboardListenerManager::default(),
             clipboard_input,
+            qr,
+            quick_launch,
             surface,
             hotkeys,
             ordinary_hotkey_latch: OrdinaryHotkeyLatch::default(),

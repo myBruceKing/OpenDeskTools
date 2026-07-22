@@ -74,6 +74,12 @@ html[data-window-surface="clipboard-preview"] #root {
   background: var(--border-default);
 }
 
+html[data-window-surface="tool-menu"],
+html[data-window-surface="tool-menu"] body,
+html[data-window-surface="tool-menu"] #root {
+  background: transparent;
+}
+
 [data-window-border-layer="true"] {
   box-sizing: border-box;
   overflow: hidden;

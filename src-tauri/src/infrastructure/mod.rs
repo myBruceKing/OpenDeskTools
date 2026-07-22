@@ -17,10 +17,13 @@ pub mod hotkey;
 pub mod hotkey_capture;
 pub mod image;
 pub mod keyboard_hook;
+pub mod qr;
+pub mod quick_launch;
 pub mod source_icon;
 #[allow(dead_code)]
 pub mod storage;
 pub mod surface;
 pub mod theme;
+pub mod tool_menu_surface_window;
 pub mod tray;
 pub mod windowing;

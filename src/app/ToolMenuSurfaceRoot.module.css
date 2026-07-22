@@ -1,0 +1,46 @@
+.windowRoot {
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.08);
+  transform-origin: center;
+  transition:
+    opacity 75ms ease-out,
+    transform 95ms cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+
+.windowRoot[data-presentation="open"] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.windowRoot[data-presentation="entering"],
+.windowRoot[data-presentation="closing"] {
+  opacity: 0;
+  transform: scale(0.08);
+}
+
+.status,
+.error {
+  max-width: 220px;
+  margin: 0;
+  padding: 10px 12px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  text-align: center;
+}
+
+.error {
+  position: absolute;
+  bottom: 12px;
+  color: var(--status-danger);
+}

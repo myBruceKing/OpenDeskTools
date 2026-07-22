@@ -40,6 +40,27 @@ pub struct ClipboardWriter {
 }
 
 impl ClipboardWriter {
+    /// Replaces the system clipboard with already validated OpenDeskTools
+    /// content. This is used by transformations such as F4 after their result
+    /// has been persisted to the internal history; it intentionally shares the
+    /// same sequence guard and listener-suppression contract as history copy.
+    #[cfg_attr(test, allow(dead_code))]
+    pub fn replace_current<F>(
+        &self,
+        owner_window: usize,
+        content: &ClipboardWriteContent,
+        mut suppress: F,
+    ) -> Result<u32, ClipboardWriterError>
+    where
+        F: FnMut(u32),
+    {
+        self.transaction(owner_window, |transaction| {
+            transaction
+                .replace_current(content, &mut suppress)?
+                .ok_or(ClipboardWriterError::Busy)
+        })
+    }
+
     pub fn transaction<T, E, F>(&self, owner_window: usize, operation: F) -> Result<T, E>
     where
         E: From<ClipboardWriterError>,
