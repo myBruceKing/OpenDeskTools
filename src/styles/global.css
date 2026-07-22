@@ -80,6 +80,30 @@ html[data-window-surface="tool-menu"] #root {
   background: transparent;
 }
 
+@keyframes surface-window-fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.08;
+  }
+}
+
+html[data-window-surface="tool-menu"][data-surface-closing="true"],
+html[data-window-surface="clipboard"][data-surface-closing="true"],
+html[data-window-surface="clipboard-preview"][data-surface-closing="true"] {
+  pointer-events: none;
+  animation: surface-window-fade-out 140ms cubic-bezier(0.4, 0, 1, 1) both;
+  will-change: opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-window-surface][data-surface-closing="true"] {
+    animation-duration: 60ms;
+  }
+}
+
 [data-window-border-layer="true"] {
   box-sizing: border-box;
   overflow: hidden;

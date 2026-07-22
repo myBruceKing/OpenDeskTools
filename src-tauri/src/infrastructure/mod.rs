@@ -23,6 +23,7 @@ pub mod source_icon;
 #[allow(dead_code)]
 pub mod storage;
 pub mod surface;
+pub mod surface_window_animation;
 pub mod theme;
 pub mod tool_menu_surface_window;
 pub mod tray;

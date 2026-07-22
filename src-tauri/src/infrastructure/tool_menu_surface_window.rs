@@ -3,7 +3,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use thiserror::Error;
 
-use super::{debug_qa, quick_launch::{QuickLaunchSnapshot, ToolMenuLayout}};
+use super::{
+    debug_qa,
+    quick_launch::{QuickLaunchSnapshot, ToolMenuLayout},
+    surface_window_animation,
+};
 
 pub const TOOL_MENU_SURFACE_LABEL: &str = "tool-menu-surface";
 pub const TOOL_MENU_SURFACE_SHOWN_EVENT: &str = "tool-menu://shown";
@@ -12,6 +16,8 @@ const TOOL_MENU_SURFACE_ROUTE: &str = "index.html#tool-menu-surface";
 const TOOL_MENU_SURFACE_SIZE: f64 = 320.0;
 const TOOL_MENU_DOCK_COLUMNS: usize = 6;
 const TOOL_MENU_WHEEL_TRANSPARENT_GUARD: u32 = 4;
+#[cfg(windows)]
+const TOOL_MENU_POPUP_STYLE_SUBCLASS_ID: usize = 0x4f44_5453;
 static TOOL_MENU_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Error)]
@@ -31,6 +37,9 @@ pub enum ToolMenuSurfaceError {
     #[cfg(windows)]
     #[error("Windows could not apply the tool menu circular region")]
     ApplyRegion,
+    #[cfg(windows)]
+    #[error("Windows could not configure the tool menu as a borderless popup")]
+    ConfigurePopupStyle,
 }
 
 /// Construct the launcher WebView during setup. Hotkey callbacks only reveal
@@ -58,6 +67,8 @@ pub fn prepare<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceErro
     .transparent(true)
     .visible(false)
     .build()?;
+    install_popup_style_guard(&window)?;
+    configure_popup_style(&window)?;
     configure_transparent_non_client(&window);
     apply_circular_region(&window)?;
     debug_qa::trace("tool-menu prepare result=ready hidden");
@@ -81,6 +92,8 @@ pub fn show<R: Runtime>(
         pointer.1 - (size.1 / 2) as i32,
     ))?;
     publish_window_snapshot(&window, snapshot)?;
+    surface_window_animation::prepare_show(&window);
+    configure_popup_style(&window)?;
     window.show()?;
     TOOL_MENU_VISIBLE.store(true, Ordering::SeqCst);
     window.set_focus()?;
@@ -230,16 +243,19 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> 
             return Err(error);
         }
     };
-    // Visibility changes must stay in Tauri/Tao. Direct Win32 hiding leaves
-    // Tao's cached visibility out of sync and prevents the next F2 show. A
-    // focus transfer can race the hotkey release and emit two close requests;
-    // only the first request may enter the native hide path, otherwise DWM can
-    // briefly compose the transparent WebView host as a rectangular remnant.
-    if let Err(error) = window.hide() {
-        restore_visible_after_failed_hide(&TOOL_MENU_VISIBLE);
-        return Err(error.into());
+    let animated = surface_window_animation::fade_hide(&window);
+    debug_qa::trace(format!(
+        "tool-menu fade-hide result={} duration_ms={}",
+        if animated { "animated" } else { "fallback" },
+        surface_window_animation::SURFACE_EXIT_FADE_DURATION_MS
+    ));
+    if !animated {
+        if let Err(error) = window.hide() {
+            restore_visible_after_failed_hide(&TOOL_MENU_VISIBLE);
+            return Err(error.into());
+        }
     }
-    debug_qa::trace("tool-menu hide result=hidden");
+    debug_qa::trace("tool-menu hide result=transition_started");
     Ok(())
 }
 
@@ -271,9 +287,159 @@ pub fn lost_foreground<R: Runtime>(_window: &tauri::Window<R>) -> bool {
 }
 
 /// One framework-managed close path for key release, Esc, launch and click-away.
-/// The Surface has no exit animation, so the HWND is hidden immediately.
+/// The document fades without changing HWND styles or geometry; Tauri/Tao
+/// performs the delayed final hide to keep cached visibility coherent.
 pub fn request_hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> {
     hide(app)
+}
+
+#[cfg(windows)]
+fn popup_window_style(style: isize) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    };
+
+    let frame_styles = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+    (style & !(frame_styles as isize)) | WS_POPUP as isize
+}
+
+#[cfg(windows)]
+fn install_popup_style_guard<R: Runtime>(
+    window: &WebviewWindow<R>,
+) -> Result<(), ToolMenuSurfaceError> {
+    use windows_sys::Win32::UI::Shell::SetWindowSubclass;
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|_| ToolMenuSurfaceError::ConfigurePopupStyle)?;
+    let installed = unsafe {
+        SetWindowSubclass(
+            hwnd.0,
+            Some(popup_style_subclass_proc),
+            TOOL_MENU_POPUP_STYLE_SUBCLASS_ID,
+            0,
+        ) != 0
+    };
+    if !installed {
+        return Err(ToolMenuSurfaceError::ConfigurePopupStyle);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn popup_style_subclass_proc(
+    window: windows_sys::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows_sys::Win32::Foundation::WPARAM,
+    lparam: windows_sys::Win32::Foundation::LPARAM,
+    subclass_id: usize,
+    _reference_data: usize,
+) -> windows_sys::Win32::Foundation::LRESULT {
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GWL_STYLE, STYLESTRUCT, WM_ERASEBKGND, WM_NCACTIVATE, WM_NCDESTROY, WM_NCPAINT,
+        WM_STYLECHANGING,
+    };
+
+    if message == WM_STYLECHANGING && wparam as isize == GWL_STYLE as isize && lparam != 0 {
+        let change = unsafe { &mut *(lparam as *mut STYLESTRUCT) };
+        let requested = change.styleNew;
+        change.styleNew = popup_window_style(requested as isize) as u32;
+        debug_qa::trace(format!(
+            "tool-menu popup-style-guard requested={requested:#x} applied={:#x}",
+            change.styleNew
+        ));
+    }
+
+    // The transparent WebView covers the whole client area. Letting DefWindowProc
+    // repaint the retained Tao caption/background surface on deactivation exposes
+    // a light strip above the fading document even though WS_CAPTION is gone.
+    if message == WM_NCACTIVATE {
+        debug_qa::trace(format!(
+            "tool-menu native-paint suppressed=ncactivate active={}",
+            wparam != 0
+        ));
+        return 1;
+    }
+    if message == WM_NCPAINT {
+        debug_qa::trace("tool-menu native-paint suppressed=ncpaint");
+        return 0;
+    }
+    if message == WM_ERASEBKGND {
+        debug_qa::trace("tool-menu native-paint suppressed=erase-background");
+        return 1;
+    }
+
+    let result = unsafe { DefSubclassProc(window, message, wparam, lparam) };
+    if message == WM_NCDESTROY {
+        unsafe {
+            RemoveWindowSubclass(window, Some(popup_style_subclass_proc), subclass_id);
+        }
+    }
+    result
+}
+
+/// Tao can retain caption/system-menu bits on an undecorated transparent
+/// window. They are normally covered by the WebView, but become visible as a
+/// clipped title-bar cap when the document fades. Make the native surface a
+/// real popup before its first visible frame.
+#[cfg(windows)]
+fn configure_popup_style<R: Runtime>(
+    window: &WebviewWindow<R>,
+) -> Result<(), ToolMenuSurfaceError> {
+    use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    };
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|_| ToolMenuSurfaceError::ConfigurePopupStyle)?;
+    unsafe {
+        SetLastError(0);
+        let original_style = GetWindowLongPtrW(hwnd.0, GWL_STYLE);
+        if original_style == 0 && GetLastError() != 0 {
+            return Err(ToolMenuSurfaceError::ConfigurePopupStyle);
+        }
+        let popup_style = popup_window_style(original_style);
+        SetLastError(0);
+        let previous_style = SetWindowLongPtrW(hwnd.0, GWL_STYLE, popup_style);
+        if previous_style == 0 && GetLastError() != 0 {
+            return Err(ToolMenuSurfaceError::ConfigurePopupStyle);
+        }
+        if SetWindowPos(
+            hwnd.0,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+        ) == 0
+        {
+            return Err(ToolMenuSurfaceError::ConfigurePopupStyle);
+        }
+        debug_qa::trace(format!(
+            "tool-menu popup-style result=applied original={original_style:#x} current={:#x}",
+            GetWindowLongPtrW(hwnd.0, GWL_STYLE)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn install_popup_style_guard<R: Runtime>(
+    _window: &WebviewWindow<R>,
+) -> Result<(), ToolMenuSurfaceError> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn configure_popup_style<R: Runtime>(
+    _window: &WebviewWindow<R>,
+) -> Result<(), ToolMenuSurfaceError> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -321,9 +487,8 @@ fn apply_circular_region<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), To
 /// The menu is a circular content surface, not a conventional application
 /// window. Disable DWM's non-client painting and remove the border color so a
 /// title-bar or frame surface can never be composed above the transparent
-/// WebView while it closes. The Surface is an instant popup, so DWM window
-/// transitions are disabled as well: otherwise click-away can animate a
-/// cached rectangular redirection surface after the circular region shrinks.
+/// WebView while it closes. DWM's automatic transitions stay disabled so only
+/// the document-level exit transition participates in composition.
 #[cfg(windows)]
 fn configure_transparent_non_client<R: Runtime>(window: &WebviewWindow<R>) {
     use windows_sys::Win32::Graphics::Dwm::{
@@ -391,6 +556,24 @@ mod tests {
         assert!(begin_hide(&visible));
         restore_visible_after_failed_hide(&visible);
         assert!(begin_hide(&visible));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn popup_style_removes_every_native_caption_control() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+        };
+
+        let decorated = (WS_CAPTION
+            | WS_SYSMENU
+            | WS_THICKFRAME
+            | WS_MINIMIZEBOX
+            | WS_MAXIMIZEBOX) as isize;
+        let style = popup_window_style(decorated);
+
+        assert_ne!(style & WS_POPUP as isize, 0);
+        assert_eq!(style & decorated, 0);
     }
 
     #[test]

@@ -12,6 +12,7 @@ use super::clipboard_surface_foreground::{self, ForegroundMonitorError};
 use super::clipboard_surface_pointer::{self, PointerMonitorError};
 use super::debug_qa;
 use super::surface::{SurfaceError, SurfaceManager};
+use super::surface_window_animation;
 
 pub const CLIPBOARD_SURFACE_LABEL: &str = "clipboard-surface";
 pub const CLIPBOARD_PREVIEW_SURFACE_LABEL: &str = "clipboard-preview-surface";
@@ -214,6 +215,7 @@ impl SurfaceAnchorSource {
 }
 
 trait NativeVisibilityApi {
+    #[cfg(test)]
     fn hide(&mut self, window: usize);
     fn is_visible(&mut self, window: usize) -> bool;
 }
@@ -514,6 +516,7 @@ pub fn show<R: Runtime>(
     let target_top_window = captured_target_top_window.or_else(native_foreground_root);
     configure_native_popup(window)?;
     let placement = placement_for_current_anchor(window, captured_target_top_window)?;
+    surface_window_animation::prepare_show(window);
     show_native_no_activate(window, placement)?;
     refresh_native_shape_or_log(window);
     #[cfg(windows)]
@@ -728,6 +731,7 @@ pub fn open_preview<R: Runtime>(
                 debug_qa::trace(format!(
                     "preview native show record_id={record_id} placement={placement:?} requested"
                 ));
+                surface_window_animation::prepare_show(&preview);
                 show_native_no_activate(&preview, placement)
             },
             || native_is_visible(&preview),
@@ -890,6 +894,7 @@ fn notify_state_or_log<R: Runtime>(app: &AppHandle<R>, change: &'static str) {
     }
 }
 
+#[cfg(test)]
 fn hide_and_verify<A: NativeVisibilityApi>(
     api: &mut A,
     window: usize,
@@ -949,6 +954,7 @@ struct SystemNativeVisibilityApi;
 
 #[cfg(windows)]
 impl NativeVisibilityApi for SystemNativeVisibilityApi {
+    #[cfg(test)]
     fn hide(&mut self, window: usize) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
         unsafe {
@@ -965,10 +971,15 @@ impl NativeVisibilityApi for SystemNativeVisibilityApi {
 fn hide_native_verified<R: Runtime>(
     window: &WebviewWindow<R>,
 ) -> Result<(), ClipboardSurfaceWindowError> {
-    let hwnd = window
-        .hwnd()
-        .map_err(|_| ClipboardSurfaceWindowError::NativeHandle)?;
-    hide_and_verify(&mut SystemNativeVisibilityApi, hwnd.0 as usize)
+    let animated = surface_window_animation::fade_hide_native(window);
+    debug_qa::trace(format!(
+        "clipboard surface fade-hide result={} duration_ms={}",
+        if animated { "transition_started" } else { "failed" },
+        surface_window_animation::SURFACE_EXIT_FADE_DURATION_MS
+    ));
+    animated
+        .then_some(())
+        .ok_or(ClipboardSurfaceWindowError::StillVisible)
 }
 
 #[cfg(not(windows))]

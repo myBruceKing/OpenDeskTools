@@ -31,7 +31,12 @@ export function AppIcon({ src, label, size = "row", className = "" }: AppIconPro
       role="img"
       aria-label={label}
     >
-      {src ? <img src={src} alt="" draggable={false} /> : <AppGeneric24Regular aria-hidden="true" />}
+      {src ? (
+        <>
+          <img className={styles.appIconGlow} src={src} alt="" draggable={false} aria-hidden="true" />
+          <img className={styles.appIconImage} src={src} alt="" draggable={false} />
+        </>
+      ) : <AppGeneric24Regular aria-hidden="true" />}
     </span>
   );
 }
