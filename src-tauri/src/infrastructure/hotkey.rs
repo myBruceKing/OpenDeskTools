@@ -1050,7 +1050,10 @@ fn load_preferences(
                 }
                 if registration.action_id == HotkeyActionId::LauncherOpen
                     && !registration.force_override_system
-                    && matches!(binding.normalized().as_str(), "Alt+Space" | "Ctrl+Alt+Space")
+                    && matches!(
+                        binding.normalized().as_str(),
+                        "Alt+Space" | "Ctrl+Alt+Space"
+                    )
                 {
                     binding = HotkeyBinding::parse(HotkeyActionId::LauncherOpen.default_binding())
                         .expect("built-in launcher binding must be valid");
@@ -1460,16 +1463,59 @@ mod tests {
         }
         cases.extend(
             [
-                "Backquote", "Backslash", "BracketLeft", "BracketRight", "Pause", "Comma",
-                "Equal", "Minus", "Period", "Quote", "Semicolon", "Slash", "Backspace",
-                "CapsLock", "Enter", "Space", "Tab", "Delete", "End", "Home", "Insert",
-                "PageDown", "PageUp", "PrintScreen", "ScrollLock", "ArrowDown", "ArrowLeft",
-                "ArrowRight", "ArrowUp", "NumLock", "Numpad0", "Numpad1", "Numpad2",
-                "Numpad3", "Numpad4", "Numpad5", "Numpad6", "Numpad7", "Numpad8",
-                "Numpad9", "NumpadAdd", "NumpadDecimal", "NumpadDivide",
-                "NumpadMultiply", "NumpadSubtract", "Escape",
-                "AudioVolumeDown", "AudioVolumeUp", "AudioVolumeMute", "MediaPlay",
-                "MediaPlayPause", "MediaStop", "MediaTrackNext",
+                "Backquote",
+                "Backslash",
+                "BracketLeft",
+                "BracketRight",
+                "Pause",
+                "Comma",
+                "Equal",
+                "Minus",
+                "Period",
+                "Quote",
+                "Semicolon",
+                "Slash",
+                "Backspace",
+                "CapsLock",
+                "Enter",
+                "Space",
+                "Tab",
+                "Delete",
+                "End",
+                "Home",
+                "Insert",
+                "PageDown",
+                "PageUp",
+                "PrintScreen",
+                "ScrollLock",
+                "ArrowDown",
+                "ArrowLeft",
+                "ArrowRight",
+                "ArrowUp",
+                "NumLock",
+                "Numpad0",
+                "Numpad1",
+                "Numpad2",
+                "Numpad3",
+                "Numpad4",
+                "Numpad5",
+                "Numpad6",
+                "Numpad7",
+                "Numpad8",
+                "Numpad9",
+                "NumpadAdd",
+                "NumpadDecimal",
+                "NumpadDivide",
+                "NumpadMultiply",
+                "NumpadSubtract",
+                "Escape",
+                "AudioVolumeDown",
+                "AudioVolumeUp",
+                "AudioVolumeMute",
+                "MediaPlay",
+                "MediaPlayPause",
+                "MediaStop",
+                "MediaTrackNext",
                 "MediaTrackPrevious",
             ]
             .into_iter()
@@ -1486,7 +1532,9 @@ mod tests {
         for (stored_key, callback_key) in cases {
             let callback_binding = format!("Shift+{callback_key}");
             assert_eq!(
-                HotkeyBinding::parse(&callback_binding).unwrap().normalized(),
+                HotkeyBinding::parse(&callback_binding)
+                    .unwrap()
+                    .normalized(),
                 format!("Shift+{stored_key}"),
                 "parser mismatch for {callback_key}"
             );
@@ -1578,7 +1626,10 @@ mod tests {
         // The launcher is now a separately available default registration;
         // changing an unavailable screenshot action must not add another one.
         assert_eq!(registrar.registrations.load(Ordering::SeqCst), 1);
-        assert_eq!(updated.actions[0].runtime_state, HotkeyRuntimeState::Unavailable);
+        assert_eq!(
+            updated.actions[0].runtime_state,
+            HotkeyRuntimeState::Unavailable
+        );
         drop(manager);
         drop(storage);
         let reopened = Arc::new(StorageService::initialize(&data_root).unwrap());

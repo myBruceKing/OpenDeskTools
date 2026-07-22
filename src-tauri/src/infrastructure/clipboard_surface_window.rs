@@ -667,7 +667,8 @@ fn queue_external_surface_close<R: Runtime>(
     if let Err(error) = dispatch_app.run_on_main_thread(move || {
         if let Some(observation) = pointer_observation {
             debug_qa::trace(format!(
-                "outside pointer close message={:#x} point=({}, {}) observed_root={:#x} pass_through=true",
+                "outside pointer close backend={} message={:#x} point=({}, {}) observed_root={:#x} pass_through=true",
+                observation.backend,
                 observation.message,
                 observation.point_x,
                 observation.point_y,
@@ -974,7 +975,11 @@ fn hide_native_verified<R: Runtime>(
     let animated = surface_window_animation::fade_hide_native(window);
     debug_qa::trace(format!(
         "clipboard surface fade-hide result={} duration_ms={}",
-        if animated { "transition_started" } else { "failed" },
+        if animated {
+            "transition_started"
+        } else {
+            "failed"
+        },
         surface_window_animation::SURFACE_EXIT_FADE_DURATION_MS
     ));
     animated

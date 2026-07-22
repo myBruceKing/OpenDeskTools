@@ -502,11 +502,7 @@ fn dispatch_event(inner: &BrokerInner, event: BrokerEvent) {
     }
 }
 
-fn normalized_token(
-    pressed: &HashSet<u32>,
-    virtual_key: u32,
-    extended: bool,
-) -> Option<String> {
+fn normalized_token(pressed: &HashSet<u32>, virtual_key: u32, extended: bool) -> Option<String> {
     let key = key_name(virtual_key, extended)?;
     let mut parts = Vec::with_capacity(5);
     if pressed.iter().any(|key| is_control(*key)) {

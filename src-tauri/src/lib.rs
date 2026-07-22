@@ -10,12 +10,12 @@ use infrastructure::clipboard_surface_window::{
     self, ClipboardPreviewCloseReason, ClipboardSurfaceCloseReason,
     CLIPBOARD_PREVIEW_SURFACE_LABEL, CLIPBOARD_SURFACE_LABEL,
 };
-use infrastructure::tool_menu_surface_window::{self, TOOL_MENU_SURFACE_LABEL};
 use infrastructure::debug_qa;
 #[cfg(debug_assertions)]
 use infrastructure::debug_qa::DebugQaOptions;
 use infrastructure::hotkey::{HotkeyActionId, OrdinaryHotkeyTransition, TauriHotkeyRegistrar};
 use infrastructure::keyboard_hook::{RuntimeHotkeyEvent, RuntimeHotkeyPhase};
+use infrastructure::tool_menu_surface_window::{self, TOOL_MENU_SURFACE_LABEL};
 use infrastructure::tray::{
     route_window_lifecycle, TrayLifecycle, WindowLifecycleInput, WindowLifecycleRoute,
 };
@@ -299,7 +299,10 @@ fn handle_clipboard_preview_surface_window_event<R: Runtime>(
     }
 }
 
-fn handle_tool_menu_surface_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
+fn handle_tool_menu_surface_window_event<R: Runtime>(
+    window: &tauri::Window<R>,
+    event: &tauri::WindowEvent,
+) {
     match event {
         tauri::WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
@@ -322,10 +325,9 @@ fn show_tool_menu_surface<R: Runtime>(
     app: &AppHandle<R>,
     runtime: &ApplicationRuntime,
 ) -> Result<(), tool_menu_surface_window::ToolMenuSurfaceError> {
-    let snapshot = runtime
-        .quick_launch()
-        .snapshot()
-        .map_err(|error| tool_menu_surface_window::ToolMenuSurfaceError::QuickLaunch(error.to_string()))?;
+    let snapshot = runtime.quick_launch().snapshot().map_err(|error| {
+        tool_menu_surface_window::ToolMenuSurfaceError::QuickLaunch(error.to_string())
+    })?;
     tool_menu_surface_window::show(app, &snapshot)
 }
 
@@ -336,7 +338,9 @@ fn release_tool_menu_surface<R: Runtime>(
     let preferences = runtime
         .quick_launch()
         .tool_menu_preferences()
-        .map_err(|error| tool_menu_surface_window::ToolMenuSurfaceError::QuickLaunch(error.to_string()))?;
+        .map_err(|error| {
+            tool_menu_surface_window::ToolMenuSurfaceError::QuickLaunch(error.to_string())
+        })?;
     if !preferences.keep_open_on_key_release {
         tool_menu_surface_window::request_hide(app)?;
     }

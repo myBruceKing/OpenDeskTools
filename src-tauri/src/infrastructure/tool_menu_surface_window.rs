@@ -1,6 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder,
+};
 use thiserror::Error;
 
 use super::{
@@ -101,7 +104,11 @@ pub fn show<R: Runtime>(
     debug_qa::trace(format!(
         "tool-menu show result=visible layout={:?} visible_items={} size={}x{}",
         snapshot.tool_menu.layout,
-        snapshot.pinned_apps.iter().filter(|app| app.visible).count(),
+        snapshot
+            .pinned_apps
+            .iter()
+            .filter(|app| app.visible)
+            .count(),
         size.0,
         size.1
     ));
@@ -126,7 +133,11 @@ fn configure_window<R: Runtime>(
     snapshot: &QuickLaunchSnapshot,
     preserve_center: bool,
 ) -> Result<(u32, u32), ToolMenuSurfaceError> {
-    let visible_item_count = snapshot.pinned_apps.iter().filter(|app| app.visible).count();
+    let visible_item_count = snapshot
+        .pinned_apps
+        .iter()
+        .filter(|app| app.visible)
+        .count();
     let size = surface_size(snapshot.tool_menu.layout, visible_item_count);
     let center = if preserve_center {
         let position = window.outer_position()?;
@@ -140,8 +151,8 @@ fn configure_window<R: Runtime>(
     };
     window.set_size(PhysicalSize::new(size.0, size.1))?;
     match snapshot.tool_menu.layout {
-        ToolMenuLayout::Wheel => apply_circular_region(&window)?,
-        ToolMenuLayout::Dock | ToolMenuLayout::Vertical => clear_window_region(&window)?,
+        ToolMenuLayout::Wheel => apply_circular_region(window)?,
+        ToolMenuLayout::Dock | ToolMenuLayout::Vertical => clear_window_region(window)?,
     }
     if let Some(center) = center {
         window.set_position(PhysicalPosition::new(
@@ -189,14 +200,14 @@ fn surface_size(layout: ToolMenuLayout, visible_item_count: usize) -> (u32, u32)
             (surface, surface)
         }
         ToolMenuLayout::Dock => {
-            let rows = ((item_count + TOOL_MENU_DOCK_COLUMNS - 1) / TOOL_MENU_DOCK_COLUMNS) as u32;
+            let rows = item_count.div_ceil(TOOL_MENU_DOCK_COLUMNS) as u32;
             // Six independent 52px icon slots with five 10px gutters and
             // 12px padding on both sides. Keep this in lockstep with the
             // shared dock Grid instead of relying on separator borders.
             (388, (rows * 52 + rows.saturating_sub(1) * 10 + 26).max(78))
         }
         ToolMenuLayout::Vertical => {
-            let columns = ((item_count + TOOL_MENU_DOCK_COLUMNS - 1) / TOOL_MENU_DOCK_COLUMNS) as u32;
+            let columns = item_count.div_ceil(TOOL_MENU_DOCK_COLUMNS) as u32;
             (columns * 52 + columns.saturating_sub(1) * 10 + 26, 390)
         }
     }
@@ -266,7 +277,11 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> 
 pub fn lost_foreground<R: Runtime>(window: &tauri::Window<R>) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOT};
 
-    let Ok(surface) = window.app_handle().get_webview_window(TOOL_MENU_SURFACE_LABEL).ok_or(()) else {
+    let Ok(surface) = window
+        .app_handle()
+        .get_webview_window(TOOL_MENU_SURFACE_LABEL)
+        .ok_or(())
+    else {
         return false;
     };
     let Ok(surface_hwnd) = surface.hwnd() else {
@@ -460,13 +475,22 @@ fn pointer_position() -> Result<(i32, i32), ToolMenuSurfaceError> {
 }
 
 #[cfg(windows)]
-fn apply_circular_region<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), ToolMenuSurfaceError> {
+fn apply_circular_region<R: Runtime>(
+    window: &WebviewWindow<R>,
+) -> Result<(), ToolMenuSurfaceError> {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::{CreateEllipticRgn, DeleteObject, SetWindowRgn};
     use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
 
-    let hwnd = window.hwnd().map_err(|_| ToolMenuSurfaceError::CreateRegion)?;
-    let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let hwnd = window
+        .hwnd()
+        .map_err(|_| ToolMenuSurfaceError::CreateRegion)?;
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     if unsafe { GetClientRect(hwnd.0, &mut rect) } == 0 || rect.right <= 0 || rect.bottom <= 0 {
         return Err(ToolMenuSurfaceError::CreateRegion);
     }
@@ -537,6 +561,31 @@ fn configure_transparent_non_client<R: Runtime>(window: &WebviewWindow<R>) {
 #[cfg(not(windows))]
 fn configure_transparent_non_client<R: Runtime>(_window: &WebviewWindow<R>) {}
 
+#[cfg(windows)]
+fn clear_window_region<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), ToolMenuSurfaceError> {
+    use windows_sys::Win32::Graphics::Gdi::SetWindowRgn;
+
+    let hwnd = window
+        .hwnd()
+        .map_err(|_| ToolMenuSurfaceError::ApplyRegion)?;
+    if unsafe { SetWindowRgn(hwnd.0, std::ptr::null_mut(), 1) } == 0 {
+        return Err(ToolMenuSurfaceError::ApplyRegion);
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn clear_window_region<R: Runtime>(_window: &WebviewWindow<R>) -> Result<(), ToolMenuSurfaceError> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn apply_circular_region<R: Runtime>(
+    _window: &WebviewWindow<R>,
+) -> Result<(), ToolMenuSurfaceError> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,11 +614,8 @@ mod tests {
             WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
         };
 
-        let decorated = (WS_CAPTION
-            | WS_SYSMENU
-            | WS_THICKFRAME
-            | WS_MINIMIZEBOX
-            | WS_MAXIMIZEBOX) as isize;
+        let decorated =
+            (WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX) as isize;
         let style = popup_window_style(decorated);
 
         assert_ne!(style & WS_POPUP as isize, 0);
@@ -578,10 +624,9 @@ mod tests {
 
     #[test]
     fn tool_menu_surface_can_subscribe_to_tauri_events() {
-        let capability: serde_json::Value = serde_json::from_str(include_str!(
-            "../../capabilities/default.json"
-        ))
-        .expect("default capability should be valid JSON");
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../../capabilities/default.json"))
+                .expect("default capability should be valid JSON");
         let windows = capability["windows"]
             .as_array()
             .expect("default capability should declare its windows");
@@ -590,25 +635,4 @@ mod tests {
             .iter()
             .any(|label| label.as_str() == Some(TOOL_MENU_SURFACE_LABEL)));
     }
-}
-
-#[cfg(windows)]
-fn clear_window_region<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), ToolMenuSurfaceError> {
-    use windows_sys::Win32::Graphics::Gdi::SetWindowRgn;
-
-    let hwnd = window.hwnd().map_err(|_| ToolMenuSurfaceError::ApplyRegion)?;
-    if unsafe { SetWindowRgn(hwnd.0, std::ptr::null_mut(), 1) } == 0 {
-        return Err(ToolMenuSurfaceError::ApplyRegion);
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn clear_window_region<R: Runtime>(_window: &WebviewWindow<R>) -> Result<(), ToolMenuSurfaceError> {
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn apply_circular_region<R: Runtime>(_window: &WebviewWindow<R>) -> Result<(), ToolMenuSurfaceError> {
-    Ok(())
 }

@@ -42,9 +42,7 @@ fn is_current_generation(label: &str, generation: u64) -> bool {
 /// composition artifacts on transparent windows.
 pub fn prepare_show<R: Runtime>(window: &WebviewWindow<R>) {
     advance_generation(window.label());
-    let _ = window.eval(
-        "document.documentElement.removeAttribute('data-surface-closing');",
-    );
+    let _ = window.eval("document.documentElement.removeAttribute('data-surface-closing');");
 }
 
 /// Start a document-level opacity transition and hide through Tauri after the
@@ -88,9 +86,8 @@ fn fade_hide_with<R: Runtime>(window: &WebviewWindow<R>, mode: FinalHideMode) ->
                 eprintln!("failed to hide {main_thread_label} after the exit transition");
                 return;
             }
-            let _ = main_thread_window.eval(
-                "document.documentElement.removeAttribute('data-surface-closing');",
-            );
+            let _ = main_thread_window
+                .eval("document.documentElement.removeAttribute('data-surface-closing');");
             #[cfg(debug_assertions)]
             super::debug_qa::trace(format!(
                 "surface exit final-hide label={main_thread_label} backend={} visible_after={:?}",

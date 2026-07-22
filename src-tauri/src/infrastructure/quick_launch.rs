@@ -38,12 +38,13 @@ pub struct QuickLaunchSnapshot {
     pub tool_menu: ToolMenuPreferences,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ToolMenuLayout { Wheel, Dock, Vertical }
-
-impl Default for ToolMenuLayout {
-    fn default() -> Self { Self::Wheel }
+pub enum ToolMenuLayout {
+    #[default]
+    Wheel,
+    Dock,
+    Vertical,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,7 +57,12 @@ pub struct ToolMenuPreferences {
 }
 
 impl Default for ToolMenuPreferences {
-    fn default() -> Self { Self { layout: ToolMenuLayout::Wheel, keep_open_on_key_release: false } }
+    fn default() -> Self {
+        Self {
+            layout: ToolMenuLayout::Wheel,
+            keep_open_on_key_release: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,7 +160,10 @@ impl QuickLaunchService {
         Ok(self.read_state()?.tool_menu)
     }
 
-    pub fn update_tool_menu_preferences(&self, preferences: ToolMenuPreferences) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
+    pub fn update_tool_menu_preferences(
+        &self,
+        preferences: ToolMenuPreferences,
+    ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
         let mut state = self.read_state()?;
         state.tool_menu = preferences;
         self.write_state(&state)?;
@@ -173,7 +182,11 @@ impl QuickLaunchService {
         self.snapshot()
     }
 
-    pub fn pin(&self, path: String, source: Option<String>) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
+    pub fn pin(
+        &self,
+        path: String,
+        source: Option<String>,
+    ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
         let resolved = match self
             .discovered
             .lock()
@@ -210,7 +223,11 @@ impl QuickLaunchService {
         self.snapshot()
     }
 
-    pub fn set_visible(&self, path: &str, visible: bool) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
+    pub fn set_visible(
+        &self,
+        path: &str,
+        visible: bool,
+    ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
         let mut state = self.read_state()?;
         let Some(app) = state
             .pinned_apps
@@ -237,7 +254,11 @@ impl QuickLaunchService {
         self.snapshot()
     }
 
-    pub fn reorder(&self, active_path: &str, over_path: &str) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
+    pub fn reorder(
+        &self,
+        active_path: &str,
+        over_path: &str,
+    ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
         let mut state = self.read_state()?;
         let active = state
             .pinned_apps
@@ -261,7 +282,11 @@ impl QuickLaunchService {
     /// This is the spatial rule for the radial menu: crossing from an inner
     /// ring to an outer ring must not pull the first outer item into the
     /// center merely because a list insertion shifted its index.
-    pub fn swap(&self, active_path: &str, over_path: &str) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
+    pub fn swap(
+        &self,
+        active_path: &str,
+        over_path: &str,
+    ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
         let mut state = self.read_state()?;
         let active = state
             .pinned_apps
@@ -352,10 +377,14 @@ impl QuickLaunchService {
             }
         }
         for path in registry_app_paths() {
-            if candidates.len() >= MAX_DISCOVERED_APPS { break; }
+            if candidates.len() >= MAX_DISCOVERED_APPS {
+                break;
+            }
             let path = path.to_string_lossy().into_owned();
             if let Some(app) = resolve_launch_target(&path) {
-                candidates.entry(normalized_path(&app.path)).or_insert_with(|| saved_app(app, "注册表 App Paths"));
+                candidates
+                    .entry(normalized_path(&app.path))
+                    .or_insert_with(|| saved_app(app, "注册表 App Paths"));
             }
         }
         let mut apps = candidates.into_values().collect::<Vec<_>>();
@@ -389,18 +418,28 @@ fn is_launchable(path: &Path) -> bool {
     )
 }
 
-fn collect_launchable_files(root: &Path, source: &str, candidates: &mut HashMap<String, SavedQuickLaunchApp>) {
+fn collect_launchable_files(
+    root: &Path,
+    source: &str,
+    candidates: &mut HashMap<String, SavedQuickLaunchApp>,
+) {
     let mut directories = vec![(root.to_path_buf(), 0_usize)];
     while let Some((directory, depth)) = directories.pop() {
-        let Ok(entries) = std::fs::read_dir(directory) else { continue; };
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
         for entry in entries.flatten() {
-            if candidates.len() >= MAX_DISCOVERED_APPS { return; }
+            if candidates.len() >= MAX_DISCOVERED_APPS {
+                return;
+            }
             let path = entry.path();
             if path.is_dir() && depth < MAX_SCAN_DEPTH {
                 directories.push((path, depth + 1));
             } else if path.is_file() && is_launchable(&path) {
                 if let Some(app) = resolve_launch_target(&path.to_string_lossy()) {
-                    candidates.entry(normalized_path(&app.path)).or_insert_with(|| saved_app(app, source));
+                    candidates
+                        .entry(normalized_path(&app.path))
+                        .or_insert_with(|| saved_app(app, source));
                 }
             }
         }
@@ -413,10 +452,16 @@ fn discovery_roots() -> Vec<(PathBuf, String)> {
         roots.push((PathBuf::from(profile).join("Desktop"), "桌面".to_owned()));
     }
     if let Ok(app_data) = std::env::var("APPDATA") {
-        roots.push((PathBuf::from(app_data).join("Microsoft/Windows/Start Menu/Programs"), "开始菜单".to_owned()));
+        roots.push((
+            PathBuf::from(app_data).join("Microsoft/Windows/Start Menu/Programs"),
+            "开始菜单".to_owned(),
+        ));
     }
     if let Ok(program_data) = std::env::var("PROGRAMDATA") {
-        roots.push((PathBuf::from(program_data).join("Microsoft/Windows/Start Menu/Programs"), "公共开始菜单".to_owned()));
+        roots.push((
+            PathBuf::from(program_data).join("Microsoft/Windows/Start Menu/Programs"),
+            "公共开始菜单".to_owned(),
+        ));
     }
     roots
 }
@@ -433,33 +478,91 @@ fn registry_app_paths() -> Vec<PathBuf> {
     for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
         let root_name = APP_PATHS.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
         let mut root_key: HKEY = std::ptr::null_mut();
-        if unsafe { RegOpenKeyExW(root, root_name.as_ptr(), 0, KEY_READ, &mut root_key) } != ERROR_SUCCESS { continue; }
+        if unsafe { RegOpenKeyExW(root, root_name.as_ptr(), 0, KEY_READ, &mut root_key) }
+            != ERROR_SUCCESS
+        {
+            continue;
+        }
         let mut index = 0;
         loop {
             let mut name = vec![0_u16; 260];
             let mut length = name.len() as u32;
-            let status = unsafe { RegEnumKeyExW(root_key, index, name.as_mut_ptr(), &mut length, std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) };
-            if status == ERROR_NO_MORE_ITEMS { break; }
+            let status = unsafe {
+                RegEnumKeyExW(
+                    root_key,
+                    index,
+                    name.as_mut_ptr(),
+                    &mut length,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if status == ERROR_NO_MORE_ITEMS {
+                break;
+            }
             index += 1;
-            if status != ERROR_SUCCESS { continue; }
+            if status != ERROR_SUCCESS {
+                continue;
+            }
             name.truncate(length as usize);
             let mut child: HKEY = std::ptr::null_mut();
-            if unsafe { RegOpenKeyExW(root_key, name.as_ptr(), 0, KEY_READ, &mut child) } != ERROR_SUCCESS { continue; }
+            if unsafe { RegOpenKeyExW(root_key, name.as_ptr(), 0, KEY_READ, &mut child) }
+                != ERROR_SUCCESS
+            {
+                continue;
+            }
             let mut value_type = 0_u32;
             let mut byte_length = 0_u32;
-            let first = unsafe { RegQueryValueExW(child, std::ptr::null(), std::ptr::null(), &mut value_type, std::ptr::null_mut(), &mut byte_length) };
-            if first == ERROR_SUCCESS && (value_type == REG_SZ || value_type == REG_EXPAND_SZ) && byte_length >= 2 {
+            let first = unsafe {
+                RegQueryValueExW(
+                    child,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut value_type,
+                    std::ptr::null_mut(),
+                    &mut byte_length,
+                )
+            };
+            if first == ERROR_SUCCESS
+                && (value_type == REG_SZ || value_type == REG_EXPAND_SZ)
+                && byte_length >= 2
+            {
                 let mut value = vec![0_u16; (byte_length as usize).div_ceil(2)];
                 let mut size = (value.len() * std::mem::size_of::<u16>()) as u32;
-                if unsafe { RegQueryValueExW(child, std::ptr::null(), std::ptr::null(), &mut value_type, value.as_mut_ptr() as *mut u8, &mut size) } == ERROR_SUCCESS {
-                    let raw = String::from_utf16_lossy(&value).trim_end_matches('\0').trim().to_owned();
-                    let expanded = if value_type == REG_EXPAND_SZ { expand_environment_variables(&raw) } else { raw };
-                    if let Some(path) = executable_from_app_path(&expanded) { paths.push(path); }
+                if unsafe {
+                    RegQueryValueExW(
+                        child,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        &mut value_type,
+                        value.as_mut_ptr() as *mut u8,
+                        &mut size,
+                    )
+                } == ERROR_SUCCESS
+                {
+                    let raw = String::from_utf16_lossy(&value)
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_owned();
+                    let expanded = if value_type == REG_EXPAND_SZ {
+                        expand_environment_variables(&raw)
+                    } else {
+                        raw
+                    };
+                    if let Some(path) = executable_from_app_path(&expanded) {
+                        paths.push(path);
+                    }
                 }
             }
-            unsafe { RegCloseKey(child); }
+            unsafe {
+                RegCloseKey(child);
+            }
         }
-        unsafe { RegCloseKey(root_key); }
+        unsafe {
+            RegCloseKey(root_key);
+        }
     }
     paths
 }
@@ -476,13 +579,19 @@ fn expand_environment_variables(value: &str) -> String {
 #[cfg(windows)]
 fn executable_from_app_path(value: &str) -> Option<PathBuf> {
     let value = value.trim();
-    let candidate = if let Some(rest) = value.strip_prefix('"') { rest.split('"').next()? } else { value };
+    let candidate = if let Some(rest) = value.strip_prefix('"') {
+        rest.split('"').next()?
+    } else {
+        value
+    };
     let candidate = PathBuf::from(candidate);
     (candidate.is_file() && is_launchable(&candidate)).then_some(candidate)
 }
 
 #[cfg(not(windows))]
-fn registry_app_paths() -> Vec<PathBuf> { Vec::new() }
+fn registry_app_paths() -> Vec<PathBuf> {
+    Vec::new()
+}
 
 #[derive(Debug)]
 struct ResolvedLaunchTarget {
@@ -509,11 +618,25 @@ fn saved_app(app: ResolvedLaunchTarget, source: &str) -> SavedQuickLaunchApp {
 
 fn resolve_launch_target(path: &str) -> Option<ResolvedLaunchTarget> {
     let path = Path::new(path);
-    if !path.is_absolute() || !path.is_file() { return None; }
-    match path.extension().and_then(OsStr::to_str).map(|value| value.to_ascii_lowercase()).as_deref() {
+    if !path.is_absolute() || !path.is_file() {
+        return None;
+    }
+    match path
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
         Some("exe") => {
             let path = path.to_string_lossy().into_owned();
-            Some(ResolvedLaunchTarget { name: display_name(&path), icon_path: path.clone(), path, arguments: String::new(), working_directory: None, icon_index: 0 })
+            Some(ResolvedLaunchTarget {
+                name: display_name(&path),
+                icon_path: path.clone(),
+                path,
+                arguments: String::new(),
+                working_directory: None,
+                icon_index: 0,
+            })
         }
         Some("lnk") => resolve_windows_shortcut(path),
         _ => None,
@@ -522,21 +645,33 @@ fn resolve_launch_target(path: &str) -> Option<ResolvedLaunchTarget> {
 
 #[cfg(windows)]
 fn resolve_windows_shortcut(shortcut: &Path) -> Option<ResolvedLaunchTarget> {
-    use windows::core::{GUID, HSTRING, Interface};
+    use windows::core::{Interface, GUID, HSTRING};
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, STGM_READ};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED, STGM_READ,
+    };
     use windows::Win32::UI::Shell::{IShellLinkW, SLGP_RAWPATH, SLR_NO_UI};
     const CLSID_SHELL_LINK: GUID = GUID::from_u128(0x00021401_0000_0000_c000_000000000046);
     let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
     let result = (|| unsafe {
-        let link: IShellLinkW = CoCreateInstance(&CLSID_SHELL_LINK, None, CLSCTX_INPROC_SERVER).ok()?;
+        let link: IShellLinkW =
+            CoCreateInstance(&CLSID_SHELL_LINK, None, CLSCTX_INPROC_SERVER).ok()?;
         let persist: IPersistFile = link.cast().ok()?;
-        persist.Load(&HSTRING::from(shortcut.to_string_lossy().as_ref()), STGM_READ).ok()?;
+        persist
+            .Load(
+                &HSTRING::from(shortcut.to_string_lossy().as_ref()),
+                STGM_READ,
+            )
+            .ok()?;
         let _ = link.Resolve(HWND(std::ptr::null_mut()), SLR_NO_UI.0 as u32);
         let mut target = vec![0_u16; 32_768];
-        link.GetPath(&mut target, std::ptr::null_mut(), SLGP_RAWPATH.0 as u32).ok()?;
+        link.GetPath(&mut target, std::ptr::null_mut(), SLGP_RAWPATH.0 as u32)
+            .ok()?;
         let path = nul_terminated_string(&target);
-        if !Path::new(&path).is_file() || !path.to_ascii_lowercase().ends_with(".exe") { return None; }
+        if !Path::new(&path).is_file() || !path.to_ascii_lowercase().ends_with(".exe") {
+            return None;
+        }
         let mut arguments = vec![0_u16; 32_768];
         link.GetArguments(&mut arguments).ok()?;
         let mut working_directory = vec![0_u16; 32_768];
@@ -546,38 +681,94 @@ fn resolve_windows_shortcut(shortcut: &Path) -> Option<ResolvedLaunchTarget> {
         link.GetIconLocation(&mut icon_path, &mut icon_index).ok()?;
         let icon_path = nul_terminated_string(&icon_path);
         Some(ResolvedLaunchTarget {
-            name: display_name(&path), path: path.clone(), arguments: nul_terminated_string(&arguments),
+            name: display_name(&path),
+            path: path.clone(),
+            arguments: nul_terminated_string(&arguments),
             working_directory: non_empty(nul_terminated_string(&working_directory)),
-            icon_path: non_empty(icon_path).unwrap_or(path), icon_index,
+            icon_path: non_empty(icon_path).unwrap_or(path),
+            icon_index,
         })
     })();
-    if initialized { unsafe { CoUninitialize(); } }
+    if initialized {
+        unsafe {
+            CoUninitialize();
+        }
+    }
     result
 }
 
 #[cfg(not(windows))]
-fn resolve_windows_shortcut(_shortcut: &Path) -> Option<ResolvedLaunchTarget> { None }
-
-fn nul_terminated_string(buffer: &[u16]) -> String {
-    let length = buffer.iter().position(|unit| *unit == 0).unwrap_or(buffer.len());
-    String::from_utf16_lossy(&buffer[..length]).trim().to_owned()
+fn resolve_windows_shortcut(_shortcut: &Path) -> Option<ResolvedLaunchTarget> {
+    None
 }
 
-fn non_empty(value: String) -> Option<String> { (!value.is_empty()).then_some(value) }
+fn nul_terminated_string(buffer: &[u16]) -> String {
+    let length = buffer
+        .iter()
+        .position(|unit| *unit == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf16_lossy(&buffer[..length])
+        .trim()
+        .to_owned()
+}
+
+fn non_empty(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
 
 #[cfg(windows)]
-fn launch_path(path: &str, arguments: &str, working_directory: Option<&str>) -> Result<(), QuickLaunchError> {
+fn launch_path(
+    path: &str,
+    arguments: &str,
+    working_directory: Option<&str>,
+) -> Result<(), QuickLaunchError> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    let wide = OsStr::new(path).encode_wide().chain(Some(0)).collect::<Vec<_>>();
-    let arguments = (!arguments.is_empty()).then(|| OsStr::new(arguments).encode_wide().chain(Some(0)).collect::<Vec<_>>());
-    let directory = working_directory.map(|value| OsStr::new(value).encode_wide().chain(Some(0)).collect::<Vec<_>>());
-    let result = unsafe { ShellExecuteW(std::ptr::null_mut(), std::ptr::null(), wide.as_ptr(), arguments.as_ref().map_or(std::ptr::null(), |value| value.as_ptr()), directory.as_ref().map_or(std::ptr::null(), |value| value.as_ptr()), 1) } as isize;
-    if result <= 32 { Err(QuickLaunchError::LaunchFailed) } else { Ok(()) }
+    let wide = OsStr::new(path)
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let arguments = (!arguments.is_empty()).then(|| {
+        OsStr::new(arguments)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>()
+    });
+    let directory = working_directory.map(|value| {
+        OsStr::new(value)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>()
+    });
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            wide.as_ptr(),
+            arguments
+                .as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            directory
+                .as_ref()
+                .map_or(std::ptr::null(), |value| value.as_ptr()),
+            1,
+        )
+    } as isize;
+    if result <= 32 {
+        Err(QuickLaunchError::LaunchFailed)
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(not(windows))]
-fn launch_path(_path: &str, _arguments: &str, _working_directory: Option<&str>) -> Result<(), QuickLaunchError> { Err(QuickLaunchError::LaunchFailed) }
+fn launch_path(
+    _path: &str,
+    _arguments: &str,
+    _working_directory: Option<&str>,
+) -> Result<(), QuickLaunchError> {
+    Err(QuickLaunchError::LaunchFailed)
+}
 
 #[cfg(test)]
 mod tests {
@@ -585,7 +776,10 @@ mod tests {
 
     #[test]
     fn ids_and_launchable_extensions_are_stable() {
-        assert_eq!(stable_id(r"C:\\Apps\\Demo.exe"), stable_id(r"c:\\apps\\demo.EXE"));
+        assert_eq!(
+            stable_id(r"C:\\Apps\\Demo.exe"),
+            stable_id(r"c:\\apps\\demo.EXE")
+        );
         assert!(is_launchable(Path::new("demo.lnk")));
         assert!(!is_launchable(Path::new("note.txt")));
     }
@@ -600,11 +794,25 @@ mod tests {
         let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
         let service = QuickLaunchService::initialize(Arc::clone(&storage)).unwrap();
 
-        service.pin(first.to_string_lossy().into_owned(), Some("测试".to_owned())).unwrap();
-        service.pin(second.to_string_lossy().into_owned(), Some("测试".to_owned())).unwrap();
-        let reordered = service.reorder(&second.to_string_lossy(), &first.to_string_lossy()).unwrap();
+        service
+            .pin(
+                first.to_string_lossy().into_owned(),
+                Some("测试".to_owned()),
+            )
+            .unwrap();
+        service
+            .pin(
+                second.to_string_lossy().into_owned(),
+                Some("测试".to_owned()),
+            )
+            .unwrap();
+        let reordered = service
+            .reorder(&second.to_string_lossy(), &first.to_string_lossy())
+            .unwrap();
         assert_eq!(reordered.pinned_apps[0].name, "Second");
-        let hidden = service.set_visible(&second.to_string_lossy(), false).unwrap();
+        let hidden = service
+            .set_visible(&second.to_string_lossy(), false)
+            .unwrap();
         assert!(!hidden.pinned_apps[0].visible);
 
         let reopened = QuickLaunchService::initialize(storage).unwrap();
@@ -627,10 +835,18 @@ mod tests {
         let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
         let service = QuickLaunchService::initialize(storage).unwrap();
         for path in &paths {
-            service.pin(path.to_string_lossy().into_owned(), Some("测试".to_owned())).unwrap();
+            service
+                .pin(path.to_string_lossy().into_owned(), Some("测试".to_owned()))
+                .unwrap();
         }
-        let swapped = service.swap(&paths[2].to_string_lossy(), &paths[7].to_string_lossy()).unwrap();
-        let names = swapped.pinned_apps.into_iter().map(|app| app.name).collect::<Vec<_>>();
+        let swapped = service
+            .swap(&paths[2].to_string_lossy(), &paths[7].to_string_lossy())
+            .unwrap();
+        let names = swapped
+            .pinned_apps
+            .into_iter()
+            .map(|app| app.name)
+            .collect::<Vec<_>>();
         assert_eq!(names, vec!["0", "1", "7", "3", "4", "5", "6", "2"]);
     }
 
@@ -643,7 +859,9 @@ mod tests {
         let executable = std::env::current_exe().unwrap();
         let executable = executable.to_string_lossy().into_owned();
 
-        service.pin(executable.clone(), Some("测试".to_owned())).unwrap();
+        service
+            .pin(executable.clone(), Some("测试".to_owned()))
+            .unwrap();
         let icon = service.icon_bytes(&executable).unwrap();
         assert!(icon.starts_with(b"\x89PNG\r\n\x1a\n"));
     }

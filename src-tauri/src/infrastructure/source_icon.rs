@@ -60,7 +60,11 @@ impl SourceIconService {
     /// Caches a concrete Shell icon location. Shortcut resolution supplies an
     /// explicit resource path and index; ordinary clipboard sources use index
     /// zero through [`Self::cache_executable`].
-    pub fn cache_icon(&self, icon_path: &Path, icon_index: i32) -> Result<Option<String>, SourceIconError> {
+    pub fn cache_icon(
+        &self,
+        icon_path: &Path,
+        icon_index: i32,
+    ) -> Result<Option<String>, SourceIconError> {
         #[cfg(not(windows))]
         {
             let _ = (icon_path, icon_index);
@@ -309,8 +313,7 @@ impl Drop for OwnedIcon {
 fn extract_high_resolution_icon(path: &[u16], icon_index: i32) -> Option<OwnedIcon> {
     use std::{mem, ptr::null_mut};
     use windows_sys::Win32::UI::Shell::{
-        ExtractIconExW, SHDefExtractIconW, SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON,
-        SHGFI_LARGEICON,
+        ExtractIconExW, SHDefExtractIconW, SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
     };
 
     let mut requested = null_mut();
