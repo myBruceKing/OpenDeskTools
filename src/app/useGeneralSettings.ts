@@ -11,15 +11,17 @@ export type GeneralSettingsState = {
   viewModel: GeneralViewModel;
   loaded: boolean;
   /** The toggle currently being persisted, or `null` when idle. */
-  pending: GeneralToggleKind | null;
+  pending: GeneralToggleKind | "dataDirectory" | null;
   error: string | null;
+  dataDirectoryMigration: { dataDirectory: string; restartRequired: boolean } | null;
 };
 
 const INITIAL_STATE: GeneralSettingsState = {
   viewModel: EMPTY_GENERAL_VIEW_MODEL,
   loaded: false,
   pending: null,
-  error: null
+  error: null,
+  dataDirectoryMigration: null
 };
 
 export function useGeneralSettings() {
@@ -31,7 +33,12 @@ export function useGeneralSettings() {
     try {
       const viewModel = await generalClient.load();
       if (request === loadRequest.current) {
-        setState((previous) => ({ ...previous, viewModel, loaded: true, error: null }));
+        setState((previous) => ({
+          ...previous,
+          viewModel,
+          loaded: true,
+          error: null
+        }));
       }
     } catch (error: unknown) {
       console.error("Unable to load the general settings view model", error);
@@ -66,13 +73,24 @@ export function useGeneralSettings() {
     }
   }, []);
 
-  const openDataDirectory = useCallback(async () => {
+  const selectAndMigrateDataDirectory = useCallback(async () => {
+    setState((previous) => ({ ...previous, pending: "dataDirectory", error: null }));
     try {
-      await generalClient.openDataDirectory();
+      const result = await generalClient.selectAndMigrateDataDirectory();
+      setState((previous) => ({
+        ...previous,
+        pending: null,
+        error: null,
+        dataDirectoryMigration: result
+      }));
     } catch (error: unknown) {
-      setState((previous) => ({ ...previous, error: parseGeneralCommandError(error) }));
+      setState((previous) => ({
+        ...previous,
+        pending: null,
+        error: parseGeneralCommandError(error)
+      }));
     }
   }, []);
 
-  return { state, setToggle, openDataDirectory, refresh };
+  return { state, setToggle, selectAndMigrateDataDirectory, refresh };
 }

@@ -34,6 +34,8 @@ function ClipboardRoute() {
       onSetFavorite={clipboard.setFavorite}
       onDelete={clipboard.deleteItem}
       onClearUnfavoriteHistory={clipboard.clearUnfavoriteHistory}
+      onSetMonitoring={clipboard.setMonitoring}
+      onUpdateSettings={clipboard.updateSettings}
     />
   );
 }

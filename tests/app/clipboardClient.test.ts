@@ -25,6 +25,9 @@ describe("clipboardClient", () => {
           items: [item], totalCount: 1, monitoring: "running", surfaceActive: true, inputAvailable: true
         };
       }
+      if (command === "set_clipboard_monitoring") {
+        return "paused";
+      }
       if (command === "copy_clipboard_history_item") {
         return { action: "copied", clipboardUpdated: true };
       }
@@ -60,6 +63,7 @@ describe("clipboardClient", () => {
       surfaceActive: true,
       inputAvailable: true
     });
+    await expect(client.setMonitoring(false)).resolves.toBe("paused");
     const image = await client.getImage("1");
     expect(image.type).toBe("image/png");
     expect(Array.from(new Uint8Array(await image.arrayBuffer()))).toEqual([137, 80, 78, 71]);
@@ -80,38 +84,38 @@ describe("clipboardClient", () => {
     expect(invokeFunction).toHaveBeenNthCalledWith(1, "get_clipboard_history", {
       query: { scope: "all", search: null, limit: 100 }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(2, "get_clipboard_history_image", {
+    expect(invokeFunction).toHaveBeenCalledWith("get_clipboard_history_image", {
       input: { id: "1" }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(3, "get_clipboard_history_source_icon", {
+    expect(invokeFunction).toHaveBeenNthCalledWith(4, "get_clipboard_history_source_icon", {
       input: { id: "1" }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(4, "copy_clipboard_history_item", {
+    expect(invokeFunction).toHaveBeenNthCalledWith(5, "copy_clipboard_history_item", {
       input: { id: "1" }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(5, "input_clipboard_history_item", {
+    expect(invokeFunction).toHaveBeenNthCalledWith(6, "input_clipboard_history_item", {
       input: { id: "1" }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(6, "close_clipboard_surface");
-    expect(invokeFunction).toHaveBeenNthCalledWith(7, "set_clipboard_history_favorite", {
+    expect(invokeFunction).toHaveBeenNthCalledWith(7, "close_clipboard_surface");
+    expect(invokeFunction).toHaveBeenNthCalledWith(8, "set_clipboard_history_favorite", {
       input: { id: "1", isFavorite: true }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(8, "update_clipboard_history_text", {
+    expect(invokeFunction).toHaveBeenNthCalledWith(9, "update_clipboard_history_text", {
       input: { id: "1", textContent: "已编辑", expectedRevision: 1 }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(9, "delete_clipboard_history_item", {
+    expect(invokeFunction).toHaveBeenNthCalledWith(10, "delete_clipboard_history_item", {
       input: { id: "1" }
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(10, "clear_unfavorite_clipboard_history");
-    expect(invokeFunction).toHaveBeenNthCalledWith(11, "open_clipboard_preview_surface", { recordId: "1" });
-    expect(invokeFunction).toHaveBeenNthCalledWith(12, "close_clipboard_preview_surface");
-    expect(invokeFunction).toHaveBeenNthCalledWith(13, "get_clipboard_preview_surface_state");
-    expect(invokeFunction).toHaveBeenNthCalledWith(14, "trace_clipboard_preview_debug", {
+    expect(invokeFunction).toHaveBeenNthCalledWith(11, "clear_unfavorite_clipboard_history");
+    expect(invokeFunction).toHaveBeenNthCalledWith(12, "open_clipboard_preview_surface", { recordId: "1" });
+    expect(invokeFunction).toHaveBeenNthCalledWith(13, "close_clipboard_preview_surface");
+    expect(invokeFunction).toHaveBeenNthCalledWith(14, "get_clipboard_preview_surface_state");
+    expect(invokeFunction).toHaveBeenNthCalledWith(15, "trace_clipboard_preview_debug", {
       event: "close_scheduled",
       recordId: "1",
       detail: null
     });
-    expect(invokeFunction).toHaveBeenNthCalledWith(15, "set_clipboard_surface_underlay_color", {
+    expect(invokeFunction).toHaveBeenNthCalledWith(16, "set_clipboard_surface_underlay_color", {
       color: "#E0DEDC"
     });
   });

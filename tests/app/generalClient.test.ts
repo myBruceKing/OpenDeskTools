@@ -17,6 +17,7 @@ const backendSnapshot = {
   autostartEnabled: true,
   startMinimized: false,
   closeToTray: true,
+  crashDiagnosticsEnabled: false,
   dataDirectory: "C:\\Users\\me\\AppData\\Roaming\\com.opendesktools.app"
 };
 
@@ -27,6 +28,7 @@ describe("generalModel", () => {
       autostartEnabled: true,
       startMinimized: false,
       closeToTray: true,
+      crashDiagnosticsEnabled: false,
       dataDirectory: "C:\\Users\\me\\AppData\\Roaming\\com.opendesktools.app"
     });
     expect(createGeneralViewModel(null)).toEqual({
@@ -34,6 +36,7 @@ describe("generalModel", () => {
       autostartEnabled: null,
       startMinimized: null,
       closeToTray: null,
+      crashDiagnosticsEnabled: null,
       dataDirectory: null
     });
   });
@@ -72,13 +75,18 @@ describe("generalClient", () => {
 
     await generalClient.setToggle("closeToTray", false);
     expect(mocks.invoke).toHaveBeenLastCalledWith("set_close_to_tray", { enabled: false });
+
+    await generalClient.setToggle("crashDiagnostics", true);
+    expect(mocks.invoke).toHaveBeenLastCalledWith("set_crash_diagnostics_enabled", { enabled: true });
   });
 
-  it("opens the data directory through the frozen command", async () => {
-    mocks.invoke.mockResolvedValueOnce(undefined);
+  it("opens the native picker then migrates through the frozen command", async () => {
+    mocks.invoke.mockResolvedValueOnce({ dataDirectory: "D:\\OpenDeskTools", restartRequired: true });
 
-    await generalClient.openDataDirectory();
-
-    expect(mocks.invoke).toHaveBeenCalledWith("open_data_directory");
+    await expect(generalClient.selectAndMigrateDataDirectory()).resolves.toEqual({
+      dataDirectory: "D:\\OpenDeskTools",
+      restartRequired: true
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith("select_and_migrate_data_directory");
   });
 });

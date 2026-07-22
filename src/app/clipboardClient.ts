@@ -6,11 +6,13 @@ import {
   parseClipboardHistoryItem,
   parseClipboardHistoryResult,
   parseClipboardItemActionResult,
+  parseClipboardSettings,
   parseClipboardSurfaceCloseResult,
   type ClipboardHistoryItem,
   type ClipboardHistoryQuery,
   type ClipboardHistoryResult,
   type ClipboardItemActionResult,
+  type ClipboardSettings,
   type ClipboardSurfaceCloseResult
 } from "./clipboardModel";
 
@@ -79,6 +81,8 @@ function parseClipboardPreviewHoverChange(value: unknown): ClipboardPreviewHover
 
 export type ClipboardClient = {
   getHistory: (query: ClipboardHistoryQuery) => Promise<ClipboardHistoryResult>;
+  setMonitoring: (enabled: boolean) => Promise<ClipboardHistoryResult["monitoring"]>;
+  updateSettings?: (settings: ClipboardSettings) => Promise<{ settings: ClipboardSettings; removedCount: number }>;
   getImage: (id: string) => Promise<Blob>;
   getSourceIcon: (id: string) => Promise<Blob>;
   copyItem: (id: string) => Promise<ClipboardItemActionResult>;
@@ -127,6 +131,25 @@ export function createClipboardClient({
       return parseClipboardHistoryResult(
         await invokeFunction("get_clipboard_history", { query })
       );
+    },
+
+    async setMonitoring(enabled) {
+      const value = await invokeFunction("set_clipboard_monitoring", { input: { enabled } });
+      if (value !== "running" && value !== "paused" && value !== "unavailable") {
+        throw new Error("Invalid clipboard monitoring payload");
+      }
+      return value;
+    },
+
+    async updateSettings(settings) {
+      const value = await invokeFunction("update_clipboard_settings", { input: settings });
+      if (!value || typeof value !== "object" || !Number.isSafeInteger((value as Record<string, unknown>).removedCount)) {
+        throw new Error("Invalid clipboard settings update payload");
+      }
+      return {
+        settings: parseClipboardSettings((value as Record<string, unknown>).settings),
+        removedCount: Number((value as Record<string, unknown>).removedCount)
+      };
     },
 
     async getImage(id) {

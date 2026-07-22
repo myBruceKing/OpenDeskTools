@@ -49,6 +49,29 @@ struct ClipboardHistoryChangedEvent {
     change: &'static str,
 }
 
+pub(crate) fn clipboard_history_event_sink(
+    app: &AppHandle,
+) -> infrastructure::clipboard_listener::ClipboardHistoryEventSink {
+    let event_app = app.clone();
+    Arc::new(move || {
+        for label in [
+            MAIN_WEBVIEW_LABEL,
+            CLIPBOARD_SURFACE_LABEL,
+            CLIPBOARD_PREVIEW_SURFACE_LABEL,
+        ] {
+            if event_app.get_webview_window(label).is_some() {
+                if let Err(error) = event_app.emit_to(
+                    label,
+                    CLIPBOARD_HISTORY_CHANGED_EVENT,
+                    ClipboardHistoryChangedEvent { change: "recorded" },
+                ) {
+                    eprintln!("failed to emit clipboard history change to {label}: {error}");
+                }
+            }
+        }
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClipboardSurfaceRequest {
     Toggle,
@@ -108,31 +131,11 @@ pub fn run() {
             let qa_options = debug_qa::parse(std::env::args_os())?;
             let runtime = ApplicationRuntime::initialize(app.handle())?;
             app.manage(runtime);
-            let event_app = app.handle().clone();
-            let clipboard_sink = Arc::new(move || {
-                for label in [
-                    MAIN_WEBVIEW_LABEL,
-                    CLIPBOARD_SURFACE_LABEL,
-                    CLIPBOARD_PREVIEW_SURFACE_LABEL,
-                ] {
-                    if event_app.get_webview_window(label).is_some() {
-                        if let Err(error) = event_app.emit_to(
-                            label,
-                            CLIPBOARD_HISTORY_CHANGED_EVENT,
-                            ClipboardHistoryChangedEvent { change: "recorded" },
-                        ) {
-                            eprintln!(
-                                "failed to emit clipboard history change to {label}: {error}"
-                            );
-                        }
-                    }
+            let runtime_state = app.state::<ApplicationRuntime>();
+            if runtime_state.clipboard_monitoring_enabled() {
+                if let Err(error) = runtime_state.start_clipboard_listener(clipboard_history_event_sink(app.handle())) {
+                    eprintln!("clipboard listener unavailable during startup: {error}");
                 }
-            });
-            if let Err(error) = app
-                .state::<ApplicationRuntime>()
-                .start_clipboard_listener(clipboard_sink)
-            {
-                eprintln!("clipboard listener unavailable during startup: {error}");
             }
             let forced_app = app.handle().clone();
             let runtime_state = app.state::<ApplicationRuntime>();
@@ -197,6 +200,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::clipboard::get_clipboard_history,
+            commands::clipboard::set_clipboard_monitoring,
+            commands::clipboard::update_clipboard_settings,
             commands::clipboard::set_clipboard_history_favorite,
             commands::clipboard::delete_clipboard_history_item,
             commands::clipboard::clear_unfavorite_clipboard_history,
@@ -221,7 +226,8 @@ pub fn run() {
             commands::general::set_autostart_enabled,
             commands::general::set_start_minimized,
             commands::general::set_close_to_tray,
-            commands::general::open_data_directory,
+            commands::general::set_crash_diagnostics_enabled,
+            commands::general::select_and_migrate_data_directory,
             commands::theme::get_theme_preferences,
             commands::theme::update_theme_preferences
         ])

@@ -10,7 +10,15 @@ pub struct GeneralViewModel {
     autostart_enabled: bool,
     start_minimized: bool,
     close_to_tray: bool,
+    crash_diagnostics_enabled: bool,
     data_directory: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataDirectoryMigrationResult {
+    data_directory: String,
+    restart_required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -75,14 +83,49 @@ pub fn set_close_to_tray<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn open_data_directory(
+pub fn set_crash_diagnostics_enabled<R: Runtime>(
+    app: AppHandle<R>,
     runtime: State<'_, ApplicationRuntime>,
-) -> Result<(), GeneralCommandError> {
-    let directory = display_data_directory(runtime.storage().data_root());
-    open_directory(&directory).map_err(|message| GeneralCommandError {
-        code: "open_data_directory_failed",
-        message,
-    })
+    enabled: bool,
+) -> Result<GeneralViewModel, GeneralCommandError> {
+    runtime
+        .set_crash_diagnostics_enabled(enabled)
+        .map_err(|error| GeneralCommandError {
+            code: "crash_diagnostics_update_failed",
+            message: format!("本地崩溃日志设置未保存：{error}"),
+        })?;
+    Ok(current_view_model(&app, &runtime))
+}
+
+#[tauri::command]
+pub fn select_and_migrate_data_directory(
+    runtime: State<'_, ApplicationRuntime>,
+) -> Result<Option<DataDirectoryMigrationResult>, GeneralCommandError> {
+    #[cfg(windows)]
+    let Some(directory) = rfd::FileDialog::new()
+        .set_title("选择新的 OpenDeskTools 数据目录")
+        .pick_folder()
+    else {
+        return Ok(None);
+    };
+    #[cfg(not(windows))]
+    let directory = {
+        return Err(GeneralCommandError {
+            code: "data_directory_selection_unavailable",
+            message: "当前平台不支持选择数据目录".to_owned(),
+        });
+    };
+    let copied =
+        runtime
+            .migrate_data_directory(directory)
+            .map_err(|error| GeneralCommandError {
+                code: "data_directory_migration_failed",
+                message: format!("数据目录迁移未完成：{error}"),
+            })?;
+    Ok(Some(DataDirectoryMigrationResult {
+        data_directory: display_data_directory(&copied),
+        restart_required: true,
+    }))
 }
 
 fn current_view_model<R: Runtime>(
@@ -94,6 +137,7 @@ fn current_view_model<R: Runtime>(
         runtime.autostart().is_enabled().unwrap_or(false),
         runtime.start_minimized(),
         runtime.close_to_tray(),
+        runtime.crash_diagnostics_enabled(),
         display_data_directory(runtime.storage().data_root()),
     )
 }
@@ -103,6 +147,7 @@ fn build_view_model(
     autostart_enabled: bool,
     start_minimized: bool,
     close_to_tray: bool,
+    crash_diagnostics_enabled: bool,
     data_directory: String,
 ) -> GeneralViewModel {
     GeneralViewModel {
@@ -110,6 +155,7 @@ fn build_view_model(
         autostart_enabled,
         start_minimized,
         close_to_tray,
+        crash_diagnostics_enabled,
         data_directory,
     }
 }
@@ -124,22 +170,6 @@ fn display_data_directory(path: &std::path::Path) -> String {
         .to_owned()
 }
 
-#[cfg(windows)]
-fn open_directory(directory: &str) -> Result<(), String> {
-    // `explorer.exe` returns a non-zero exit code even on success, so we only
-    // fail when the process cannot be spawned at all.
-    std::process::Command::new("explorer")
-        .arg(directory)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("无法打开数据目录：{error}"))
-}
-
-#[cfg(not(windows))]
-fn open_directory(_directory: &str) -> Result<(), String> {
-    Err("当前平台不支持打开数据目录".to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,16 +181,18 @@ mod tests {
             true,
             true,
             false,
-            r"C:\Users\me\AppData\Roaming\com.opendesktools.app".to_owned(),
+            true,
+            r"C:\OpenDeskToolsTestData\com.opendesktools.app".to_owned(),
         );
 
         assert_eq!(view_model.version, "1.2.3");
         assert!(view_model.autostart_enabled);
         assert!(view_model.start_minimized);
         assert!(!view_model.close_to_tray);
+        assert!(view_model.crash_diagnostics_enabled);
         assert_eq!(
             view_model.data_directory,
-            r"C:\Users\me\AppData\Roaming\com.opendesktools.app"
+            r"C:\OpenDeskToolsTestData\com.opendesktools.app"
         );
     }
 
@@ -168,13 +200,13 @@ mod tests {
     fn display_data_directory_strips_the_verbatim_prefix() {
         assert_eq!(
             display_data_directory(std::path::Path::new(
-                r"\\?\C:\Users\me\AppData\Roaming\com.opendesktools.app"
+                r"\\?\C:\OpenDeskToolsTestData\com.opendesktools.app"
             )),
-            r"C:\Users\me\AppData\Roaming\com.opendesktools.app"
+            r"C:\OpenDeskToolsTestData\com.opendesktools.app"
         );
         assert_eq!(
-            display_data_directory(std::path::Path::new("/home/me/.local/share/odt")),
-            "/home/me/.local/share/odt"
+            display_data_directory(std::path::Path::new("/var/tmp/odt")),
+            "/var/tmp/odt"
         );
     }
 }

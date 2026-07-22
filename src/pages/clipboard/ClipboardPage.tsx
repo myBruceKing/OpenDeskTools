@@ -10,7 +10,8 @@ import type {
   ClipboardControllerState,
   ClipboardFilter,
   ClipboardItemViewModel,
-  ClipboardMonitoringState
+  ClipboardMonitoringState,
+  ClipboardSettings
 } from "../../app/clipboardModel";
 import { getClipboardMonitoringPresentation } from "../../app/clipboardModel";
 import { SplitPane, ThreeColumn } from "../../components/layout/TwoColumn";
@@ -40,6 +41,8 @@ type ClipboardPageProps = {
   onSetFavorite: (id: string, isFavorite: boolean) => void;
   onDelete: (id: string) => void;
   onClearUnfavoriteHistory: () => void;
+  onSetMonitoring?: (enabled: boolean) => void;
+  onUpdateSettings?: (settings: ClipboardSettings) => Promise<boolean>;
 };
 
 function historyOptionId(id: string) {
@@ -92,18 +95,22 @@ function Toolbar({
   monitoring,
   canClearHistory,
   clearing,
+  monitoringPending,
   onQueryChange,
   onFilterChange,
-  onClearHistory
+  onClearHistory,
+  onSetMonitoring
 }: {
   query: string;
   filter: ClipboardFilter;
   monitoring: ClipboardMonitoringState;
   canClearHistory: boolean;
   clearing: boolean;
+  monitoringPending: boolean;
   onQueryChange: (value: string) => void;
   onFilterChange: (value: ClipboardFilter) => void;
   onClearHistory: () => void;
+  onSetMonitoring?: (enabled: boolean) => void;
 }) {
   const monitoringPresentation = getClipboardMonitoringPresentation(monitoring);
 
@@ -124,7 +131,8 @@ function Toolbar({
         <Toggle
           checked={monitoringPresentation.checked}
           label="剪贴板监控"
-          disabled={monitoringPresentation.disabled}
+          disabled={monitoringPresentation.disabled || monitoringPending}
+          onChange={onSetMonitoring}
         />
       </div>
       <span className={styles.toolbarDivider} aria-hidden="true" />
@@ -442,10 +450,67 @@ function DetailsPanel({
   );
 }
 
-function SettingsPanel({ viewModel }: { viewModel: ClipboardControllerState["viewModel"] }) {
-  const unavailableValue = "—";
-  const retentionDays = viewModel.settings.retentionDays ?? unavailableValue;
-  const duplicateStrategy = viewModel.settings.duplicateStrategy ?? unavailableValue;
+function SettingsPanel({
+  viewModel,
+  pending,
+  feedbackMessage,
+  onUpdateSettings
+}: {
+  viewModel: ClipboardControllerState["viewModel"];
+  pending: boolean;
+  feedbackMessage: string | null | undefined;
+  onUpdateSettings?: (settings: ClipboardSettings) => Promise<boolean>;
+}) {
+  const [retentionDays, setRetentionDays] = useState(viewModel.settings.retentionDays ?? "30 天");
+  const [maxItems, setMaxItems] = useState(viewModel.settings.maxItems ?? "100");
+  const [ignoredApps, setIgnoredApps] = useState(viewModel.settings.ignoredApps ?? "");
+  const [historyReuseStrategy, setHistoryReuseStrategy] = useState(viewModel.settings.historyReuseStrategy ?? "使用后移到最前");
+  const [sensitiveRules, setSensitiveRules] = useState(viewModel.settings.sensitiveRules ?? "");
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const persistedSettingsKey = [
+    viewModel.settings.retentionDays ?? "30 天",
+    viewModel.settings.maxItems ?? "100",
+    viewModel.settings.ignoredApps ?? "",
+    viewModel.settings.historyReuseStrategy ?? "使用后移到最前",
+    viewModel.settings.sensitiveRules ?? ""
+  ].join("\u0000");
+
+  useEffect(() => {
+    setRetentionDays(viewModel.settings.retentionDays ?? "30 天");
+    setMaxItems(viewModel.settings.maxItems ?? "100");
+    setIgnoredApps(viewModel.settings.ignoredApps ?? "");
+    setHistoryReuseStrategy(viewModel.settings.historyReuseStrategy ?? "使用后移到最前");
+    setSensitiveRules(viewModel.settings.sensitiveRules ?? "");
+    // A history refresh produces a new view-model object even when the persisted
+    // settings are unchanged.  Only reset local form fields when their actual
+    // backend values change, otherwise an incoming clipboard event would erase
+    // an in-progress edit before the user can save it.
+  }, [persistedSettingsKey]);
+
+  const save = async () => {
+    const numericMaxItems = Number(maxItems);
+    const parsedRetention = retentionDays === "永久保留" ? null : Number(retentionDays.replace(" 天", ""));
+    if (!Number.isInteger(numericMaxItems) || numericMaxItems < 10 || numericMaxItems > 1000) {
+      setFeedback("最大历史数量应为 10 至 1000 项。");
+      return;
+    }
+    if (parsedRetention !== null && ![7, 30, 90, 365].includes(parsedRetention)) {
+      setFeedback("请选择支持的保留时间。");
+      return;
+    }
+    if (!onUpdateSettings) {
+      setFeedback("剪贴板设置服务暂不可用。");
+      return;
+    }
+    const saved = await onUpdateSettings({
+      retentionDays: parsedRetention as 7 | 30 | 90 | 365 | null,
+      maxItems: numericMaxItems,
+      ignoredApps: ignoredApps.split(/[,\n\r]/).map((value) => value.trim()).filter(Boolean),
+      historyReuseStrategy: historyReuseStrategy === "使用后保持位置" ? "keep" : "promote",
+      sensitiveRules: sensitiveRules.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
+    });
+    setFeedback(saved ? "设置已保存；新复制内容会立即按规则处理。" : "设置未保存，请检查规则后重试。");
+  };
 
   return (
     <Section className={styles.settingsPanel}>
@@ -454,16 +519,22 @@ function SettingsPanel({ viewModel }: { viewModel: ClipboardControllerState["vie
           <SectionTitle>剪贴板设置</SectionTitle>
           <label className={styles.formRow}>
             <span>保留天数</span>
-            <SelectField value={retentionDays} disabled>
-              <option>{retentionDays}</option>
+            <SelectField value={retentionDays} disabled={pending} onChange={(event) => setRetentionDays(event.target.value)}>
+              <option>7 天</option>
+              <option>30 天</option>
+              <option>90 天</option>
+              <option>365 天</option>
+              <option>永久保留</option>
             </SelectField>
           </label>
           <label className={styles.formRow}>
             <span>最大历史数量</span>
             <TextField
-              value={viewModel.settings.maxItems ?? unavailableValue}
-              unit={viewModel.settings.maxItems === null ? undefined : "项"}
-              disabled
+              value={maxItems}
+              unit="项"
+              disabled={pending}
+              inputMode="numeric"
+              onChange={(event) => setMaxItems(event.target.value)}
             />
           </label>
         </div>
@@ -471,16 +542,14 @@ function SettingsPanel({ viewModel }: { viewModel: ClipboardControllerState["vie
           <label className={styles.formRowWide}>
             <span>忽略以下应用（进程名，逗号分隔）</span>
             <span className={styles.inlineField}>
-              <TextField value={viewModel.settings.ignoredApps ?? unavailableValue} disabled />
-              <Button size="compact" disabled>
-                添加
-              </Button>
+              <TextField value={ignoredApps} disabled={pending} placeholder="例如 editor.exe, browser.exe" onChange={(event) => setIgnoredApps(event.target.value)} />
             </span>
           </label>
           <label className={styles.formRowWide}>
-            <span>重复内容处理</span>
-            <SelectField value={duplicateStrategy} disabled>
-              <option>{duplicateStrategy}</option>
+            <span>复用历史项</span>
+            <SelectField value={historyReuseStrategy} disabled={pending} onChange={(event) => setHistoryReuseStrategy(event.target.value)}>
+              <option>使用后移到最前</option>
+              <option>使用后保持位置</option>
             </SelectField>
           </label>
         </div>
@@ -492,13 +561,20 @@ function SettingsPanel({ viewModel }: { viewModel: ClipboardControllerState["vie
             </span>
             <TextAreaField
               className={styles.sensitiveRulesArea}
-              value={viewModel.settings.sensitiveRules ?? ""}
-              placeholder={viewModel.settings.sensitiveRules === null ? unavailableValue : undefined}
-              disabled
+              value={sensitiveRules}
+              placeholder="每行一条 Rust 正则表达式"
+              disabled={pending}
+              onChange={(event) => setSensitiveRules(event.target.value)}
             />
           </label>
         </div>
       </ThreeColumn>
+      <div className={styles.settingsFooter}>
+        {(feedbackMessage ?? feedback) && <span role="status">{feedbackMessage ?? feedback}</span>}
+        <Button variant="primary" disabled={pending} onClick={() => void save()}>
+          {pending ? "正在保存" : "保存剪贴板设置"}
+        </Button>
+      </div>
     </Section>
   );
 }
@@ -510,7 +586,9 @@ export function ClipboardPage({
   onUpdateText,
   onSetFavorite,
   onDelete,
-  onClearUnfavoriteHistory
+  onClearUnfavoriteHistory,
+  onSetMonitoring,
+  onUpdateSettings
 }: ClipboardPageProps) {
   const { viewModel } = state;
   const [query, setQuery] = useState("");
@@ -571,11 +649,13 @@ export function ClipboardPage({
         query={query}
         filter={filter}
         monitoring={viewModel.monitoring}
+        monitoringPending={state.monitoringPending ?? false}
         canClearHistory={canClearHistory}
         clearing={state.clearing}
         onQueryChange={setQuery}
         onFilterChange={setFilter}
         onClearHistory={() => setClearConfirmOpen(true)}
+        onSetMonitoring={onSetMonitoring}
       />
       <SplitPane className={styles.middle}>
         <HistoryPanel
@@ -609,7 +689,12 @@ export function ClipboardPage({
           onUpdateText={onUpdateText}
         />
       </SplitPane>
-      <SettingsPanel viewModel={viewModel} />
+      <SettingsPanel
+        viewModel={viewModel}
+        pending={state.settingsPending ?? false}
+        feedbackMessage={state.settingsMessage}
+        onUpdateSettings={onUpdateSettings}
+      />
       <ConfirmDialog
         open={clearConfirmOpen}
         title="清空未收藏历史"

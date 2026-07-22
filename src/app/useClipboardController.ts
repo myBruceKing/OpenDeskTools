@@ -27,6 +27,8 @@ export function useClipboardController(surfaceActiveHint = false) {
     loadSourceIcon: clipboardClient.getSourceIcon,
     copyItem: controller.copyItem.bind(controller),
     inputItem: controller.inputItem.bind(controller),
+    setMonitoring: controller.setMonitoring.bind(controller),
+    updateSettings: controller.updateSettings.bind(controller),
     closeSurface: () => controller.closeSurface(),
     setFavorite: controller.setFavorite.bind(controller),
     updateText: controller.updateText.bind(controller),

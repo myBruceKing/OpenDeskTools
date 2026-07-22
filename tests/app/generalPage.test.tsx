@@ -7,14 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
   setToggle: vi.fn(),
-  openDataDirectory: vi.fn()
+  selectAndMigrateDataDirectory: vi.fn()
 }));
 
 vi.mock("../../src/app/generalClient", () => ({
   generalClient: {
     load: mocks.load,
     setToggle: mocks.setToggle,
-    openDataDirectory: mocks.openDataDirectory
+    selectAndMigrateDataDirectory: mocks.selectAndMigrateDataDirectory
   }
 }));
 
@@ -25,6 +25,7 @@ const snapshot = (overrides: Record<string, unknown> = {}) => ({
   autostartEnabled: false,
   startMinimized: false,
   closeToTray: true,
+  crashDiagnosticsEnabled: false,
   dataDirectory: "C:\\Users\\me\\AppData\\Roaming\\com.opendesktools.app",
   ...overrides
 });
@@ -56,7 +57,7 @@ beforeEach(() => {
   root = createRoot(container);
   mocks.load.mockReset();
   mocks.setToggle.mockReset();
-  mocks.openDataDirectory.mockReset();
+  mocks.selectAndMigrateDataDirectory.mockReset();
 });
 
 afterEach(() => {
@@ -121,24 +122,22 @@ describe("GeneralPage autostart", () => {
     ).toBe("false");
   });
 
-  it("opens the data directory from the config card", async () => {
+  it("opens native path selection then presents the restart requirement after migration", async () => {
     mocks.load.mockResolvedValue(snapshot());
-    mocks.openDataDirectory.mockResolvedValue(undefined);
-
-    await renderPage();
-
-    const openButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "打开数据目录"
-    );
-    if (!openButton) {
-      throw new Error("open data directory button should render");
-    }
-
-    await act(async () => {
-      openButton.click();
+    mocks.selectAndMigrateDataDirectory.mockResolvedValue({
+      dataDirectory: "D:\\OpenDeskToolsData",
+      restartRequired: true
     });
 
-    expect(mocks.openDataDirectory).toHaveBeenCalledTimes(1);
+    await renderPage();
+    const chooseButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "选择路径"
+    );
+    if (!chooseButton) throw new Error("path selection button should render");
+    await act(async () => chooseButton.click());
+
+    expect(mocks.selectAndMigrateDataDirectory).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("请退出并重新启动后生效");
   });
 
   it("surfaces a failure without flipping the switch", async () => {

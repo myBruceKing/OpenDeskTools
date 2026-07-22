@@ -8,6 +8,9 @@ use rusqlite::{params, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use super::clipboard_settings::{
+    self, ClipboardHistoryReuseStrategy, ClipboardSettings, ClipboardSettingsError,
+};
 use super::image::{ImageError, ImageService};
 use super::source_icon::{SourceIconError, SourceIconService};
 use super::storage::{StorageError, StorageService};
@@ -145,10 +148,15 @@ pub enum ClipboardError {
     Image(#[from] ImageError),
     #[error("clipboard source icon is unavailable")]
     SourceIcon(#[from] SourceIconError),
+    #[error("clipboard settings are invalid")]
+    Settings(#[from] ClipboardSettingsError),
+    #[error("clipboard settings state lock is poisoned")]
+    SettingsLockPoisoned,
 }
 
 pub struct ClipboardService {
     storage: Arc<StorageService>,
+    settings: Mutex<ClipboardSettings>,
     images: ImageService,
     source_icons: SourceIconService,
     image_lifecycle: Mutex<()>,
@@ -162,6 +170,7 @@ impl std::fmt::Debug for ClipboardService {
         formatter
             .debug_struct("ClipboardService")
             .field("storage", &self.storage)
+            .field("settings", &self.settings)
             .field("images", &self.images)
             .field("source_icons", &self.source_icons)
             .field(
@@ -183,8 +192,10 @@ impl ClipboardService {
     pub fn try_initialize(storage: Arc<StorageService>) -> Result<Self, ClipboardError> {
         let images = ImageService::initialize(&storage)?;
         let source_icons = SourceIconService::initialize(Arc::clone(&storage))?;
+        let settings = clipboard_settings::load(&storage).unwrap_or_default();
         let service = Self {
             storage,
+            settings: Mutex::new(settings),
             images,
             source_icons,
             image_lifecycle: Mutex::new(()),
@@ -197,12 +208,46 @@ impl ClipboardService {
         Ok(service)
     }
 
+    pub fn settings(&self) -> Result<ClipboardSettings, ClipboardError> {
+        self.settings
+            .lock()
+            .map(|settings| settings.clone())
+            .map_err(|_| ClipboardError::SettingsLockPoisoned)
+    }
+
+    pub fn update_settings(&self, settings: ClipboardSettings) -> Result<u64, ClipboardError> {
+        clipboard_settings::validate(&settings)?;
+        clipboard_settings::save(&self.storage, &settings)?;
+        *self
+            .settings
+            .lock()
+            .map_err(|_| ClipboardError::SettingsLockPoisoned)? = settings;
+        self.apply_settings_retention_and_capacity()
+    }
+
+    /// Runs the persisted retention and capacity policy for an existing data
+    /// store.  The application calls this during startup so an elapsed
+    /// retention period is enforced even when the user has not revisited the
+    /// settings page or copied a new item.
+    pub fn reconcile_retention_and_capacity(&self) -> Result<u64, ClipboardError> {
+        self.apply_settings_retention_and_capacity()
+    }
+
     #[allow(dead_code)] // Intentionally not exposed as a frontend command.
     pub fn record_text(
         &self,
         text: String,
         metadata: ClipboardCaptureMetadata,
     ) -> Result<ClipboardRecordResult, ClipboardError> {
+        let settings = self.settings()?;
+        if self.should_ignore_source(&metadata, &settings)
+            || self.matches_sensitive_rule(&text, &settings)
+        {
+            return Ok(ClipboardRecordResult {
+                retained: false,
+                item: None,
+            });
+        }
         if text.is_empty() {
             return Err(ClipboardError::EmptyText);
         }
@@ -260,7 +305,7 @@ impl ClipboardService {
                 |row| row.get::<_, i64>(0),
             )?;
 
-            let removed_images = evict_excess(transaction)?;
+            let removed_images = evict_excess(transaction, settings.max_items)?;
             Ok((id, removed_images))
         })?;
         self.remove_image_references(removed_images);
@@ -279,6 +324,13 @@ impl ClipboardService {
         rgba: Vec<u8>,
         metadata: ClipboardCaptureMetadata,
     ) -> Result<ClipboardRecordResult, ClipboardError> {
+        let settings = self.settings()?;
+        if self.should_ignore_source(&metadata, &settings) {
+            return Ok(ClipboardRecordResult {
+                retained: false,
+                item: None,
+            });
+        }
         validate_metadata(&metadata)?;
         let _lifecycle = self.lock_image_lifecycle()?;
         let stored = self.images.store_rgba(width, height, &rgba)?;
@@ -316,7 +368,7 @@ impl ClipboardService {
                 ],
                 |row| row.get::<_, i64>(0),
             )?;
-            Ok((id, evict_excess(transaction)?))
+            Ok((id, evict_excess(transaction, settings.max_items)?))
         });
         let (id, removed_images) = match transaction_result {
             Ok(value) => value,
@@ -340,6 +392,13 @@ impl ClipboardService {
         paths: Vec<Vec<u16>>,
         metadata: ClipboardCaptureMetadata,
     ) -> Result<ClipboardRecordResult, ClipboardError> {
+        let settings = self.settings()?;
+        if self.should_ignore_source(&metadata, &settings) {
+            return Ok(ClipboardRecordResult {
+                retained: false,
+                item: None,
+            });
+        }
         validate_metadata(&metadata)?;
         let validated = validate_file_paths(paths, false)?;
         let file_paths_json =
@@ -378,7 +437,7 @@ impl ClipboardService {
                 ],
                 |row| row.get::<_, i64>(0),
             )?;
-            Ok((id, evict_excess(transaction)?))
+            Ok((id, evict_excess(transaction, settings.max_items)?))
         })?;
         self.remove_image_references(removed_images);
         let item = self.item_by_id(id)?;
@@ -392,6 +451,13 @@ impl ClipboardService {
         &self,
         query: ClipboardHistoryQuery,
     ) -> Result<ClipboardHistoryPage, ClipboardError> {
+        // A long-running tray process may not restart for weeks. Reconcile on
+        // the user-visible history read as well as startup, so an elapsed
+        // retention period is not merely a preference that waits for restart.
+        // Unit tests intentionally use synthetic historical timestamps; their
+        // policy behavior is covered through explicit reconciliation tests.
+        #[cfg(not(test))]
+        self.apply_settings_retention_and_capacity()?;
         if !(1..=CLIPBOARD_HISTORY_CAPACITY).contains(&query.limit) {
             return Err(ClipboardError::InvalidLimit);
         }
@@ -462,6 +528,109 @@ impl ClipboardService {
         validate_safe_integer(total_count)?;
         items.truncate(query.limit as usize);
         Ok(ClipboardHistoryPage { items, total_count })
+    }
+
+    /// Records that an existing history item was deliberately reused.  The
+    /// clipboard writer suppresses its own Windows notification, so this is the
+    /// single path that preserves "reused item moves to the front" semantics.
+    pub fn promote_item(&self, id: i64) -> Result<(), ClipboardError> {
+        let captured_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            });
+        validate_safe_integer(captured_at_ms)?;
+        let captured_at_ms =
+            i64::try_from(captured_at_ms).map_err(|_| ClipboardError::NumericRange)?;
+        let changed = self.storage.transaction(|transaction| {
+            Ok(transaction.execute(
+                "UPDATE clipboard_history SET captured_at_ms = ?1 WHERE id = ?2",
+                params![captured_at_ms, id],
+            )?)
+        })?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(ClipboardError::NotFound)
+        }
+    }
+
+    /// Applies the user's explicit history-reuse preference after a successful
+    /// copy or input. External duplicate captures always merge and promote;
+    /// this setting concerns only deliberate reuse of an existing record.
+    pub fn apply_history_reuse(&self, id: i64) -> Result<(), ClipboardError> {
+        if self.settings()?.history_reuse_strategy == ClipboardHistoryReuseStrategy::Promote {
+            self.promote_item(id)?;
+        }
+        Ok(())
+    }
+
+    fn should_ignore_source(
+        &self,
+        metadata: &ClipboardCaptureMetadata,
+        settings: &ClipboardSettings,
+    ) -> bool {
+        metadata.source_process.as_deref().is_some_and(|process| {
+            let process = process.trim().to_ascii_lowercase();
+            settings
+                .ignored_apps
+                .iter()
+                .any(|ignored| ignored == &process)
+        })
+    }
+
+    fn matches_sensitive_rule(&self, text: &str, settings: &ClipboardSettings) -> bool {
+        settings.sensitive_rules.iter().any(|rule| {
+            regex::Regex::new(rule)
+                .map(|expression| expression.is_match(text))
+                .unwrap_or(false)
+        })
+    }
+
+    fn apply_settings_retention_and_capacity(&self) -> Result<u64, ClipboardError> {
+        let settings = self.settings()?;
+        let cutoff = settings.retention_days.map(|days| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| {
+                    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+                });
+            now.saturating_sub(u64::from(days) * 24 * 60 * 60 * 1_000)
+        });
+        let _lifecycle = self.lock_image_lifecycle()?;
+        let (removed, image_references) = self.storage.transaction(|transaction| {
+            let mut removed = 0_u64;
+            let mut image_references = Vec::new();
+            if let Some(cutoff) = cutoff {
+                let cutoff = i64::try_from(cutoff).map_err(|_| StorageError::LockPoisoned)?;
+                let mut statement = transaction.prepare(
+                    "SELECT id, file_path FROM clipboard_history
+                     WHERE is_favorite = 0 AND captured_at_ms < ?1",
+                )?;
+                let victims = statement
+                    .query_map([cutoff], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                drop(statement);
+                for (id, reference) in victims {
+                    removed = removed.saturating_add(u64::from(
+                        transaction.execute("DELETE FROM clipboard_history WHERE id = ?1", [id])?
+                            > 0,
+                    ));
+                    if let Some(reference) = reference {
+                        image_references.push(reference);
+                    }
+                }
+            }
+            let capacity_removed = evict_excess(transaction, settings.max_items)?;
+            removed =
+                removed.saturating_add(u64::try_from(capacity_removed.len()).unwrap_or(u64::MAX));
+            image_references.extend(capacity_removed);
+            Ok((removed, image_references))
+        })?;
+        self.remove_image_references(image_references);
+        Ok(removed)
     }
 
     #[cfg(test)]
@@ -808,12 +977,15 @@ fn validate_metadata(metadata: &ClipboardCaptureMetadata) -> Result<(), Clipboar
     validate_safe_integer(metadata.captured_at_ms)
 }
 
-fn evict_excess(transaction: &rusqlite::Transaction<'_>) -> Result<Vec<String>, StorageError> {
+fn evict_excess(
+    transaction: &rusqlite::Transaction<'_>,
+    capacity: u32,
+) -> Result<Vec<String>, StorageError> {
     let count: i64 =
         transaction.query_row("SELECT COUNT(*) FROM clipboard_history", [], |row| {
             row.get(0)
         })?;
-    let excess = count.saturating_sub(i64::from(CLIPBOARD_HISTORY_CAPACITY));
+    let excess = count.saturating_sub(i64::from(capacity));
     if excess <= 0 {
         return Ok(Vec::new());
     }
@@ -1201,6 +1373,98 @@ mod tests {
         assert_eq!(duplicate.captured_at_ms, 30);
         assert_eq!(duplicate.source_application.as_deref(), Some("Latest"));
         assert_eq!(service.history(all(100)).unwrap().total_count, 1);
+    }
+
+    #[test]
+    fn persisted_settings_apply_capacity_ignored_apps_reuse_and_sensitive_rules() {
+        let (_temp, _storage, service) = service();
+        let settings = ClipboardSettings {
+            retention_days: Some(7),
+            max_items: 10,
+            ignored_apps: vec!["notepad.exe".to_owned()],
+            history_reuse_strategy: ClipboardHistoryReuseStrategy::Keep,
+            sensitive_rules: vec!["(?i)password".to_owned()],
+        };
+        assert_eq!(service.update_settings(settings.clone()).unwrap(), 0);
+        assert_eq!(service.settings().unwrap(), settings);
+
+        let ignored = service
+            .record_text(
+                "from ignored app".to_owned(),
+                ClipboardCaptureMetadata {
+                    captured_at_ms: 1,
+                    source_application: Some("Notepad".to_owned()),
+                    source_process: Some("NOTEPAD.EXE".to_owned()),
+                },
+            )
+            .unwrap();
+        assert!(!ignored.retained);
+        assert!(service
+            .record_text("my password".to_owned(), metadata(2))
+            .unwrap()
+            .item
+            .is_none());
+
+        let first = service.record_text("once".to_owned(), metadata(3)).unwrap();
+        assert!(first.retained);
+        let repeated = service.record_text("once".to_owned(), metadata(4)).unwrap();
+        assert!(repeated.retained);
+        assert_eq!(repeated.item.unwrap().id, first.item.unwrap().id);
+        for index in 0_u64..10 {
+            service
+                .record_text(format!("item-{index}"), metadata(index + 10))
+                .unwrap();
+        }
+        assert_eq!(service.history(all(100)).unwrap().items.len(), 10);
+    }
+
+    #[test]
+    fn reusing_an_existing_item_promotes_it_to_the_history_front() {
+        let (_temp, _storage, service) = service();
+        let old = service
+            .record_text("old".to_owned(), metadata(1))
+            .unwrap()
+            .item
+            .unwrap();
+        let newest = service
+            .record_text("newest".to_owned(), metadata(2))
+            .unwrap()
+            .item
+            .unwrap();
+
+        service.apply_history_reuse(old.id).unwrap();
+
+        let history = service.history(all(100)).unwrap();
+        assert_eq!(history.items[0].id, old.id);
+        assert_eq!(history.items[1].id, newest.id);
+        assert!(history.items[0].captured_at_ms > newest.captured_at_ms);
+    }
+
+    #[test]
+    fn keeping_reused_history_items_preserves_their_existing_order() {
+        let (_temp, _storage, service) = service();
+        service
+            .update_settings(ClipboardSettings {
+                history_reuse_strategy: ClipboardHistoryReuseStrategy::Keep,
+                ..ClipboardSettings::default()
+            })
+            .unwrap();
+        let old = service
+            .record_text("old".to_owned(), metadata(1))
+            .unwrap()
+            .item
+            .unwrap();
+        let newest = service
+            .record_text("newest".to_owned(), metadata(2))
+            .unwrap()
+            .item
+            .unwrap();
+
+        service.apply_history_reuse(old.id).unwrap();
+
+        let history = service.history(all(100)).unwrap();
+        assert_eq!(history.items[0].id, newest.id);
+        assert_eq!(history.items[1].id, old.id);
     }
 
     #[test]

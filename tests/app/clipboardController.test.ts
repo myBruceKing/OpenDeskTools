@@ -44,6 +44,7 @@ function makeClient(overrides: Partial<ClipboardClient> = {}): ClipboardClient {
     getHistory: async () => ({
       items: [first, favorite], totalCount: 2, monitoring: "running", surfaceActive: false, inputAvailable: false
     }),
+    setMonitoring: async (enabled) => enabled ? "running" : "paused",
     getImage: async () => new Blob(),
     getSourceIcon: async () => new Blob(),
     copyItem: async () => ({ action: "copied", clipboardUpdated: true }),
@@ -96,7 +97,7 @@ describe("ClipboardController", () => {
       viewModel: {
         monitoring: "running",
         totalCount: 1,
-        settings: { maxItems: "100", duplicateStrategy: "相同内容移到最前" },
+        settings: { maxItems: "100", historyReuseStrategy: "使用后移到最前" },
         actions: {
           canCopy: true,
           canTypeIntoTarget: false,
@@ -551,6 +552,57 @@ describe("ClipboardController", () => {
     expect(controller.getSnapshot()).toMatchObject({
       itemAction: { action: "copy", status: "success", message: "已复制到系统剪贴板。" },
       viewModel: { actions: { canCopy: true, canTypeIntoTarget: false } }
+    });
+  });
+
+  it("keeps a reused item in place when that setting is selected", async () => {
+    const controller = new ClipboardController(makeClient({
+      getHistory: async () => ({
+        items: [favorite, first],
+        totalCount: 2,
+        monitoring: "running",
+        surfaceActive: false,
+        inputAvailable: false,
+        settings: {
+          retentionDays: 30,
+          maxItems: 100,
+          ignoredApps: [],
+          historyReuseStrategy: "keep",
+          sensitiveRules: []
+        }
+      })
+    }));
+    controller.start();
+    await flush();
+
+    await controller.copyItem(first.id);
+
+    expect(controller.getSnapshot().viewModel.items.map((item) => item.id)).toEqual([
+      favorite.id,
+      first.id
+    ]);
+  });
+
+  it("persists a monitoring toggle and refreshes the backend truth", async () => {
+    let monitoring: ClipboardHistoryResult["monitoring"] = "running";
+    const setMonitoring = vi.fn<ClipboardClient["setMonitoring"]>(async (enabled) => {
+      monitoring = enabled ? "running" : "paused";
+      return monitoring;
+    });
+    const controller = new ClipboardController(makeClient({
+      setMonitoring,
+      getHistory: async () => ({
+        items: [first, favorite], totalCount: 2, monitoring, surfaceActive: false, inputAvailable: false
+      })
+    }));
+    controller.start();
+    await flush();
+
+    await controller.setMonitoring(false);
+    expect(setMonitoring).toHaveBeenCalledWith(false);
+    expect(controller.getSnapshot()).toMatchObject({
+      monitoringPending: false,
+      viewModel: { monitoring: "paused" }
     });
   });
 

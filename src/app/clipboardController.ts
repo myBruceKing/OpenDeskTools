@@ -8,7 +8,9 @@ import {
   type ClipboardControllerState,
   type ClipboardHistoryResult,
   type ClipboardItemAction,
-  type ClipboardMonitoringState
+  type ClipboardMonitoringState,
+  type ClipboardSettings,
+  toClipboardSettingsViewModel
 } from "./clipboardModel";
 
 function operationIssue(): ClipboardCommandError {
@@ -268,6 +270,61 @@ export class ClipboardController {
     await this.performItemAction("input", id);
   }
 
+  async setMonitoring(enabled: boolean) {
+    if (!this.active || this.state.monitoringPending || this.state.viewModel.monitoring === "unavailable") {
+      return;
+    }
+    const session = this.session;
+    this.setState({ ...this.state, monitoringPending: true, error: null });
+    try {
+      const monitoring = await this.client.setMonitoring(enabled);
+      if (!this.active || session !== this.session) return;
+      this.backendMonitoring = monitoring;
+      this.setState({
+        ...this.state,
+        monitoringPending: false,
+        viewModel: { ...this.state.viewModel, monitoring: this.effectiveMonitoring(monitoring) }
+      });
+      this.queueRefresh(session);
+    } catch (error: unknown) {
+      if (!this.active || session !== this.session) return;
+      this.setState({
+        ...this.state,
+        monitoringPending: false,
+        error: normalizeClipboardCommandError(error)
+      });
+    }
+  }
+
+  async updateSettings(settings: ClipboardSettings) {
+    if (!this.active || this.state.settingsPending || !this.client.updateSettings) return false;
+    const session = this.session;
+    this.setState({ ...this.state, settingsPending: true, settingsMessage: null, error: null });
+    try {
+      const result = await this.client.updateSettings(settings);
+      if (!this.active || session !== this.session) return false;
+      this.setState({
+        ...this.state,
+        settingsPending: false,
+        settingsMessage: result.removedCount > 0
+          ? `设置已保存，已清理 ${result.removedCount} 条不再保留的历史记录。`
+          : "设置已保存。",
+        viewModel: { ...this.state.viewModel, settings: toClipboardSettingsViewModel(result.settings) }
+      });
+      this.queueRefresh(session);
+      return true;
+    } catch (error: unknown) {
+      if (!this.active || session !== this.session) return false;
+      this.setState({
+        ...this.state,
+        settingsPending: false,
+        settingsMessage: null,
+        error: normalizeClipboardCommandError(error)
+      });
+      return false;
+    }
+  }
+
   setSurfaceActiveHint(active: boolean) {
     this.surfaceActiveHint = active;
     if (active && !this.state.surfaceActive) {
@@ -472,17 +529,20 @@ export class ClipboardController {
       const message = action === "copy"
         ? "已复制到系统剪贴板。"
         : "已输入；该记录已保留在系统剪贴板。";
+      const nextViewModel = this.state.viewModel.settings.historyReuseStrategy === "使用后移到最前"
+        ? this.promoteItemInViewModel(id)
+        : this.state.viewModel;
       this.setState({
         ...this.state,
         viewModel: action === "input"
           ? {
-              ...this.state.viewModel,
+              ...nextViewModel,
               actions: {
-                ...this.state.viewModel.actions,
+                ...nextViewModel.actions,
                 canTypeIntoTarget: false
               }
-          }
-          : this.state.viewModel,
+            }
+          : nextViewModel,
         surfaceActive: action === "input" ? false : this.state.surfaceActive,
         itemAction: {
           action,
@@ -626,6 +686,17 @@ export class ClipboardController {
       return "running";
     }
     return "paused";
+  }
+
+  private promoteItemInViewModel(id: string) {
+    const item = this.state.viewModel.items.find((candidate) => candidate.id === id);
+    if (!item) {
+      return this.state.viewModel;
+    }
+    return {
+      ...this.state.viewModel,
+      items: [item, ...this.state.viewModel.items.filter((candidate) => candidate.id !== id)]
+    };
   }
 
   private canMutateItem(id: string) {

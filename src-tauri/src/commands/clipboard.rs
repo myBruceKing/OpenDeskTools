@@ -9,6 +9,9 @@ use crate::infrastructure::clipboard_input::{
     ClipboardActionKind, ClipboardActionOutcome, ClipboardInputError,
 };
 use crate::infrastructure::clipboard_listener::ClipboardListenerStatus;
+use crate::infrastructure::clipboard_settings::{
+    parse_ignored_apps, ClipboardHistoryReuseStrategy, ClipboardSettings,
+};
 use crate::infrastructure::clipboard_surface_window::{
     self, ClipboardPreviewCloseReason, ClipboardSurfaceCloseReason,
 };
@@ -45,6 +48,29 @@ pub struct ClipboardFavoriteInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClipboardItemIdInput {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipboardMonitoringInput {
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipboardSettingsInput {
+    retention_days: Option<u16>,
+    max_items: u32,
+    ignored_apps: Vec<String>,
+    history_reuse_strategy: ClipboardHistoryReuseStrategyInput,
+    sensitive_rules: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClipboardHistoryReuseStrategyInput {
+    Promote,
+    Keep,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -140,12 +166,31 @@ pub struct ClipboardHistoryPageDto {
     monitoring: ClipboardMonitoringDto,
     input_available: bool,
     surface_active: bool,
+    settings: ClipboardSettingsDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardSettingsDto {
+    retention_days: Option<u16>,
+    max_items: u32,
+    ignored_apps: Vec<String>,
+    history_reuse_strategy: &'static str,
+    sensitive_rules: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardSettingsUpdateDto {
+    settings: ClipboardSettingsDto,
+    removed_count: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ClipboardMonitoringDto {
     Running,
+    Paused,
     Unavailable,
 }
 
@@ -189,6 +234,49 @@ pub fn get_clipboard_history(
     query: ClipboardHistoryQueryInput,
 ) -> Result<ClipboardHistoryPageDto, ClipboardCommandErrorDto> {
     get_history(&runtime, query)
+}
+
+#[tauri::command]
+pub fn set_clipboard_monitoring(
+    app: AppHandle,
+    runtime: State<'_, ApplicationRuntime>,
+    input: ClipboardMonitoringInput,
+) -> Result<ClipboardMonitoringDto, ClipboardCommandErrorDto> {
+    runtime
+        .set_clipboard_monitoring_enabled(input.enabled, crate::clipboard_history_event_sink(&app))
+        .map(monitoring_dto)
+        .map_err(|_| ClipboardCommandErrorDto {
+            code: "clipboard_monitoring_unavailable",
+            message: "剪贴板监控状态未能更新，请重试。",
+            retryable: true,
+        })
+}
+
+#[tauri::command]
+pub fn update_clipboard_settings(
+    runtime: State<'_, ApplicationRuntime>,
+    input: ClipboardSettingsInput,
+) -> Result<ClipboardSettingsUpdateDto, ClipboardCommandErrorDto> {
+    let ignored_apps = parse_ignored_apps(&input.ignored_apps.join("\n"))
+        .map_err(|error| map_error(ClipboardError::Settings(error)))?;
+    let settings = ClipboardSettings {
+        retention_days: input.retention_days,
+        max_items: input.max_items,
+        ignored_apps,
+        history_reuse_strategy: match input.history_reuse_strategy {
+            ClipboardHistoryReuseStrategyInput::Promote => ClipboardHistoryReuseStrategy::Promote,
+            ClipboardHistoryReuseStrategyInput::Keep => ClipboardHistoryReuseStrategy::Keep,
+        },
+        sensitive_rules: input.sensitive_rules,
+    };
+    let removed_count = runtime
+        .clipboard()
+        .update_settings(settings.clone())
+        .map_err(map_error)?;
+    Ok(ClipboardSettingsUpdateDto {
+        settings: settings_dto(settings),
+        removed_count,
+    })
 }
 
 #[tauri::command]
@@ -262,13 +350,17 @@ pub fn copy_clipboard_history_item(
 ) -> Result<ClipboardActionResultDto, ClipboardCommandErrorDto> {
     let id = parse_id(&input.id)?;
     let owner_window = native_window_handle(&window)?;
-    runtime
+    let result = runtime
         .clipboard_input()
         .copy(id, owner_window, |sequence| {
             runtime.clipboard_listener().suppress_sequence(sequence);
         })
-        .map(action_dto)
-        .map_err(map_input_error)
+        .map_err(map_input_error)?;
+    runtime
+        .clipboard()
+        .apply_history_reuse(id)
+        .map_err(map_error)?;
+    Ok(action_dto(result))
 }
 
 #[tauri::command]
@@ -287,6 +379,10 @@ pub fn input_clipboard_history_item(
         });
     match result {
         Ok(outcome) => {
+            runtime
+                .clipboard()
+                .apply_history_reuse(id)
+                .map_err(map_error)?;
             // A newer generation may have opened while paste consumption was
             // settling. Only hide when this input actually ended the surface.
             if !runtime.surface().surface_active() {
@@ -415,6 +511,7 @@ fn get_history(
             limit: input.limit.unwrap_or(DEFAULT_HISTORY_LIMIT),
         })
         .map_err(map_error)?;
+    let settings = runtime.clipboard().settings().map_err(map_error)?;
     let items = page
         .items
         .into_iter()
@@ -426,7 +523,18 @@ fn get_history(
         monitoring: monitoring_dto(runtime.clipboard_listener().status()),
         input_available: runtime.surface().input_available(),
         surface_active: runtime.surface().surface_active(),
+        settings: settings_dto(settings),
     })
+}
+
+fn settings_dto(settings: ClipboardSettings) -> ClipboardSettingsDto {
+    ClipboardSettingsDto {
+        retention_days: settings.retention_days,
+        max_items: settings.max_items,
+        ignored_apps: settings.ignored_apps,
+        history_reuse_strategy: settings.history_reuse_strategy.as_str(),
+        sensitive_rules: settings.sensitive_rules,
+    }
 }
 
 #[cfg(windows)]
@@ -499,9 +607,12 @@ fn map_input_error(error: ClipboardInputError) -> ClipboardCommandErrorDto {
                 retryable: false,
             }
         }
-        ClipboardInputError::Writer(_) | ClipboardInputError::ClipboardChanged => {
-            window_unavailable_error()
-        }
+        ClipboardInputError::ClipboardChanged => ClipboardCommandErrorDto {
+            code: "clipboard_operation_not_applied",
+            message: "The clipboard changed before the selected history item could be written.",
+            retryable: true,
+        },
+        ClipboardInputError::Writer(_) => window_unavailable_error(),
     }
 }
 
@@ -531,9 +642,8 @@ fn map_surface_error(error: SurfaceError) -> ClipboardCommandErrorDto {
 fn monitoring_dto(status: ClipboardListenerStatus) -> ClipboardMonitoringDto {
     match status {
         ClipboardListenerStatus::Running => ClipboardMonitoringDto::Running,
-        ClipboardListenerStatus::Unavailable | ClipboardListenerStatus::Stopped => {
-            ClipboardMonitoringDto::Unavailable
-        }
+        ClipboardListenerStatus::Stopped => ClipboardMonitoringDto::Paused,
+        ClipboardListenerStatus::Unavailable => ClipboardMonitoringDto::Unavailable,
     }
 }
 
@@ -727,6 +837,11 @@ fn map_error(error: ClipboardError) -> ClipboardCommandErrorDto {
             message: "One or more clipboard files are no longer available.",
             retryable: false,
         },
+        ClipboardError::Settings(_) => ClipboardCommandErrorDto {
+            code: "invalid_clipboard_settings",
+            message: "Clipboard settings are invalid.",
+            retryable: false,
+        },
         ClipboardError::Image(ImageError::TooLarge) => ClipboardCommandErrorDto {
             code: "clipboard_image_too_large",
             message: "Clipboard image exceeds the supported size.",
@@ -756,7 +871,8 @@ fn map_error(error: ClipboardError) -> ClipboardCommandErrorDto {
         },
         ClipboardError::Storage(_)
         | ClipboardError::CorruptRecord
-        | ClipboardError::LifecycleLockPoisoned => ClipboardCommandErrorDto {
+        | ClipboardError::LifecycleLockPoisoned
+        | ClipboardError::SettingsLockPoisoned => ClipboardCommandErrorDto {
             code: "clipboard_history_unavailable",
             message: "Clipboard history is temporarily unavailable.",
             retryable: true,
@@ -842,7 +958,7 @@ mod tests {
         assert_eq!(
             json,
             format!(
-                "{{\"items\":[{{\"id\":\"{id}\",\"kind\":\"text\",\"textContent\":\"hello\",\"sourceApplication\":\"TestEditor\",\"sourceProcess\":null,\"capturedAtMs\":1720000000123,\"byteSize\":5,\"isFavorite\":false,\"revision\":1,\"sourceIconAvailable\":false,\"fileCount\":null,\"fileNames\":null,\"displayCategory\":\"text\"}}],\"totalCount\":1,\"monitoring\":\"unavailable\",\"inputAvailable\":false,\"surfaceActive\":false}}"
+                "{{\"items\":[{{\"id\":\"{id}\",\"kind\":\"text\",\"textContent\":\"hello\",\"sourceApplication\":\"TestEditor\",\"sourceProcess\":null,\"capturedAtMs\":1720000000123,\"byteSize\":5,\"isFavorite\":false,\"revision\":1,\"sourceIconAvailable\":false,\"fileCount\":null,\"fileNames\":null,\"displayCategory\":\"text\"}}],\"totalCount\":1,\"monitoring\":\"paused\",\"inputAvailable\":false,\"surfaceActive\":false,\"settings\":{{\"retentionDays\":30,\"maxItems\":100,\"ignoredApps\":[],\"historyReuseStrategy\":\"promote\",\"sensitiveRules\":[]}}}}"
             )
         );
         assert!(!json.contains("filePath"));
@@ -885,7 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn stopped_listener_maps_to_unavailable_monitoring_without_blocking_history() {
+    fn stopped_listener_maps_to_paused_monitoring_without_blocking_history() {
         let (_temp, runtime) = runtime();
 
         let page = get_history(
@@ -902,7 +1018,7 @@ mod tests {
             runtime.clipboard_listener().status(),
             ClipboardListenerStatus::Stopped
         );
-        assert_eq!(page.monitoring, ClipboardMonitoringDto::Unavailable);
+        assert_eq!(page.monitoring, ClipboardMonitoringDto::Paused);
         assert_eq!(page.total_count, 0);
         assert_eq!(
             monitoring_dto(ClipboardListenerStatus::Running),
@@ -1109,6 +1225,11 @@ mod tests {
         assert_eq!(attachment.code, "clipboard_input_denied");
         assert!(!attachment.retryable);
         assert!(attachment.message.contains("input thread"));
+
+        let changed = map_input_error(ClipboardInputError::ClipboardChanged);
+        assert_eq!(changed.code, "clipboard_operation_not_applied");
+        assert!(changed.retryable);
+        assert!(changed.message.contains("changed before"));
     }
 
     #[test]

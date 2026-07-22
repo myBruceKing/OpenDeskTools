@@ -17,8 +17,8 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
   });
 
   it.each([
-    ["running", { label: "监控运行中", checked: true, disabled: true }],
-    ["paused", { label: "监控已暂停", checked: false, disabled: true }],
+    ["running", { label: "监控运行中", checked: true, disabled: false }],
+    ["paused", { label: "监控已暂停", checked: false, disabled: false }],
     ["unavailable", { label: "监控不可用", checked: null, disabled: true }]
   ] as const)("maps %s monitoring state without inventing a value", (monitoring, expected) => {
     expect(getClipboardMonitoringPresentation(monitoring)).toEqual(expected);
@@ -206,10 +206,12 @@ describe("EMPTY_CLIPBOARD_VIEW_MODEL", () => {
     })).toThrow("inputAvailable");
   });
 
-  it.each(["paused", "RUNNING", null, true])(
+  it.each(["RUNNING", null, true])(
     "rejects invalid backend monitoring %s",
     (monitoring) => {
-      expect(() => parseClipboardHistoryResult({ items: [], totalCount: 0, monitoring }))
+      expect(() => parseClipboardHistoryResult({
+        items: [], totalCount: 0, monitoring, surfaceActive: false, inputAvailable: false
+      }))
         .toThrow("monitoring");
     }
   );

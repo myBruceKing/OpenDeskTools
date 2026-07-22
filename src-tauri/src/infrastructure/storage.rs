@@ -31,6 +31,14 @@ pub enum StorageError {
     PathEscape(PathBuf),
     #[error("database schema version {found} is newer than the supported version {supported}")]
     UnsupportedSchemaVersion { found: u32, supported: u32 },
+    #[error("the new data directory must be an absolute path with a directory name: {0}")]
+    InvalidMigrationTarget(PathBuf),
+    #[error("the selected data directory already contains files and must be empty: {0}")]
+    MigrationTargetExists(PathBuf),
+    #[error("the new data directory cannot be inside the current data directory: {0}")]
+    MigrationTargetInsideSource(PathBuf),
+    #[error("the current data directory contains an unsupported symbolic link: {0}")]
+    MigrationSourceSymlink(PathBuf),
     #[error("transaction failed and rollback also failed: {rollback}; original error: {original}")]
     Rollback {
         original: Box<StorageError>,
@@ -83,6 +91,95 @@ impl StorageService {
 
     pub fn files_dir(&self) -> &Path {
         &self.files_dir
+    }
+
+    /// Makes a complete, consistent copy of the managed data root at a new
+    /// absolute path. The original directory is intentionally retained as a
+    /// recovery backup until the user has restarted and verified the copy.
+    ///
+    /// The destination must be a new or empty directory. Copying first to a
+    /// sibling staging directory and then renaming prevents a partial
+    /// destination from ever being selected as the next startup root.
+    pub fn copy_to_new_data_root(&self, target: impl AsRef<Path>) -> Result<PathBuf, StorageError> {
+        let target = target.as_ref();
+        if !target.is_absolute() || target.file_name().is_none() {
+            return Err(StorageError::InvalidMigrationTarget(target.to_path_buf()));
+        }
+        let target_was_empty = if target.exists() {
+            let mut entries = fs::read_dir(target).map_err(|source| StorageError::Io {
+                operation: "inspect selected data directory",
+                path: target.to_path_buf(),
+                source,
+            })?;
+            if entries
+                .next()
+                .transpose()
+                .map_err(|source| StorageError::Io {
+                    operation: "inspect selected data directory entry",
+                    path: target.to_path_buf(),
+                    source,
+                })?
+                .is_some()
+            {
+                return Err(StorageError::MigrationTargetExists(target.to_path_buf()));
+            }
+            true
+        } else {
+            false
+        };
+        if target.starts_with(&self.data_root) {
+            return Err(StorageError::MigrationTargetInsideSource(
+                target.to_path_buf(),
+            ));
+        }
+        let parent = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| StorageError::InvalidMigrationTarget(target.to_path_buf()))?;
+        fs::create_dir_all(parent).map_err(|source| StorageError::Io {
+            operation: "create data migration parent directory",
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let parent = fs::canonicalize(parent).map_err(|source| StorageError::Io {
+            operation: "resolve data migration parent directory",
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let target_name = target
+            .file_name()
+            .expect("validated target directory name")
+            .to_string_lossy();
+        let staging = unique_migration_staging_path(&parent, &target_name);
+
+        let copy_result = (|| {
+            let connection = self.lock_connection()?;
+            connection.execute_batch("PRAGMA wal_checkpoint(FULL);")?;
+            copy_directory_tree(&self.data_root, &staging)?;
+            drop(connection);
+            if target_was_empty {
+                fs::remove_dir(target).map_err(|source| StorageError::Io {
+                    operation: "replace empty selected data directory",
+                    path: target.to_path_buf(),
+                    source,
+                })?;
+            }
+            fs::rename(&staging, target).map_err(|source| StorageError::Io {
+                operation: "activate copied data directory",
+                path: target.to_path_buf(),
+                source,
+            })?;
+            fs::canonicalize(target).map_err(|source| StorageError::Io {
+                operation: "resolve copied data directory",
+                path: target.to_path_buf(),
+                source,
+            })
+        })();
+
+        if copy_result.is_err() && staging.exists() {
+            let _ = fs::remove_dir_all(&staging);
+        }
+        copy_result
     }
 
     pub fn migration_version(&self) -> Result<u32, StorageError> {
@@ -214,6 +311,56 @@ impl StorageService {
             .lock()
             .map_err(|_| StorageError::LockPoisoned)
     }
+}
+
+fn unique_migration_staging_path(parent: &Path, target_name: &str) -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(
+        ".{target_name}.opendesktools-migrating-{}-{nonce}",
+        std::process::id()
+    ))
+}
+
+fn copy_directory_tree(source: &Path, destination: &Path) -> Result<(), StorageError> {
+    fs::create_dir(destination).map_err(|source_error| StorageError::Io {
+        operation: "create data migration staging directory",
+        path: destination.to_path_buf(),
+        source: source_error,
+    })?;
+    for entry in fs::read_dir(source).map_err(|source_error| StorageError::Io {
+        operation: "read current data directory for migration",
+        path: source.to_path_buf(),
+        source: source_error,
+    })? {
+        let entry = entry.map_err(|source_error| StorageError::Io {
+            operation: "read current data directory entry for migration",
+            path: source.to_path_buf(),
+            source: source_error,
+        })?;
+        let entry_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|source_error| StorageError::Io {
+            operation: "inspect current data directory entry for migration",
+            path: entry_path.clone(),
+            source: source_error,
+        })?;
+        if file_type.is_symlink() {
+            return Err(StorageError::MigrationSourceSymlink(entry_path));
+        }
+        if file_type.is_dir() {
+            copy_directory_tree(&entry_path, &destination_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&entry_path, &destination_path).map_err(|source_error| StorageError::Io {
+                operation: "copy data file during migration",
+                path: entry_path,
+                source: source_error,
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn create_directory(path: &Path, operation: &'static str) -> Result<(), StorageError> {
@@ -464,6 +611,40 @@ mod tests {
                 .unwrap(),
             7
         );
+    }
+
+    #[test]
+    fn copies_a_complete_data_root_to_a_new_destination_without_removing_the_source() {
+        let temp = tempdir().unwrap();
+        let source = StorageService::initialize(temp.path().join("source")).unwrap();
+        source
+            .write_settings(&[("general.close_to_tray", "false")])
+            .unwrap();
+        let source_file = source.files_dir().join("images").join("preview.png");
+        fs::create_dir_all(source_file.parent().unwrap()).unwrap();
+        fs::write(&source_file, b"image-data").unwrap();
+
+        let destination = temp.path().join("migrated");
+        fs::create_dir(&destination).unwrap();
+        let copied = source.copy_to_new_data_root(&destination).unwrap();
+
+        assert_eq!(copied, destination.canonicalize().unwrap());
+        assert_eq!(
+            fs::read(copied.join("files/images/preview.png")).unwrap(),
+            b"image-data"
+        );
+        assert!(source.database_path().is_file());
+        assert_eq!(
+            source
+                .read_setting("general.close_to_tray")
+                .unwrap()
+                .as_deref(),
+            Some("false")
+        );
+        assert!(matches!(
+            source.copy_to_new_data_root(&destination),
+            Err(StorageError::MigrationTargetExists(path)) if path == destination
+        ));
     }
 
     #[test]

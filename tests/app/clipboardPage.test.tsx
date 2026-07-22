@@ -368,6 +368,30 @@ describe("ClipboardPage", () => {
     expect(document.body.textContent).toContain("收藏内容");
   });
 
+  it("keeps unsaved settings while a same-value history refresh rerenders the page", async () => {
+    await render(readyState());
+    const maxItems = Array.from(document.querySelectorAll<HTMLInputElement>("input"))
+      .find((input) => input.value === "100")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(maxItems, "240");
+      maxItems.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(maxItems.value).toBe("240");
+
+    await render({
+      ...readyState(),
+      viewModel: createClipboardReadyViewModel({
+        items: [{ ...rawItems[0] }, { ...rawItems[1] }],
+        totalCount: 2,
+        monitoring: "running",
+        surfaceActive: false,
+        inputAvailable: false
+      })
+    });
+    expect(Array.from(document.querySelectorAll<HTMLInputElement>("input"))
+      .find((input) => input.value === "240")).toBeTruthy();
+  });
+
   it("shows file records without losing file semantics and uses display categories for tabs", async () => {
     await render(readyState({
       viewModel: createClipboardReadyViewModel({

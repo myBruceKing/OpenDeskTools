@@ -10,8 +10,12 @@ use super::clipboard::ClipboardService;
 use super::clipboard_input::ClipboardInputCoordinator;
 use super::clipboard_listener::{
     ClipboardHistoryEventSink, ClipboardListenerError, ClipboardListenerManager,
+    ClipboardListenerStatus,
 };
+use super::clipboard_settings;
+use super::data_directory::{DataDirectoryPreference, DataDirectoryPreferenceError};
 use super::debug_qa;
+use super::diagnostics;
 use super::disabled_hotkeys::{
     self, DisabledHotkeysOutcome, OwnedLettersStore, SystemHotkeyDisabler,
 };
@@ -43,6 +47,7 @@ pub struct ApplicationRuntime {
     hotkey_capture: HotkeyCaptureManager,
     system_hotkeys: SystemHotkeyDisabler,
     autostart: AutostartManager,
+    data_directory: DataDirectoryPreference,
     theme: ThemeService,
 }
 
@@ -64,6 +69,8 @@ pub enum ApplicationRuntimeError {
     AmbiguousDataDirectoryOverride(PathBuf),
     #[error("failed to initialize application storage: {0}")]
     Storage(#[from] StorageError),
+    #[error("failed to read the selected data directory preference: {0}")]
+    DataDirectoryPreference(#[from] DataDirectoryPreferenceError),
     #[error("failed to initialize theme service: {0}")]
     Theme(#[from] ThemeError),
     #[error("failed to initialize the autostart manager: {0}")]
@@ -74,11 +81,21 @@ pub enum ApplicationRuntimeError {
     Clipboard(String),
 }
 
+#[derive(Debug, Error)]
+pub enum DataDirectoryChangeError {
+    #[error("failed to copy the current data directory: {0}")]
+    Storage(#[from] StorageError),
+    #[error("data was copied but the next startup directory could not be saved: {0}")]
+    Preference(#[from] DataDirectoryPreferenceError),
+}
+
 impl ApplicationRuntime {
     pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<Self, ApplicationRuntimeError> {
         let data_root_override = parse_data_dir_override(std::env::args_os())?;
+        let data_directory = DataDirectoryPreference::for_system();
+        let default_data_root = app.path().app_data_dir()?;
         let data_root = match data_root_override {
-            None => app.path().app_data_dir()?,
+            None => data_directory.read()?.unwrap_or(default_data_root),
             Some(path) if path.is_absolute() => path,
             Some(path) => {
                 let executable =
@@ -86,7 +103,7 @@ impl ApplicationRuntime {
                 resolve_relative_data_root(&executable, path)?
             }
         };
-        Self::from_app_data_dir(data_root)
+        Self::from_app_data_dir_with_preference(data_root, data_directory)
     }
 
     pub fn status(&self) -> ApplicationStatus {
@@ -124,6 +141,34 @@ impl ApplicationRuntime {
     ) -> Result<(), ClipboardListenerError> {
         self.clipboard_listener
             .start(Arc::clone(&self.clipboard), sink)
+    }
+
+    pub(crate) fn clipboard_monitoring_enabled(&self) -> bool {
+        clipboard_settings::monitoring_enabled(&self.storage).unwrap_or(true)
+    }
+
+    pub(crate) fn set_clipboard_monitoring_enabled(
+        &self,
+        enabled: bool,
+        sink: ClipboardHistoryEventSink,
+    ) -> Result<ClipboardListenerStatus, ClipboardListenerError> {
+        let was_enabled = self.clipboard_monitoring_enabled();
+        if enabled {
+            self.start_clipboard_listener(sink.clone())?;
+            if clipboard_settings::set_monitoring_enabled(&self.storage, true).is_err() {
+                let _ = self.clipboard_listener.stop();
+                return Err(ClipboardListenerError::StateLockPoisoned);
+            }
+        } else {
+            self.clipboard_listener.stop()?;
+            if clipboard_settings::set_monitoring_enabled(&self.storage, false).is_err() {
+                if was_enabled {
+                    let _ = self.start_clipboard_listener(sink);
+                }
+                return Err(ClipboardListenerError::StateLockPoisoned);
+            }
+        }
+        Ok(self.clipboard_listener.status())
     }
 
     pub(crate) fn hotkeys(&self) -> &HotkeyManager {
@@ -171,6 +216,27 @@ impl ApplicationRuntime {
         general_settings::set_close_to_tray(&self.storage, enabled)
     }
 
+    pub(crate) fn crash_diagnostics_enabled(&self) -> bool {
+        general_settings::crash_diagnostics_enabled(&self.storage).unwrap_or(false)
+    }
+
+    pub(crate) fn set_crash_diagnostics_enabled(&self, enabled: bool) -> Result<(), StorageError> {
+        diagnostics::set_enabled(&self.storage, enabled)
+    }
+
+    /// Copies the active data root and makes the copy the persisted root for a
+    /// normal subsequent launch. The current runtime intentionally remains on
+    /// the original root, so callers must ask the user to restart before
+    /// treating the change as active.
+    pub(crate) fn migrate_data_directory(
+        &self,
+        target: PathBuf,
+    ) -> Result<PathBuf, DataDirectoryChangeError> {
+        let copied = self.storage.copy_to_new_data_root(target)?;
+        self.data_directory.set(&copied)?;
+        Ok(copied)
+    }
+
     /// Keeps the system `DisabledHotkeys` registry value aligned with the
     /// current hotkey configuration. Registry management is a best-effort
     /// enhancement: failures are logged and yield `None` but never block hotkey
@@ -197,14 +263,26 @@ impl ApplicationRuntime {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_app_data_dir(
         app_data_dir: PathBuf,
     ) -> Result<Self, ApplicationRuntimeError> {
+        Self::from_app_data_dir_with_preference(app_data_dir, DataDirectoryPreference::for_system())
+    }
+
+    fn from_app_data_dir_with_preference(
+        app_data_dir: PathBuf,
+        data_directory: DataDirectoryPreference,
+    ) -> Result<Self, ApplicationRuntimeError> {
         let storage = Arc::new(StorageService::initialize(app_data_dir)?);
+        diagnostics::initialize(&storage)?;
         let clipboard = Arc::new(
             ClipboardService::try_initialize(Arc::clone(&storage))
                 .map_err(|error| ApplicationRuntimeError::Clipboard(error.to_string()))?,
         );
+        clipboard
+            .reconcile_retention_and_capacity()
+            .map_err(|error| ApplicationRuntimeError::Clipboard(error.to_string()))?;
         let theme = ThemeService::initialize(Arc::clone(&storage))?;
         let hotkeys = HotkeyManager::initialize(Arc::clone(&storage))?;
         let keyboard_hook = Arc::new(KeyboardHookBroker::default());
@@ -226,6 +304,7 @@ impl ApplicationRuntime {
             keyboard_hook,
             system_hotkeys,
             autostart,
+            data_directory,
             theme,
         })
     }
@@ -293,6 +372,8 @@ fn resolve_relative_data_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::clipboard::ClipboardCaptureMetadata;
+    use crate::infrastructure::clipboard_settings::ClipboardSettings;
     use tempfile::tempdir;
 
     fn arguments(values: &[&str]) -> Vec<OsString> {
@@ -409,6 +490,51 @@ mod tests {
         assert_eq!(
             runtime.clipboard_listener().status(),
             super::super::clipboard_listener::ClipboardListenerStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn runtime_enforces_elapsed_clipboard_retention_on_startup() {
+        let temp = tempdir().unwrap();
+        let app_data_dir = temp.path().join("application-data");
+        let storage = Arc::new(StorageService::initialize(&app_data_dir).unwrap());
+        let clipboard = ClipboardService::initialize(Arc::clone(&storage));
+        clipboard
+            .update_settings(ClipboardSettings {
+                retention_days: Some(7),
+                ..ClipboardSettings::default()
+            })
+            .unwrap();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        clipboard
+            .record_text(
+                "expired".to_owned(),
+                ClipboardCaptureMetadata {
+                    captured_at_ms: now_ms - 8 * 24 * 60 * 60 * 1_000,
+                    source_application: None,
+                    source_process: None,
+                },
+            )
+            .unwrap();
+        drop(clipboard);
+        drop(storage);
+
+        let runtime = ApplicationRuntime::from_app_data_dir(app_data_dir).unwrap();
+
+        assert_eq!(
+            runtime
+                .clipboard()
+                .history(crate::infrastructure::clipboard::ClipboardHistoryQuery {
+                    favorites_only: false,
+                    search: None,
+                    limit: 100,
+                })
+                .unwrap()
+                .total_count,
+            0
         );
     }
 

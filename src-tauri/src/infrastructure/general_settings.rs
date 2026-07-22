@@ -8,9 +8,11 @@ use super::storage::{StorageError, StorageService};
 
 const START_MINIMIZED_KEY: &str = "general.start_minimized";
 const CLOSE_TO_TRAY_KEY: &str = "general.close_to_tray";
+const CRASH_DIAGNOSTICS_ENABLED_KEY: &str = "general.crash_diagnostics_enabled";
 
 const START_MINIMIZED_DEFAULT: bool = false;
 const CLOSE_TO_TRAY_DEFAULT: bool = true;
+const CRASH_DIAGNOSTICS_ENABLED_DEFAULT: bool = false;
 
 /// Whether a normal (non-autostart) launch should stay hidden in the tray.
 pub fn start_minimized(storage: &StorageService) -> Result<bool, StorageError> {
@@ -29,6 +31,23 @@ pub fn close_to_tray(storage: &StorageService) -> Result<bool, StorageError> {
 
 pub fn set_close_to_tray(storage: &StorageService, enabled: bool) -> Result<(), StorageError> {
     write_bool(storage, CLOSE_TO_TRAY_KEY, enabled)
+}
+
+/// Whether a Rust panic may create a local diagnostic report. This is opt-in
+/// and never sends any information off-device.
+pub fn crash_diagnostics_enabled(storage: &StorageService) -> Result<bool, StorageError> {
+    read_bool(
+        storage,
+        CRASH_DIAGNOSTICS_ENABLED_KEY,
+        CRASH_DIAGNOSTICS_ENABLED_DEFAULT,
+    )
+}
+
+pub fn set_crash_diagnostics_enabled(
+    storage: &StorageService,
+    enabled: bool,
+) -> Result<(), StorageError> {
+    write_bool(storage, CRASH_DIAGNOSTICS_ENABLED_KEY, enabled)
 }
 
 fn read_bool(storage: &StorageService, key: &str, default: bool) -> Result<bool, StorageError> {
@@ -58,6 +77,7 @@ mod tests {
         let (_temp, storage) = storage();
         assert!(!start_minimized(&storage).unwrap());
         assert!(close_to_tray(&storage).unwrap());
+        assert!(!crash_diagnostics_enabled(&storage).unwrap());
     }
 
     #[test]
@@ -66,9 +86,11 @@ mod tests {
 
         set_start_minimized(&storage, true).unwrap();
         set_close_to_tray(&storage, false).unwrap();
+        set_crash_diagnostics_enabled(&storage, true).unwrap();
 
         assert!(start_minimized(&storage).unwrap());
         assert!(!close_to_tray(&storage).unwrap());
+        assert!(crash_diagnostics_enabled(&storage).unwrap());
 
         set_start_minimized(&storage, false).unwrap();
         set_close_to_tray(&storage, true).unwrap();

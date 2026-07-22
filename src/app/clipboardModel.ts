@@ -28,8 +28,16 @@ export type ClipboardSettingsViewModel = {
   retentionDays: string | null;
   maxItems: string | null;
   ignoredApps: string | null;
-  duplicateStrategy: string | null;
+  historyReuseStrategy: string | null;
   sensitiveRules: string | null;
+};
+
+export type ClipboardSettings = {
+  retentionDays: 7 | 30 | 90 | 365 | null;
+  maxItems: number;
+  ignoredApps: string[];
+  historyReuseStrategy: "promote" | "keep";
+  sensitiveRules: string[];
 };
 
 export type ClipboardMonitoringState = "paused" | "running" | "unavailable";
@@ -59,9 +67,10 @@ export type ClipboardHistoryItem = {
 export type ClipboardHistoryResult = {
   items: ClipboardHistoryItem[];
   totalCount: number;
-  monitoring: "running" | "unavailable";
+  monitoring: "running" | "paused" | "unavailable";
   surfaceActive: boolean;
   inputAvailable: boolean;
+  settings?: ClipboardSettings;
 };
 
 export type ClipboardCommandError = {
@@ -102,9 +111,9 @@ export type ClipboardTextEditState = {
 export function getClipboardMonitoringPresentation(monitoring: ClipboardMonitoringState) {
   switch (monitoring) {
     case "running":
-      return { label: "监控运行中", checked: true, disabled: true } as const;
+      return { label: "监控运行中", checked: true, disabled: false } as const;
     case "paused":
-      return { label: "监控已暂停", checked: false, disabled: true } as const;
+      return { label: "监控已暂停", checked: false, disabled: false } as const;
     case "unavailable":
     default:
       return { label: "监控不可用", checked: null, disabled: true } as const;
@@ -143,15 +152,36 @@ export type ClipboardControllerState = {
   surfaceClosing: boolean;
   surfaceError: ClipboardCommandError | null;
   clearing: boolean;
+  monitoringPending?: boolean;
+  settingsPending?: boolean;
+  settingsMessage?: string | null;
 };
 
 const READY_SETTINGS: ClipboardSettingsViewModel = {
-  retentionDays: null,
+  retentionDays: "30 天",
   maxItems: "100",
   ignoredApps: null,
-  duplicateStrategy: "相同内容移到最前",
+  historyReuseStrategy: "使用后移到最前",
   sensitiveRules: null
 };
+
+export const DEFAULT_CLIPBOARD_SETTINGS: ClipboardSettings = {
+  retentionDays: 30,
+  maxItems: 100,
+  ignoredApps: [],
+  historyReuseStrategy: "promote",
+  sensitiveRules: []
+};
+
+export function toClipboardSettingsViewModel(settings: ClipboardSettings): ClipboardSettingsViewModel {
+  return {
+    retentionDays: settings.retentionDays === null ? "永久保留" : `${settings.retentionDays} 天`,
+    maxItems: String(settings.maxItems),
+    ignoredApps: settings.ignoredApps.join(", "),
+    historyReuseStrategy: settings.historyReuseStrategy === "keep" ? "使用后保持位置" : "使用后移到最前",
+    sensitiveRules: settings.sensitiveRules.join("\n")
+  };
+}
 
 const DISABLED_ACTIONS: ClipboardActionAvailability = {
   canCopy: false,
@@ -180,7 +210,7 @@ export const EMPTY_CLIPBOARD_VIEW_MODEL: ClipboardPageViewModel = {
     retentionDays: null,
     maxItems: null,
     ignoredApps: null,
-    duplicateStrategy: null,
+    historyReuseStrategy: null,
     sensitiveRules: null
   },
   actions: DISABLED_ACTIONS
@@ -202,7 +232,10 @@ export function createClipboardLoadingState(surfaceActive = false): ClipboardCon
     surfaceActive,
     surfaceClosing: false,
     surfaceError: null,
-    clearing: false
+    clearing: false,
+    monitoringPending: false,
+    settingsPending: false,
+    settingsMessage: null
   };
 }
 
@@ -316,7 +349,7 @@ export function createClipboardReadyViewModel(result: ClipboardHistoryResult): C
     monitoring: result.monitoring,
     totalCount: result.totalCount,
     items: result.items.map(toClipboardItemViewModel),
-    settings: READY_SETTINGS,
+    settings: toClipboardSettingsViewModel(result.settings ?? DEFAULT_CLIPBOARD_SETTINGS),
     actions: {
       ...READY_ACTIONS,
       canTypeIntoTarget: result.inputAvailable
@@ -443,7 +476,11 @@ export function parseClipboardHistoryResult(value: unknown): ClipboardHistoryRes
   if (totalCount < items.length) {
     throw new Error("Invalid clipboard payload field: totalCount");
   }
-  if (value.monitoring !== "running" && value.monitoring !== "unavailable") {
+  if (
+    value.monitoring !== "running"
+    && value.monitoring !== "paused"
+    && value.monitoring !== "unavailable"
+  ) {
     throw new Error("Invalid clipboard payload field: monitoring");
   }
   if (typeof value.inputAvailable !== "boolean") {
@@ -452,12 +489,40 @@ export function parseClipboardHistoryResult(value: unknown): ClipboardHistoryRes
   if (typeof value.surfaceActive !== "boolean") {
     throw new Error("Invalid clipboard payload field: surfaceActive");
   }
+  const settings = value.settings === undefined ? undefined : parseClipboardSettings(value.settings);
   return {
     items,
     totalCount,
     monitoring: value.monitoring,
     surfaceActive: value.surfaceActive,
-    inputAvailable: value.inputAvailable
+    inputAvailable: value.inputAvailable,
+    settings
+  };
+}
+
+export function parseClipboardSettings(value: unknown): ClipboardSettings {
+  if (!isRecord(value) || !Array.isArray(value.ignoredApps) || !Array.isArray(value.sensitiveRules)) {
+    throw new Error("Invalid clipboard settings payload");
+  }
+  const retentionDays = value.retentionDays;
+  if (retentionDays !== null && retentionDays !== 7 && retentionDays !== 30 && retentionDays !== 90 && retentionDays !== 365) {
+    throw new Error("Invalid clipboard settings payload");
+  }
+  if (!Number.isInteger(value.maxItems) || Number(value.maxItems) < 10 || Number(value.maxItems) > 1000) {
+    throw new Error("Invalid clipboard settings payload");
+  }
+  if (value.historyReuseStrategy !== "promote" && value.historyReuseStrategy !== "keep") {
+    throw new Error("Invalid clipboard settings payload");
+  }
+  if (value.ignoredApps.some((app) => typeof app !== "string") || value.sensitiveRules.some((rule) => typeof rule !== "string")) {
+    throw new Error("Invalid clipboard settings payload");
+  }
+  return {
+    retentionDays: retentionDays as ClipboardSettings["retentionDays"],
+    maxItems: Number(value.maxItems),
+    ignoredApps: value.ignoredApps as string[],
+    historyReuseStrategy: value.historyReuseStrategy,
+    sensitiveRules: value.sensitiveRules as string[]
   };
 }
 

@@ -146,7 +146,7 @@ export const CLIPBOARD_PREVIEW_DATA: ClipboardPageViewModel = {
     retentionDays: "30 天",
     maxItems: "1000",
     ignoredApps: "password.exe, 1password.exe, bitwarden.exe",
-    duplicateStrategy: "合并（保留最新）",
+    historyReuseStrategy: "使用后移到最前",
     sensitiveRules: "password\npasswd\n密钥\nsecret\n\\b[A-Za-z0-9+/]{20,}={0,2}"
   },
   actions: {
