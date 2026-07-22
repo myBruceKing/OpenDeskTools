@@ -61,6 +61,11 @@ pub async fn reorder_quick_launch_apps(app: AppHandle, runtime: State<'_, Applic
 }
 
 #[tauri::command]
+pub async fn swap_quick_launch_apps(app: AppHandle, runtime: State<'_, ApplicationRuntime>, input: ReorderInput) -> Result<QuickLaunchSnapshot, QuickLaunchCommandError> {
+    publish_snapshot(&app, run_background(runtime.quick_launch(), move |service| service.swap(&input.active_path, &input.over_path)).await)
+}
+
+#[tauri::command]
 pub async fn update_tool_menu_preferences(app: AppHandle, runtime: State<'_, ApplicationRuntime>, input: ToolMenuPreferencesInput) -> Result<QuickLaunchSnapshot, QuickLaunchCommandError> {
     publish_snapshot(&app, run_background(runtime.quick_launch(), move |service| service.update_tool_menu_preferences(input.preferences)).await)
 }
@@ -113,11 +118,11 @@ fn publish_snapshot(
     // every persisted mutation keeps it in the same item-count/layout state
     // as the settings page before the next hotkey opens it.
     let _ = app.emit(QUICK_LAUNCH_CHANGED_EVENT, &snapshot);
-    if let Some(tool_menu) = app.get_webview_window(crate::infrastructure::tool_menu_surface_window::TOOL_MENU_SURFACE_LABEL) {
-        let _ = tool_menu.emit(
-            crate::infrastructure::tool_menu_surface_window::TOOL_MENU_SURFACE_SNAPSHOT_EVENT,
-            &snapshot,
-        );
+    if app
+        .get_webview_window(crate::infrastructure::tool_menu_surface_window::TOOL_MENU_SURFACE_LABEL)
+        .is_some()
+    {
+        let _ = crate::infrastructure::tool_menu_surface_window::sync_snapshot(app, &snapshot);
     }
     Ok(snapshot)
 }

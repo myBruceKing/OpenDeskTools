@@ -65,7 +65,10 @@ const modifierKeyLabels: Record<string, string> = {
 };
 
 function normalizeShortcutKey(event: KeyboardEvent<HTMLElement>) {
-  const key = keyLabels[event.key] ?? event.key;
+  // This is the physical key to the left of Digit1 (VK_OEM_3 on Windows).
+  // `event.key` changes between ` and ~ and may vary by keyboard layout;
+  // the global shortcut backend registers the physical Backquote code.
+  const key = event.code === "Backquote" ? "Backquote" : (keyLabels[event.key] ?? event.key);
 
   if (modifierKeyLabels[event.key]) {
     return null;

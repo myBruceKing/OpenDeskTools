@@ -1,21 +1,18 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use thiserror::Error;
 
-use super::quick_launch::{QuickLaunchSnapshot, ToolMenuLayout};
+use super::{debug_qa, quick_launch::{QuickLaunchSnapshot, ToolMenuLayout}};
 
 pub const TOOL_MENU_SURFACE_LABEL: &str = "tool-menu-surface";
 pub const TOOL_MENU_SURFACE_SHOWN_EVENT: &str = "tool-menu://shown";
 pub const TOOL_MENU_SURFACE_SNAPSHOT_EVENT: &str = "tool-menu://snapshot";
-pub const TOOL_MENU_SURFACE_CLOSING_EVENT: &str = "tool-menu://closing";
 const TOOL_MENU_SURFACE_ROUTE: &str = "index.html#tool-menu-surface";
 const TOOL_MENU_SURFACE_SIZE: f64 = 320.0;
 const TOOL_MENU_DOCK_COLUMNS: usize = 6;
 const TOOL_MENU_WHEEL_TRANSPARENT_GUARD: u32 = 4;
-const TOOL_MENU_CLOSE_ANIMATION: Duration = Duration::from_millis(95);
-static HIDE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static TOOL_MENU_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Error)]
 pub enum ToolMenuSurfaceError {
@@ -40,8 +37,10 @@ pub enum ToolMenuSurfaceError {
 /// this already-created surface, so they cannot block the keyboard hook path.
 pub fn prepare<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> {
     if app.get_webview_window(TOOL_MENU_SURFACE_LABEL).is_some() {
+        debug_qa::trace("tool-menu prepare result=existing");
         return Ok(());
     }
+    debug_qa::trace("tool-menu prepare stage=build requested");
     let window = WebviewWindowBuilder::new(
         app,
         TOOL_MENU_SURFACE_LABEL,
@@ -59,7 +58,9 @@ pub fn prepare<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceErro
     .transparent(true)
     .visible(false)
     .build()?;
+    configure_transparent_non_client(&window);
     apply_circular_region(&window)?;
+    debug_qa::trace("tool-menu prepare result=ready hidden");
     Ok(())
 }
 
@@ -72,21 +73,76 @@ pub fn show<R: Runtime>(
     app: &AppHandle<R>,
     snapshot: &QuickLaunchSnapshot,
 ) -> Result<(), ToolMenuSurfaceError> {
-    // A new press always wins over a delayed close from the previous release.
-    HIDE_GENERATION.fetch_add(1, Ordering::SeqCst);
     let window = prepared(app)?;
-    let visible_item_count = snapshot.pinned_apps.iter().filter(|app| app.visible).count();
-    let size = surface_size(snapshot.tool_menu.layout, visible_item_count);
-    window.set_size(PhysicalSize::new(size.0, size.1))?;
-    match snapshot.tool_menu.layout {
-        ToolMenuLayout::Wheel => apply_circular_region(&window)?,
-        ToolMenuLayout::Dock | ToolMenuLayout::Vertical => clear_window_region(&window)?,
-    }
+    let size = configure_window(&window, snapshot, false)?;
     let pointer = pointer_position()?;
     window.set_position(PhysicalPosition::new(
         pointer.0 - (size.0 / 2) as i32,
         pointer.1 - (size.1 / 2) as i32,
     ))?;
+    publish_window_snapshot(&window, snapshot)?;
+    window.show()?;
+    TOOL_MENU_VISIBLE.store(true, Ordering::SeqCst);
+    window.set_focus()?;
+    window.emit(TOOL_MENU_SURFACE_SHOWN_EVENT, ())?;
+    debug_qa::trace(format!(
+        "tool-menu show result=visible layout={:?} visible_items={} size={}x{}",
+        snapshot.tool_menu.layout,
+        snapshot.pinned_apps.iter().filter(|app| app.visible).count(),
+        size.0,
+        size.1
+    ));
+    Ok(())
+}
+
+/// Keep a prepared Surface coherent while settings mutate it. In particular,
+/// deleting the seventh item changes a wheel from two rings to one; updating
+/// only React would leave the old native circle around the new wheel.
+pub fn sync_snapshot<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot: &QuickLaunchSnapshot,
+) -> Result<(), ToolMenuSurfaceError> {
+    let window = prepared(app)?;
+    let visible = window.is_visible()?;
+    configure_window(&window, snapshot, visible)?;
+    publish_window_snapshot(&window, snapshot)
+}
+
+fn configure_window<R: Runtime>(
+    window: &WebviewWindow<R>,
+    snapshot: &QuickLaunchSnapshot,
+    preserve_center: bool,
+) -> Result<(u32, u32), ToolMenuSurfaceError> {
+    let visible_item_count = snapshot.pinned_apps.iter().filter(|app| app.visible).count();
+    let size = surface_size(snapshot.tool_menu.layout, visible_item_count);
+    let center = if preserve_center {
+        let position = window.outer_position()?;
+        let current_size = window.outer_size()?;
+        Some((
+            position.x + current_size.width as i32 / 2,
+            position.y + current_size.height as i32 / 2,
+        ))
+    } else {
+        None
+    };
+    window.set_size(PhysicalSize::new(size.0, size.1))?;
+    match snapshot.tool_menu.layout {
+        ToolMenuLayout::Wheel => apply_circular_region(&window)?,
+        ToolMenuLayout::Dock | ToolMenuLayout::Vertical => clear_window_region(&window)?,
+    }
+    if let Some(center) = center {
+        window.set_position(PhysicalPosition::new(
+            center.0 - (size.0 / 2) as i32,
+            center.1 - (size.1 / 2) as i32,
+        ))?;
+    }
+    Ok(size)
+}
+
+fn publish_window_snapshot<R: Runtime>(
+    window: &WebviewWindow<R>,
+    snapshot: &QuickLaunchSnapshot,
+) -> Result<(), ToolMenuSurfaceError> {
     // Send directly to this hidden WebView before revealing it. It receives
     // exactly the same snapshot that selected the native shape and size.
     window.emit(TOOL_MENU_SURFACE_SNAPSHOT_EVENT, snapshot)?;
@@ -94,9 +150,6 @@ pub fn show<R: Runtime>(
     // selected layout into the page itself so a dock/vertical surface can
     // never render the cached wheel into a non-circular native region.
     let _ = window.eval(layout_assignment_script(snapshot.tool_menu.layout));
-    window.show()?;
-    window.set_focus()?;
-    window.emit(TOOL_MENU_SURFACE_SHOWN_EVENT, ())?;
     Ok(())
 }
 
@@ -113,7 +166,7 @@ fn surface_size(layout: ToolMenuLayout, visible_item_count: usize) -> (u32, u32)
     match layout {
         ToolMenuLayout::Wheel => {
             let ring_count = wheel_ring_count(item_count);
-            let outer_radius = 77 + ring_count.saturating_sub(1) as u32 * 75 + 25 + 12;
+            let outer_radius = wheel_ring_radius(ring_count.saturating_sub(1)) + 25 + 10;
             let diameter = 264.max(outer_radius * 2);
             // Keep the browser-rendered circular border inside the native
             // region by two transparent pixels on each edge. The native GDI
@@ -141,43 +194,86 @@ fn wheel_ring_count(item_count: usize) -> usize {
     let mut ring_count = 0usize;
     while remaining > 0 {
         let ring_index = ring_count;
-        let radius = 77.0 + ring_index as f64 * 75.0;
-        let capacity = ((2.0 * std::f64::consts::PI * radius) / 94.0).floor() as usize;
+        let radius = wheel_ring_radius(ring_index) as f64;
+        let capacity = ((2.0 * std::f64::consts::PI * radius) / 84.0).floor() as usize;
         remaining = remaining.saturating_sub(capacity.max(6));
         ring_count += 1;
     }
     ring_count
 }
 
+fn wheel_ring_radius(ring_index: usize) -> u32 {
+    if ring_index == 0 {
+        68
+    } else {
+        136 + (ring_index.saturating_sub(1) as u32 * 72)
+    }
+}
+
+fn begin_hide(visible: &AtomicBool) -> bool {
+    visible.swap(false, Ordering::SeqCst)
+}
+
+fn restore_visible_after_failed_hide(visible: &AtomicBool) {
+    visible.store(true, Ordering::SeqCst);
+}
+
 pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> {
-    prepared(app)?.hide()?;
+    if !begin_hide(&TOOL_MENU_VISIBLE) {
+        debug_qa::trace("tool-menu hide result=skipped already_hidden_or_closing");
+        return Ok(());
+    }
+    let window = match prepared(app) {
+        Ok(window) => window,
+        Err(error) => {
+            restore_visible_after_failed_hide(&TOOL_MENU_VISIBLE);
+            return Err(error);
+        }
+    };
+    // Visibility changes must stay in Tauri/Tao. Direct Win32 hiding leaves
+    // Tao's cached visibility out of sync and prevents the next F2 show. A
+    // focus transfer can race the hotkey release and emit two close requests;
+    // only the first request may enter the native hide path, otherwise DWM can
+    // briefly compose the transparent WebView host as a rectangular remnant.
+    if let Err(error) = window.hide() {
+        restore_visible_after_failed_hide(&TOOL_MENU_VISIBLE);
+        return Err(error.into());
+    }
+    debug_qa::trace("tool-menu hide result=hidden");
     Ok(())
 }
 
-/// Animate the WebView content back into its center point, then hide the
-/// native HWND. This avoids a blank native window or document title flashing
-/// after the visual content has already vanished.
+/// A Tauri focus event can be emitted while focus transfers between the
+/// top-level window and its WebView child. Only close when Windows confirms
+/// that foreground has actually moved to another root HWND.
+#[cfg(windows)]
+pub fn lost_foreground<R: Runtime>(window: &tauri::Window<R>) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOT};
+
+    let Ok(surface) = window.app_handle().get_webview_window(TOOL_MENU_SURFACE_LABEL).ok_or(()) else {
+        return false;
+    };
+    let Ok(surface_hwnd) = surface.hwnd() else {
+        return false;
+    };
+    let surface_root = unsafe { GetAncestor(surface_hwnd.0, GA_ROOT) };
+    let foreground = unsafe { GetForegroundWindow() };
+    if surface_root.is_null() || foreground.is_null() {
+        return false;
+    }
+    let foreground_root = unsafe { GetAncestor(foreground, GA_ROOT) };
+    !foreground_root.is_null() && foreground_root != surface_root
+}
+
+#[cfg(not(windows))]
+pub fn lost_foreground<R: Runtime>(_window: &tauri::Window<R>) -> bool {
+    true
+}
+
+/// One framework-managed close path for key release, Esc, launch and click-away.
+/// The Surface has no exit animation, so the HWND is hidden immediately.
 pub fn request_hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> {
-    let window = prepared(app)?;
-    let generation = HIDE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    window.emit(TOOL_MENU_SURFACE_CLOSING_EVENT, ())?;
-    let delayed_app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(TOOL_MENU_CLOSE_ANIMATION);
-        if HIDE_GENERATION.load(Ordering::SeqCst) != generation {
-            return;
-        }
-        let main_thread_app = delayed_app.clone();
-        let _ = delayed_app.run_on_main_thread(move || {
-            if HIDE_GENERATION.load(Ordering::SeqCst) != generation {
-                return;
-            }
-            if let Err(error) = hide(&main_thread_app) {
-                eprintln!("failed to hide tool menu after close animation: {error}");
-            }
-        });
-    });
-    Ok(())
+    hide(app)
 }
 
 #[cfg(windows)]
@@ -220,6 +316,97 @@ fn apply_circular_region<R: Runtime>(window: &WebviewWindow<R>) -> Result<(), To
         return Err(ToolMenuSurfaceError::ApplyRegion);
     }
     Ok(())
+}
+
+/// The menu is a circular content surface, not a conventional application
+/// window. Disable DWM's non-client painting and remove the border color so a
+/// title-bar or frame surface can never be composed above the transparent
+/// WebView while it closes. The Surface is an instant popup, so DWM window
+/// transitions are disabled as well: otherwise click-away can animate a
+/// cached rectangular redirection surface after the circular region shrinks.
+#[cfg(windows)]
+fn configure_transparent_non_client<R: Runtime>(window: &WebviewWindow<R>) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY,
+        DWMWA_TRANSITIONS_FORCEDISABLED,
+    };
+
+    let Ok(hwnd) = window.hwnd() else {
+        debug_qa::trace("tool-menu non-client result=unavailable no_hwnd");
+        return;
+    };
+    let policy = DWMNCRP_DISABLED;
+    let policy_result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0,
+            DWMWA_NCRENDERING_POLICY as u32,
+            (&policy as *const i32).cast(),
+            std::mem::size_of_val(&policy) as u32,
+        )
+    };
+    // Supported on Windows 11. Older Windows retains the disabled non-client
+    // policy even if it does not recognize this color attribute.
+    const DWMWA_COLOR_NONE: u32 = 0xffff_fffe;
+    let border_result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0,
+            DWMWA_BORDER_COLOR as u32,
+            (&DWMWA_COLOR_NONE as *const u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    let transitions_disabled = 1_i32;
+    let transition_result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            (&transitions_disabled as *const i32).cast(),
+            std::mem::size_of_val(&transitions_disabled) as u32,
+        )
+    };
+    debug_qa::trace(format!(
+        "tool-menu non-client result=applied policy_hresult={policy_result:#x} border_hresult={border_result:#x} transition_hresult={transition_result:#x}"
+    ));
+}
+
+#[cfg(not(windows))]
+fn configure_transparent_non_client<R: Runtime>(_window: &WebviewWindow<R>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_close_requests_enter_native_hide_only_once() {
+        let visible = AtomicBool::new(true);
+
+        assert!(begin_hide(&visible));
+        assert!(!begin_hide(&visible));
+    }
+
+    #[test]
+    fn failed_native_hide_restores_the_close_gate_for_retry() {
+        let visible = AtomicBool::new(true);
+
+        assert!(begin_hide(&visible));
+        restore_visible_after_failed_hide(&visible);
+        assert!(begin_hide(&visible));
+    }
+
+    #[test]
+    fn tool_menu_surface_can_subscribe_to_tauri_events() {
+        let capability: serde_json::Value = serde_json::from_str(include_str!(
+            "../../capabilities/default.json"
+        ))
+        .expect("default capability should be valid JSON");
+        let windows = capability["windows"]
+            .as_array()
+            .expect("default capability should declare its windows");
+
+        assert!(windows
+            .iter()
+            .any(|label| label.as_str() == Some(TOOL_MENU_SURFACE_LABEL)));
+    }
 }
 
 #[cfg(windows)]

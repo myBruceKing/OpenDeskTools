@@ -1,5 +1,12 @@
 import { AppGeneric24Regular, Dismiss20Regular } from "@fluentui/react-icons";
-import type { CSSProperties } from "react";
+import { createPortal } from "react-dom";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  MENU_ITEMS_PER_GROUP,
+  toolMenuWheelLayout,
+  toolMenuWheelPosition,
+  WHEEL_CENTER_RADIUS
+} from "./toolMenuGeometry";
 import styles from "./ToolMenuPreview.module.css";
 
 export type ToolMenuPreviewItem = {
@@ -7,45 +14,6 @@ export type ToolMenuPreviewItem = {
   label: string;
   iconSrc?: string | null;
 };
-
-const MENU_ITEMS_PER_GROUP = 6;
-const WHEEL_BASE_DIAMETER = 264;
-const WHEEL_ITEM_SIZE = 50;
-const WHEEL_RING_RADIUS_STEP = 75;
-const WHEEL_MIN_ARC_SLOT = 94;
-const WHEEL_CENTER_RADIUS = 41;
-const WHEEL_OUTER_PADDING = 12;
-
-type WheelRing = { start: number; radius: number; itemSize: number; capacity: number };
-
-function wheelLayout(itemCount: number) {
-  const rings: WheelRing[] = [];
-  let consumed = 0;
-  for (let ring = 0; consumed < Math.max(1, itemCount); ring += 1) {
-    const itemSize = WHEEL_ITEM_SIZE;
-    const radius = 77 + ring * WHEEL_RING_RADIUS_STEP;
-    const capacity = Math.max(6, Math.floor(2 * Math.PI * radius / WHEEL_MIN_ARC_SLOT));
-    rings.push({ start: consumed, radius, itemSize, capacity });
-    consumed += capacity;
-  }
-  return {
-    diameter: Math.max(
-      WHEEL_BASE_DIAMETER,
-      Math.ceil((rings[rings.length - 1].radius + WHEEL_ITEM_SIZE / 2 + WHEEL_OUTER_PADDING) * 2)
-    ),
-    rings
-  };
-}
-
-function wheelPosition(slot: number, ring: WheelRing, diameter: number) {
-  const step = 360 / ring.capacity;
-  // The first item is at twelve o'clock. Sector dividers are derived
-  // separately at half a step on either side, so a divider never runs
-  // through an icon.
-  const angle = (-90 + slot * step) * Math.PI / 180;
-  const radiusPercent = ring.radius / diameter * 100;
-  return { x: 50 + Math.cos(angle) * radiusPercent, y: 50 + Math.sin(angle) * radiusPercent };
-}
 
 type AppIconProps = {
   src?: string | null;
@@ -75,6 +43,7 @@ type ToolMenuPreviewProps = {
   fit?: "content" | "container";
   className?: string;
   onItemClick?: (item: ToolMenuPreviewItem) => void;
+  onItemReorder?: (active: ToolMenuPreviewItem, over: ToolMenuPreviewItem) => void;
 };
 
 const rootSizeClass: Record<NonNullable<ToolMenuPreviewProps["size"]>, string> = {
@@ -89,26 +58,149 @@ export function ToolMenuPreview({
   size = "settings",
   fit = "content",
   className = "",
-  onItemClick
+  onItemClick,
+  onItemReorder
 }: ToolMenuPreviewProps) {
   const visibleItems = items;
-  const layout = wheelLayout(visibleItems.length);
+  const layout = toolMenuWheelLayout(visibleItems.length);
   const wheelRingCount = layout.rings.length;
   const iconSize = size === "compact" ? "compact" : "preview";
-  const rootClasses = [rootSizeClass[size], fit === "container" ? styles.fitContainer : "", className];
+  const wheelFitFrameRef = useRef<HTMLDivElement>(null);
+  const [wheelPreviewScale, setWheelPreviewScale] = useState(1);
+  const [dragState, setDragState] = useState<{
+    activeId: string;
+    overId: string | null;
+    moved: boolean;
+    pointerX: number;
+    pointerY: number;
+  } | null>(null);
+  const reorderPointerRef = useRef<{
+    pointerId: number;
+    item: ToolMenuPreviewItem;
+    startX: number;
+    startY: number;
+    moved: boolean;
+    overId: string | null;
+  } | null>(null);
+  const suppressClickRef = useRef<string | null>(null);
+  const rootClasses = [rootSizeClass[size], variant !== "wheel" && fit === "container" ? styles.fitContainer : "", className];
+
+  useLayoutEffect(() => {
+    if (variant !== "wheel" || fit !== "container") {
+      setWheelPreviewScale(1);
+      return undefined;
+    }
+    const frame = wheelFitFrameRef.current;
+    if (!frame) return undefined;
+    const updateScale = () => {
+      const available = Math.min(frame.clientWidth, frame.clientHeight);
+      setWheelPreviewScale(Math.min(1, available / layout.diameter));
+    };
+    updateScale();
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [fit, layout.diameter, variant]);
+
+  const interactive = Boolean(onItemClick || onItemReorder);
+  const itemById = new Map(visibleItems.map((item) => [item.id, item]));
+  const itemClasses = (base: string, item: ToolMenuPreviewItem) => [
+    base,
+    dragState?.moved && dragState.activeId === item.id ? styles.itemDragging : "",
+    dragState?.overId === item.id && dragState.activeId !== item.id ? styles.itemDropTarget : ""
+  ].filter(Boolean).join(" ");
+  const clearReorder = () => {
+    reorderPointerRef.current = null;
+    setDragState(null);
+  };
+  const itemPointerDown = (event: ReactPointerEvent<HTMLElement>, item: ToolMenuPreviewItem) => {
+    if (!onItemReorder || event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    reorderPointerRef.current = {
+      pointerId: event.pointerId,
+      item,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      overId: null
+    };
+    setDragState({ activeId: item.id, overId: null, moved: false, pointerX: event.clientX, pointerY: event.clientY });
+  };
+  const itemPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const active = reorderPointerRef.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    if (!active.moved && Math.hypot(event.clientX - active.startX, event.clientY - active.startY) < 4) return;
+    active.moved = true;
+    const target = document.elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLElement>("[data-tool-menu-preview-item-id]");
+    const overId = target?.dataset.toolMenuPreviewItemId ?? null;
+    active.overId = overId;
+    setDragState({
+      activeId: active.item.id,
+      overId,
+      moved: true,
+      pointerX: event.clientX,
+      pointerY: event.clientY
+    });
+  };
+  const itemPointerUp = (event: ReactPointerEvent<HTMLElement>) => {
+    const active = reorderPointerRef.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const over = active.overId ? itemById.get(active.overId) : null;
+    if (active.moved) {
+      suppressClickRef.current = active.item.id;
+      if (over && over.id !== active.item.id) onItemReorder?.(active.item, over);
+    }
+    clearReorder();
+  };
+  const itemPointerCancel = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    clearReorder();
+  };
+  const itemClick = (item: ToolMenuPreviewItem) => {
+    if (suppressClickRef.current === item.id) {
+      suppressClickRef.current = null;
+      return;
+    }
+    onItemClick?.(item);
+  };
+  const itemInteraction = (item: ToolMenuPreviewItem) => ({
+    "data-tool-menu-preview-item-id": item.id,
+    onPointerDown: (event: ReactPointerEvent<HTMLElement>) => itemPointerDown(event, item),
+    onPointerMove: itemPointerMove,
+    onPointerUp: itemPointerUp,
+    onPointerCancel: itemPointerCancel,
+    onClick: onItemClick ? () => itemClick(item) : undefined
+  });
+  const activeDrag = dragState?.moved ? dragState : null;
+  const draggedItem = activeDrag ? itemById.get(activeDrag.activeId) : null;
+  const dragFollower = draggedItem && activeDrag && typeof document !== "undefined"
+    ? createPortal(
+      <span
+        className={styles.dragFollower}
+        style={{ left: activeDrag.pointerX, top: activeDrag.pointerY }}
+        aria-hidden="true"
+      >
+        <AppIcon src={draggedItem.iconSrc} label={draggedItem.label} size="preview" />
+      </span>,
+      document.body
+    )
+    : null;
 
   if (variant === "wheel") {
-    return (
+    const wheel = (
       <div
-        className={[styles.wheel, ...rootClasses].filter(Boolean).join(" ")}
+        className={[styles.wheel, fit === "container" ? styles.wheelScaled : "", ...rootClasses].filter(Boolean).join(" ")}
         style={{
           "--wheel-ring-count": String(wheelRingCount),
           "--wheel-layout-diameter": `${layout.diameter}px`,
-          "--wheel-center-size": "82px",
-          "--wheel-center-icon-size": "42px",
-          "--wheel-layout-center-radius": "41px"
+          "--wheel-center-size": "72px",
+          "--wheel-center-icon-size": "36px",
+          "--wheel-layout-center-radius": "36px",
+          "--wheel-preview-scale": String(wheelPreviewScale)
         } as CSSProperties}
-        aria-hidden={onItemClick ? undefined : true}
+        aria-hidden={interactive ? undefined : true}
       >
         {layout.rings.flatMap((ring, ringIndex) => {
           const innerBoundary = ringIndex === 0
@@ -147,22 +239,22 @@ export function ToolMenuPreview({
         {visibleItems.map((item, index) => {
           const ring = layout.rings.findIndex((candidate) => index >= candidate.start && index < candidate.start + candidate.capacity);
           const itemRing = layout.rings[ring];
-          const position = wheelPosition(index - itemRing.start, itemRing, layout.diameter);
+          const position = toolMenuWheelPosition(index - itemRing.start, itemRing, layout.diameter);
           const itemStyle = {
             "--wheel-item-x": `${position.x}%`,
             "--wheel-item-y": `${position.y}%`,
             "--wheel-item-size": `${itemRing.itemSize}px`,
             "--wheel-icon-size": `${Math.max(20, itemRing.itemSize - 4)}px`
           } as CSSProperties;
-          return onItemClick ? (
+          return interactive ? (
             <button
               type="button"
-              className={styles.wheelItem}
+              className={itemClasses(styles.wheelItem, item)}
               key={item.id}
               style={itemStyle}
               data-ring={ring}
               aria-label={`启动 ${item.label}`}
-              onClick={() => onItemClick(item)}
+              {...itemInteraction(item)}
             >
               <AppIcon src={item.iconSrc} label={item.label} size={iconSize} />
             </button>
@@ -177,19 +269,21 @@ export function ToolMenuPreview({
         </span>
       </div>
     );
+    return fit === "container" ? <>{<div className={styles.wheelFitFrame} ref={wheelFitFrameRef}>{wheel}</div>}{dragFollower}</> : <>{wheel}{dragFollower}</>;
   }
 
   if (variant === "vertical") {
     return (
-      <div className={[styles.vertical, ...rootClasses].filter(Boolean).join(" ")} aria-hidden={onItemClick ? undefined : true}>
+      <>
+      <div className={[styles.vertical, ...rootClasses].filter(Boolean).join(" ")} aria-hidden={interactive ? undefined : true}>
         {visibleItems.map((item) => (
-          onItemClick ? (
+          interactive ? (
           <button
             type="button"
-            className={styles.verticalItem}
+            className={itemClasses(styles.verticalItem, item)}
             key={item.id}
             aria-label={`启动 ${item.label}`}
-            onClick={() => onItemClick(item)}
+            {...itemInteraction(item)}
           >
             <AppIcon
               src={item.iconSrc}
@@ -205,25 +299,28 @@ export function ToolMenuPreview({
         ))}
         {visibleItems.length === 0 && <span className={styles.emptyText}>未显示固定项</span>}
       </div>
+      {dragFollower}
+      </>
     );
   }
 
   return (
+    <>
     <div
       className={[styles.dock, ...rootClasses]
         .filter(Boolean)
         .join(" ")}
-      aria-hidden={onItemClick ? undefined : true}
+      aria-hidden={interactive ? undefined : true}
     >
       {visibleItems.map((item, index) => (
-        onItemClick ? (
+        interactive ? (
         <button
           type="button"
-          className={styles.dockItem}
+          className={itemClasses(styles.dockItem, item)}
           key={item.id}
           data-row-start={index % MENU_ITEMS_PER_GROUP === 0 ? "true" : undefined}
           aria-label={`启动 ${item.label}`}
-          onClick={() => onItemClick(item)}
+          {...itemInteraction(item)}
         >
           <AppIcon
             src={item.iconSrc}
@@ -239,5 +336,7 @@ export function ToolMenuPreview({
       ))}
       {visibleItems.length === 0 && <span className={styles.emptyText}>未显示固定项</span>}
     </div>
+    {dragFollower}
+    </>
   );
 }

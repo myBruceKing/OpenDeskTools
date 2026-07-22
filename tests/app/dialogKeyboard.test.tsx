@@ -253,6 +253,23 @@ describe("dialog keyboard behavior", () => {
     expect(onAppendToken).toHaveBeenCalledWith("Alt+K");
   });
 
+  it("records the physical key left of Digit1 as Backquote regardless of its text glyph", async () => {
+    const onAppendToken = vi.fn();
+    await render(
+      <ShortcutCaptureField
+        value=""
+        label="截图快捷键"
+        onChange={vi.fn()}
+        onAppendToken={onAppendToken}
+      />
+    );
+
+    const capture = document.querySelector<HTMLElement>("[role='group']")!;
+    dispatchKey(capture, "~", { code: "Backquote", shiftKey: true });
+
+    expect(onAppendToken).toHaveBeenCalledWith("Shift+Backquote");
+  });
+
   it("clears an interrupted Alt+F4 lifecycle on blur before the missing keyup events", async () => {
     const onAppendToken = vi.fn();
     await render(

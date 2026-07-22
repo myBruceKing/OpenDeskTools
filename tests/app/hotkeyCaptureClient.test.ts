@@ -40,6 +40,12 @@ describe("hotkeyCaptureClient", () => {
         token: "Shift+Win+S"
       })
     ).toEqual({ sessionId: "hotkey-capture-7", token: "Shift+Win+S" });
+    expect(
+      parseHotkeyCaptureTokenEvent({
+        sessionId: "hotkey-capture-7",
+        token: "Win+Backquote"
+      })
+    ).toEqual({ sessionId: "hotkey-capture-7", token: "Win+Backquote" });
 
     expect(() => parseHotkeyCaptureSession({ sessionId: "stale" })).toThrow();
     expect(() =>

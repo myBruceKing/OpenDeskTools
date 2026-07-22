@@ -18,7 +18,8 @@ const NAMED_KEYS = new Set([
   "ArrowDown",
   "PrintScreen",
   "Insert",
-  "Delete"
+  "Delete",
+  "Backquote"
 ]);
 
 type InvokeFunction = (command: string, args?: Record<string, unknown>) => Promise<unknown>;

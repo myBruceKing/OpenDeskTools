@@ -1,90 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { quickLaunchClient, type ToolMenuLayout } from "../../app/quickLaunchClient";
-import { type QuickLaunchApp, useQuickLaunchViewModel } from "../../app/quickLaunchModel";
+import { useMemo, useRef, useState } from "react";
+import { useQuickLaunchViewModel } from "../../app/quickLaunchModel";
 import { PageScaffold } from "../../components/layout/PageScaffold";
-import { PreviewFrame } from "../../components/layout/PreviewFrame";
 import { SettingsCard } from "../../components/layout/SettingsCard";
 import { ToolbarRow } from "../../components/layout/ToolbarRow";
 import { List, ListRow, ListRowDescription, ListRowTitle } from "../../components/patterns/ListRow";
 import { SectionTitle } from "../../components/patterns/Section";
-import { AppIcon, ToolMenuPreview } from "../../components/patterns/ToolMenuPreview";
 import { TagBadge } from "../../components/primitives/Badge";
 import { Button } from "../../components/primitives/Button";
-import { DialogShell } from "../../components/primitives/Dialog";
 import { SearchField } from "../../components/primitives/Field";
-import { SegmentedControl, Toggle } from "../../components/primitives/SelectionControl";
-import styles from "../static/SettingsPages.module.css";
-
-function LazyQuickLaunchIcon({ app }: { app: QuickLaunchApp }) {
-  const host = useRef<HTMLSpanElement>(null);
-  const [iconSrc, setIconSrc] = useState(app.iconSrc ?? null);
-  const requestedPath = useRef<string | null>(null);
-  const ownedUrl = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (ownedUrl.current) {
-      URL.revokeObjectURL(ownedUrl.current);
-      ownedUrl.current = null;
-    }
-    setIconSrc(app.iconSrc ?? null);
-    requestedPath.current = null;
-  }, [app.iconSrc, app.path]);
-
-  useEffect(() => () => {
-    if (ownedUrl.current) URL.revokeObjectURL(ownedUrl.current);
-  }, []);
-
-  useEffect(() => {
-    const node = host.current;
-    if (!node || iconSrc || !app.iconAvailable || requestedPath.current === app.path) return;
-    let active = true;
-    const load = async () => {
-      requestedPath.current = app.path;
-      try {
-        const icon = await quickLaunchClient.getIcon(app.path);
-        const url = URL.createObjectURL(icon);
-        if (!active) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        ownedUrl.current = url;
-        setIconSrc(url);
-      } catch {
-        // Keep the shared generic application fallback when Windows cannot
-        // provide an icon for this specific program.
-      }
-    };
-    if (typeof IntersectionObserver === "undefined") {
-      void load();
-      return () => { active = false; };
-    }
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        observer.disconnect();
-        void load();
-      }
-    });
-    observer.observe(node);
-    return () => {
-      active = false;
-      observer.disconnect();
-    };
-  }, [app.iconAvailable, app.path, iconSrc]);
-
-  return (
-    <span className={styles.lazyAppIcon} ref={host}>
-      <AppIcon src={iconSrc} label={`${app.name} 图标`} size="row" />
-    </span>
-  );
-}
+import { Toggle } from "../../components/primitives/SelectionControl";
+import { QuickLaunchAppIcon } from "./QuickLaunchAppIcon";
+import { QuickLaunchPreviewDialog } from "./QuickLaunchPreviewDialog";
+import styles from "./QuickLaunchPage.module.css";
+import sharedStyles from "../static/SettingsPages.module.css";
 
 export function QuickLaunchPage() {
   const quickLaunch = useQuickLaunchViewModel();
   const [query, setQuery] = useState("");
   const [quickPreviewOpen, setQuickPreviewOpen] = useState(false);
-  const [quickPreviewShape, setQuickPreviewShape] = useState<ToolMenuLayout>("wheel");
-  const [quickPreviewKeepOpen, setQuickPreviewKeepOpen] = useState(false);
-  const [applyingPreview, setApplyingPreview] = useState(false);
   const [draggingAppName, setDraggingAppName] = useState<string | null>(null);
   const [dragOverAppName, setDragOverAppName] = useState<string | null>(null);
   const dragPointer = useRef<{ pointerId: number; appPath: string } | null>(null);
@@ -101,12 +34,6 @@ export function QuickLaunchPage() {
     );
   }, [query, quickLaunch.discoveredApps]);
 
-  const openQuickPreview = () => {
-    setQuickPreviewShape(quickLaunch.toolMenu.layout);
-    setQuickPreviewKeepOpen(quickLaunch.toolMenu.keepOpenOnKeyRelease);
-    setQuickPreviewOpen(true);
-  };
-
   const finishPointerReorder = (pointerId: number) => {
     const active = dragPointer.current;
     if (!active || active.pointerId !== pointerId) return;
@@ -119,24 +46,11 @@ export function QuickLaunchPage() {
     }
   };
 
-  const applyQuickPreview = async () => {
-    setApplyingPreview(true);
-    try {
-      await quickLaunch.actions.updateToolMenu({
-        layout: quickPreviewShape,
-        keepOpenOnKeyRelease: quickPreviewKeepOpen
-      });
-      setQuickPreviewOpen(false);
-    } finally {
-      setApplyingPreview(false);
-    }
-  };
-
   return (
     <PageScaffold title="悬浮与快速启动" description="管理悬浮菜单中的固定程序、显示顺序和预览形态。">
-      <div className={styles.quickGrid}>
+      <div className={styles.grid}>
         <SettingsCard fill>
-          <div className={styles.panelHeader}>
+          <div className={sharedStyles.panelHeader}>
             <div className={styles.panelTitleGroup}>
               <SectionTitle>已固定</SectionTitle>
               <TagBadge tone="blue">{String(quickLaunch.visiblePinnedApps.length)}</TagBadge>
@@ -144,14 +58,14 @@ export function QuickLaunchPage() {
             <Button
               size="inline"
               disabled={quickLaunch.previewItems.length === 0 || quickLaunch.loading}
-              onClick={openQuickPreview}
+              onClick={() => setQuickPreviewOpen(true)}
             >
               快速预览
             </Button>
           </div>
           <List className={styles.pinnedList}>
             {quickLaunch.pinnedApps.length === 0 ? (
-              <div className={styles.emptyState}>{quickLaunch.loading ? "正在读取已固定程序…" : "尚无已固定程序，可从右侧搜索结果添加。"}</div>
+              <div className={sharedStyles.emptyState}>{quickLaunch.loading ? "正在读取已固定程序…" : "尚无已固定程序，可从右侧搜索结果添加。"}</div>
             ) : (
               quickLaunch.pinnedApps.map((app) => (
                 <ListRow
@@ -166,7 +80,7 @@ export function QuickLaunchPage() {
                   data-quick-launch-path={app.path}
                 >
                   <span
-                    className={styles.dragDots}
+                    className={styles.dragHandle}
                     title={quickLaunch.pinnedApps.length > 1 ? "拖动排序" : "添加更多固定程序后可排序"}
                     aria-label={quickLaunch.pinnedApps.length > 1 ? "拖动排序" : "当前只有一项，无法排序"}
                     role="button"
@@ -205,7 +119,7 @@ export function QuickLaunchPage() {
                       }
                     }}
                   >⋮⋮</span>
-                  <LazyQuickLaunchIcon app={app} />
+                  <QuickLaunchAppIcon app={app} />
                   <div className={styles.rowMain}>
                     <ListRowTitle>{app.name}</ListRowTitle>
                     <ListRowDescription>{app.path}</ListRowDescription>
@@ -216,7 +130,7 @@ export function QuickLaunchPage() {
                     disabled={!canManageApps}
                     onChange={(checked) => void quickLaunch.actions.setAppVisible(app.path, checked)}
                   />
-                  <div className={styles.quickLaunchActions}>
+                  <div className={styles.actions}>
                     <Button size="inline" disabled={!app.available || !canManageApps} onClick={() => void quickLaunch.actions.launchApp(app.path)}>启动</Button>
                     <Button size="inline" disabled={!canManageApps} onClick={() => void quickLaunch.actions.removePinnedApp(app.path)}>移除</Button>
                   </div>
@@ -226,7 +140,7 @@ export function QuickLaunchPage() {
           </List>
         </SettingsCard>
         <SettingsCard fill>
-          <div className={styles.panelHeader}>
+          <div className={sharedStyles.panelHeader}>
             <SectionTitle>搜索与发现程序</SectionTitle>
           </div>
           <ToolbarRow className={styles.discoveredToolbar} layout="grid">
@@ -242,14 +156,14 @@ export function QuickLaunchPage() {
           </ToolbarRow>
           <List className={styles.discoveredList}>
             {filteredDiscoveredApps.length === 0 ? (
-              <div className={styles.emptyState}>{quickLaunch.loading ? "正在扫描桌面和开始菜单…" : "尚未发现可添加程序，也可以手动添加。"}</div>
+              <div className={sharedStyles.emptyState}>{quickLaunch.loading ? "正在扫描桌面和开始菜单…" : "尚未发现可添加程序，也可以手动添加。"}</div>
             ) : filteredDiscoveredApps.map((app) => {
               const isPinned = quickLaunch.pinnedApps.some((pinnedApp) => pinnedApp.path === app.path);
 
               return (
                 <ListRow className={styles.discoveredRow} key={app.id ?? app.path}>
                   <span className={styles.checkBox} aria-hidden="true" />
-                  <LazyQuickLaunchIcon app={app} />
+                  <QuickLaunchAppIcon app={app} />
                   <div className={styles.rowMain}>
                     <ListRowTitle>{app.name}</ListRowTitle>
                     <ListRowDescription>{app.source} · {app.path}</ListRowDescription>
@@ -267,53 +181,18 @@ export function QuickLaunchPage() {
           </List>
         </SettingsCard>
       </div>
-      {quickLaunch.error ? <div className={styles.quickLaunchStatus} role="alert">{quickLaunch.error}</div> : null}
-      <DialogShell
+      {quickLaunch.error ? <div className={styles.status} role="alert">{quickLaunch.error}</div> : null}
+      <QuickLaunchPreviewDialog
         open={quickPreviewOpen}
-        title="快速预览"
-        description="选择实际工具盘的显示样式与按键松开后的行为；点击应用后立即生效。"
+        preferences={quickLaunch.toolMenu}
+        items={quickLaunch.previewItems}
+        visibleApps={quickLaunch.visiblePinnedApps}
+        loading={quickLaunch.loading}
         onClose={() => setQuickPreviewOpen(false)}
-        footer={
-          <>
-            <div className={styles.quickPreviewKeepOpen}>
-              <Toggle
-                checked={quickPreviewKeepOpen}
-                label="松开按键后保持显示"
-                disabled={applyingPreview}
-                onChange={setQuickPreviewKeepOpen}
-              />
-              <span>松开按键后保持显示</span>
-            </div>
-            <div className={styles.quickPreviewFooterActions}>
-              <Button size="inline" disabled={applyingPreview} onClick={() => void applyQuickPreview()}>
-                {applyingPreview ? "应用中…" : "应用"}
-              </Button>
-              <Button size="inline" disabled={applyingPreview} onClick={() => setQuickPreviewOpen(false)}>关闭</Button>
-            </div>
-          </>
-        }
-      >
-        <div className={styles.quickPreviewDialog}>
-          <SegmentedControl
-            label="快速预览形态"
-            value={quickPreviewShape}
-            options={[
-              { value: "wheel", label: "圆形" },
-              { value: "dock", label: "横向" },
-              { value: "vertical", label: "纵向" }
-            ]}
-            onChange={setQuickPreviewShape}
-          />
-          <PreviewFrame className={styles.quickPreviewDialogStage}>
-            <ToolMenuPreview
-              variant={quickPreviewShape}
-              items={quickLaunch.previewItems}
-              size="settings"
-              fit="container"
-            />
-          </PreviewFrame>
-        </div>
-      </DialogShell>
+        onApply={quickLaunch.actions.updateToolMenu}
+        onReorder={quickLaunch.actions.reorderPinnedApp}
+        onSwap={quickLaunch.actions.swapPinnedApps}
+      />
     </PageScaffold>
   );
 }

@@ -542,6 +542,7 @@ fn key_name(virtual_key: u32) -> Option<String> {
         0x2c => "PrintScreen",
         0x2d => "Insert",
         0x2e => "Delete",
+        0xc0 => "Backquote",
         _ => return None,
     };
     Some(key.to_owned())

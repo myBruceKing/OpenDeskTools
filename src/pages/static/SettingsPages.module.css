@@ -6,14 +6,6 @@
   gap: 12px;
 }
 
-.quickGrid {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.72fr);
-  gap: 12px;
-}
-
 .captureGrid,
 .generalGrid,
 .themeGrid {
@@ -32,13 +24,6 @@
   gap: 8px;
 }
 
-.panelTitleGroup {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .featureTitle {
   justify-content: flex-start;
 }
@@ -47,13 +32,6 @@
   flex: 0 0 auto;
   color: var(--text-secondary);
   font-size: 22px;
-}
-
-.pinnedList,
-.discoveredList {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
 }
 
 .emptyState {
@@ -65,109 +43,6 @@
   font-size: var(--font-size-body);
   line-height: var(--line-height-body);
   text-align: center;
-}
-
-.discoveredToolbar {
-  --toolbar-row-template: minmax(0, 1fr) auto auto;
-  flex: 0 0 auto;
-}
-
-.discoveredSearch {
-  width: 100%;
-  grid-column: 1 / -1;
-}
-
-.quickPreviewDialog {
-  min-width: 0;
-  display: grid;
-  gap: 14px;
-  justify-items: center;
-}
-
-.quickPreviewDialogStage {
-  --preview-frame-min-height: 360px;
-  width: min(420px, 100%);
-}
-
-.quickPreviewKeepOpen,
-.quickPreviewFooterActions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.quickPreviewKeepOpen {
-  min-width: 0;
-  margin-right: auto;
-  color: var(--text-primary);
-  font-size: var(--font-size-body);
-  line-height: var(--line-height-body);
-}
-
-.appRow,
-.discoveredRow {
-  min-height: 58px;
-  display: grid;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-}
-
-.appRow {
-  grid-template-columns: 18px 34px minmax(0, 1fr) var(--toggle-width) auto;
-  transition:
-    background-color var(--motion-duration-standard) ease,
-    border-color var(--motion-duration-standard) ease,
-    box-shadow var(--motion-duration-standard) ease,
-    opacity var(--motion-duration-standard) ease,
-    transform var(--motion-duration-standard) ease;
-}
-
-.appRow:hover {
-  background: color-mix(in srgb, var(--accent-primary) 5%, var(--surface-card));
-}
-
-.appRowDragging {
-  border-color: var(--border-accent);
-  box-shadow: 0 8px 20px rgb(33 107 217 / 10%);
-  opacity: 0.72;
-  transform: scale(0.992);
-}
-
-.appRowDropTarget {
-  background: color-mix(in srgb, var(--accent-primary) 9%, var(--surface-card));
-  box-shadow: inset 3px 0 0 var(--accent-primary);
-}
-
-.discoveredRow {
-  grid-template-columns: 18px 34px minmax(0, 1fr) 60px;
-}
-
-.quickLaunchActions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.quickLaunchStatus {
-  padding: 8px 10px;
-  border: var(--border-width) solid color-mix(in srgb, var(--status-danger) 42%, var(--border-default));
-  border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--status-danger) 10%, var(--surface-card));
-  color: var(--status-danger);
-  font-size: var(--font-size-body);
-  line-height: var(--line-height-body);
-}
-
-.rowMain {
-  min-width: 0;
-}
-
-.lazyAppIcon {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
 }
 
 .optionStack {
@@ -220,69 +95,6 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-}
-
-.dragDots {
-  width: 18px;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  align-self: center;
-  color: var(--text-secondary);
-  font-size: 0;
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-  transition:
-    color var(--motion-duration-standard) ease,
-    opacity var(--motion-duration-standard) ease,
-    transform var(--motion-duration-standard) ease;
-}
-
-.dragDots[aria-disabled="true"] {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.dragDots:active {
-  cursor: grabbing;
-}
-
-.dragDots::before {
-  width: 11px;
-  height: 17px;
-  content: "";
-  background-image:
-    radial-gradient(circle, currentColor 1.45px, transparent 1.6px),
-    radial-gradient(circle, currentColor 1.45px, transparent 1.6px),
-    radial-gradient(circle, currentColor 1.45px, transparent 1.6px),
-    radial-gradient(circle, currentColor 1.45px, transparent 1.6px),
-    radial-gradient(circle, currentColor 1.45px, transparent 1.6px),
-    radial-gradient(circle, currentColor 1.45px, transparent 1.6px);
-  background-position:
-    2px 1px,
-    8px 1px,
-    2px 7px,
-    8px 7px,
-    2px 13px,
-    8px 13px;
-  background-repeat: no-repeat;
-  background-size: 3px 3px;
-  opacity: 0.72;
-}
-
-.appRow:hover .dragDots {
-  color: var(--accent-primary);
-  opacity: 1;
-  transform: translateX(1px);
-}
-
-.checkBox {
-  width: 16px;
-  height: 16px;
-  border: var(--border-width) solid var(--border-default);
-  border-radius: 4px;
 }
 
 .screenshotPreview,
@@ -497,7 +309,6 @@
 
 @media (max-width: 899px) {
   .hotkeyLayout,
-  .quickGrid,
   .captureGrid,
   .generalGrid,
   .themeGrid,

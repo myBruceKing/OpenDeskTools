@@ -102,7 +102,7 @@ function ToolWheelPanel({ hotkeys }: { hotkeys: OverviewHotkeyViewModel[] }) {
       aria-label="工具盘预览"
     >
       <div className={styles.toolPreviewBody}>
-        <ToolMenuPreview variant="wheel" size="overview" className={styles.wheelFrame} items={previewItems} />
+        <ToolMenuPreview variant="wheel" size="overview" fit="container" className={styles.wheelFrame} items={previewItems} />
       </div>
     </Section>
   );

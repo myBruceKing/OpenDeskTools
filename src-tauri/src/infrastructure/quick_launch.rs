@@ -257,6 +257,29 @@ impl QuickLaunchService {
         self.snapshot()
     }
 
+    /// Exchange two fixed slots without shifting every item between them.
+    /// This is the spatial rule for the radial menu: crossing from an inner
+    /// ring to an outer ring must not pull the first outer item into the
+    /// center merely because a list insertion shifted its index.
+    pub fn swap(&self, active_path: &str, over_path: &str) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
+        let mut state = self.read_state()?;
+        let active = state
+            .pinned_apps
+            .iter()
+            .position(|app| normalized_path(&app.path) == normalized_path(active_path))
+            .ok_or(QuickLaunchError::NotPinned)?;
+        let over = state
+            .pinned_apps
+            .iter()
+            .position(|app| normalized_path(&app.path) == normalized_path(over_path))
+            .ok_or(QuickLaunchError::NotPinned)?;
+        if active != over {
+            state.pinned_apps.swap(active, over);
+            self.write_state(&state)?;
+        }
+        self.snapshot()
+    }
+
     pub fn launch(&self, path: &str) -> Result<(), QuickLaunchError> {
         let state = self.read_state()?;
         let app = state
@@ -589,6 +612,26 @@ mod tests {
         let remaining = reopened.unpin(&first.to_string_lossy()).unwrap();
         assert_eq!(remaining.pinned_apps.len(), 1);
         assert_eq!(remaining.pinned_apps[0].name, "Second");
+    }
+
+    #[test]
+    fn swapping_fixed_apps_preserves_every_other_spatial_slot() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = (0..8)
+            .map(|index| {
+                let path = temp.path().join(format!("{index}.exe"));
+                std::fs::write(&path, []).unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        let service = QuickLaunchService::initialize(storage).unwrap();
+        for path in &paths {
+            service.pin(path.to_string_lossy().into_owned(), Some("测试".to_owned())).unwrap();
+        }
+        let swapped = service.swap(&paths[2].to_string_lossy(), &paths[7].to_string_lossy()).unwrap();
+        let names = swapped.pinned_apps.into_iter().map(|app| app.name).collect::<Vec<_>>();
+        assert_eq!(names, vec!["0", "1", "7", "3", "4", "5", "6", "2"]);
     }
 
     #[cfg(windows)]

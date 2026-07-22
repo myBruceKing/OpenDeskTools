@@ -74,6 +74,7 @@ export function createQuickLaunchClient(invokeFunction: InvokeFunction = invoke)
     unpin: (path: string) => snapshot("unpin_quick_launch_app", { input: { path } }),
     setVisible: (path: string, visible: boolean) => snapshot("set_quick_launch_visible", { input: { path, visible } }),
     reorder: (activePath: string, overPath: string) => snapshot("reorder_quick_launch_apps", { input: { activePath, overPath } }),
+    swap: (activePath: string, overPath: string) => snapshot("swap_quick_launch_apps", { input: { activePath, overPath } }),
     updateToolMenu: (preferences: ToolMenuPreferences) => snapshot("update_tool_menu_preferences", { input: { preferences } }),
     launch: (path: string) => invokeFunction("launch_quick_launch_app", { input: { path } }).then(() => undefined),
     selectFile: () => invokeFunction("select_quick_launch_app").then((value) => value === null || typeof value === "string" ? value : Promise.reject(new Error("选择结果无效"))),

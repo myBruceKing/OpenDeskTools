@@ -236,6 +236,7 @@ pub fn run() {
             commands::quick_launch::unpin_quick_launch_app,
             commands::quick_launch::set_quick_launch_visible,
             commands::quick_launch::reorder_quick_launch_apps,
+            commands::quick_launch::swap_quick_launch_apps,
             commands::quick_launch::update_tool_menu_preferences,
             commands::quick_launch::launch_quick_launch_app,
             commands::quick_launch::get_quick_launch_icon,
@@ -308,9 +309,9 @@ fn handle_tool_menu_surface_window_event<R: Runtime>(window: &tauri::Window<R>, 
         }
         // A retained menu is intentionally still dismissed by clicking any
         // other application or surface, rather than remaining above it.
-        tauri::WindowEvent::Focused(false) => {
+        tauri::WindowEvent::Focused(false) if tool_menu_surface_window::lost_foreground(window) => {
             if let Err(error) = tool_menu_surface_window::request_hide(window.app_handle()) {
-                eprintln!("failed to hide unfocused tool menu surface: {error}");
+                eprintln!("failed to hide tool menu after confirmed foreground change: {error}");
             }
         }
         _ => {}

@@ -190,6 +190,7 @@ fn normalize_key(value: &str) -> Result<String, HotkeyValidationError> {
         "ARROWLEFT" | "LEFT" => "ArrowLeft",
         "ARROWRIGHT" | "RIGHT" => "ArrowRight",
         "PRINTSCREEN" => "PrintScreen",
+        "BACKQUOTE" | "BACKTICK" | "GRAVE" | "OEM_3" | "`" | "~" => "Backquote",
         _ => return Err(HotkeyValidationError::UnsupportedKey(value.to_owned())),
     };
     Ok(normalized.to_owned())
@@ -1413,6 +1414,14 @@ mod tests {
                 .unwrap()
                 .normalized(),
             "Ctrl+Shift+V"
+        );
+        assert_eq!(
+            HotkeyBinding::parse("Ctrl+`").unwrap().normalized(),
+            "Ctrl+Backquote"
+        );
+        assert_eq!(
+            HotkeyBinding::parse("Shift+OEM_3").unwrap().normalized(),
+            "Shift+Backquote"
         );
     }
 

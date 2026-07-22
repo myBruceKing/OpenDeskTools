@@ -2,7 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default permissions for OpenDeskTools application windows",
-  "windows": ["main", "clipboard-surface", "clipboard-preview-surface"],
+  "windows": [
+    "main",
+    "clipboard-surface",
+    "clipboard-preview-surface",
+    "tool-menu-surface"
+  ],
   "permissions": [
     "core:default",
     "core:window:default",

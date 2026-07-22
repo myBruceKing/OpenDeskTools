@@ -4,25 +4,7 @@
   display: grid;
   place-items: center;
   background: transparent;
-  opacity: 0;
-  pointer-events: none;
-  transform: scale(0.08);
-  transform-origin: center;
-  transition:
-    opacity 75ms ease-out,
-    transform 95ms cubic-bezier(0.2, 0.8, 0.25, 1);
-}
-
-.windowRoot[data-presentation="open"] {
-  opacity: 1;
   pointer-events: auto;
-  transform: scale(1);
-}
-
-.windowRoot[data-presentation="entering"],
-.windowRoot[data-presentation="closing"] {
-  opacity: 0;
-  transform: scale(0.08);
 }
 
 .status,

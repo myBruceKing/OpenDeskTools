@@ -18,6 +18,23 @@
   box-shadow: var(--shadow-tool-wheel-hover);
 }
 
+.wheelScaled {
+  transform: scale(var(--wheel-preview-scale, 1));
+  transform-origin: center;
+}
+
+.wheelFitFrame {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
+  overflow: hidden;
+}
+
 .wheelRingDivider {
   position: absolute;
   top: 50%;
@@ -50,8 +67,41 @@
   z-index: 2;
 }
 
-button.wheelItem {
+button.wheelItem,
+button.dockItem,
+button.verticalItem {
   cursor: pointer;
+}
+
+.itemDragging {
+  cursor: grabbing !important;
+  opacity: 0.48;
+}
+
+.dragFollower {
+  position: fixed;
+  z-index: 2147483647;
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  border: var(--border-width) solid color-mix(in srgb, var(--accent-primary) 44%, var(--border-tool-wheel-divider));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-card) 92%, transparent);
+  box-shadow: 0 8px 20px rgb(36 42 50 / 26%);
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.itemDropTarget {
+  border-color: color-mix(in srgb, var(--accent-primary) 68%, var(--border-tool-wheel-divider)) !important;
+  background: color-mix(in srgb, var(--accent-primary) 12%, var(--surface-card)) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 26%, transparent) !important;
+  transform: translateY(-2px) scale(1.06);
+}
+
+.wheelItem.itemDropTarget {
+  transform: translate(-50%, -50%) scale(1.08);
 }
 
 .wheelCenter svg {
@@ -179,12 +229,6 @@ button.wheelItem {
   max-width: 100%;
 }
 
-.wheel.fitContainer {
-  width: min(var(--wheel-layout-diameter, var(--tool-menu-wheel-size)), 100%);
-  height: auto;
-  aspect-ratio: 1;
-}
-
 .dock.fitContainer {
   overflow: hidden;
 }
@@ -219,11 +263,6 @@ button.wheelItem {
     background-color var(--motion-duration-standard) ease,
     border-color var(--motion-duration-standard) ease,
     transform var(--motion-duration-standard) ease;
-}
-
-button.dockItem,
-button.verticalItem {
-  cursor: pointer;
 }
 
 .dockItem,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { quickLaunchClient, type QuickLaunchAppPayload, type QuickLaunchSnapshotPayload, type ToolMenuPreferences } from "./quickLaunchClient";
 
 export type QuickLaunchApp = {
@@ -31,6 +31,7 @@ type QuickLaunchActions = {
   addManually: () => Promise<void>;
   removePinnedApp: (path: string) => Promise<void>;
   reorderPinnedApp: (activePath: string, overPath: string) => Promise<void>;
+  swapPinnedApps: (activePath: string, overPath: string) => Promise<void>;
   setAppVisible: (path: string, visible: boolean) => Promise<void>;
   launchApp: (path: string) => Promise<void>;
   updateToolMenu: (preferences: ToolMenuPreferences) => Promise<void>;
@@ -61,67 +62,132 @@ export function useQuickLaunchViewModel(): QuickLaunchViewModel {
   const [snapshot, setSnapshot] = useState<{ pinnedApps: QuickLaunchApp[]; discoveredApps: QuickLaunchApp[]; toolMenu: ToolMenuPreferences }>({ pinnedApps: [], discoveredApps: [], toolMenu: { layout: "wheel", keepOpenOnKeyRelease: false } });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [icons, setIcons] = useState<Map<string, string>>(() => new Map());
-  const iconsRef = useRef(icons);
-  iconsRef.current = icons;
+  const iconsRef = useRef(new Map<string, string>());
+  const loadingIconsRef = useRef(new Set<string>());
+  const mountedRef = useRef(true);
 
-  const apply = async (next: Promise<QuickLaunchSnapshotPayload>) => {
+  const loadPinnedIcons = useCallback((next: QuickLaunchSnapshotPayload) => {
+    // A discovered list can contain hundreds of entries. The shared model
+    // eagerly loads only the few pinned icons; discovered rows lazy-load their
+    // own icon when they enter the viewport.
+    const apps = next.pinnedApps.filter((app) =>
+      app.iconAvailable
+      && !iconsRef.current.has(app.path)
+      && !loadingIconsRef.current.has(app.path)
+    );
+    apps.forEach((app) => loadingIconsRef.current.add(app.path));
+    if (!apps.length) return;
+    void Promise.all(apps.map(async (app) => {
+      try {
+        return [app.path, URL.createObjectURL(await quickLaunchClient.getIcon(app.path))] as const;
+      } catch {
+        return null;
+      }
+    })).then((loaded) => {
+      apps.forEach((app) => loadingIconsRef.current.delete(app.path));
+      const additions = loaded.filter((entry): entry is readonly [string, string] => entry !== null);
+      if (!mountedRef.current) {
+        additions.forEach(([, url]) => URL.revokeObjectURL(url));
+        return;
+      }
+      additions.forEach(([path, url]) => iconsRef.current.set(path, url));
+      if (additions.length) {
+        setSnapshot((current) => ({
+          ...current,
+          pinnedApps: current.pinnedApps.map((app) => ({ ...app, iconSrc: iconsRef.current.get(app.path) ?? null })),
+          discoveredApps: current.discoveredApps.map((app) => ({ ...app, iconSrc: iconsRef.current.get(app.path) ?? null }))
+        }));
+      }
+    });
+  }, []);
+
+  const commitSnapshot = useCallback((next: QuickLaunchSnapshotPayload) => {
+    setSnapshot(withIcons(next, iconsRef.current));
+    setError(null);
+    loadPinnedIcons(next);
+  }, [loadPinnedIcons]);
+
+  const run = useCallback(async (operation: () => Promise<QuickLaunchSnapshotPayload>) => {
     setLoading(true);
     try {
-      const result = await next;
-      setSnapshot(withIcons(result, icons));
-      setError(null);
-      // A discovered list can contain hundreds of entries. Loading all Shell
-      // icons at once blocks interaction and was the cause of the apparent
-      // page freeze; fixed apps are few and visible immediately.
-      const apps = result.pinnedApps.filter((app) => app.iconAvailable && !icons.has(app.path));
-      if (apps.length) {
-        void Promise.all(apps.map(async (app) => {
-          try { return [app.path, URL.createObjectURL(await quickLaunchClient.getIcon(app.path))] as const; } catch { return null; }
-        })).then((loaded) => {
-          const additions = loaded.filter((entry): entry is readonly [string, string] => entry !== null);
-          if (!additions.length) return;
-          setIcons((current) => {
-            const merged = new Map(current);
-            additions.forEach(([path, url]) => merged.set(path, url));
-            setSnapshot((currentSnapshot) => ({
-              pinnedApps: currentSnapshot.pinnedApps.map((app) => ({ ...app, iconSrc: merged.get(app.path) ?? null })),
-              discoveredApps: currentSnapshot.discoveredApps.map((app) => ({ ...app, iconSrc: merged.get(app.path) ?? null })),
-              toolMenu: currentSnapshot.toolMenu
-            }));
-            return merged;
-          });
-        });
-      }
+      commitSnapshot(await operation());
     } catch (cause) {
       setError(messageFor(cause));
     } finally {
       setLoading(false);
     }
-  };
+  }, [commitSnapshot]);
 
-  useEffect(() => { void apply(quickLaunchClient.getSnapshot()); }, []); // initial native snapshot
-  useEffect(() => () => { iconsRef.current.forEach((url) => URL.revokeObjectURL(url)); }, []);
+  const reload = useCallback(() => run(() => quickLaunchClient.getSnapshot()), [run]);
+  const refresh = useCallback(() => run(() => quickLaunchClient.rescan()), [run]);
+  const addPinnedApp = useCallback((app: Pick<QuickLaunchApp, "path" | "source">) =>
+    run(() => quickLaunchClient.pin(app.path, app.source)), [run]);
+  const addManually = useCallback(async () => {
+    const path = await quickLaunchClient.selectFile();
+    if (path) await run(() => quickLaunchClient.pin(path, "手动添加"));
+  }, [run]);
+  const removePinnedApp = useCallback((path: string) => run(() => quickLaunchClient.unpin(path)), [run]);
+  const reorderPinnedApp = useCallback((activePath: string, overPath: string) =>
+    run(() => quickLaunchClient.reorder(activePath, overPath)), [run]);
+  const swapPinnedApps = useCallback((activePath: string, overPath: string) =>
+    run(() => quickLaunchClient.swap(activePath, overPath)), [run]);
+  const setAppVisible = useCallback((path: string, visible: boolean) =>
+    run(() => quickLaunchClient.setVisible(path, visible)), [run]);
+  const updateToolMenu = useCallback((preferences: ToolMenuPreferences) =>
+    run(() => quickLaunchClient.updateToolMenu(preferences)), [run]);
+  const syncSnapshot = useCallback((next: QuickLaunchSnapshotPayload) => commitSnapshot(next), [commitSnapshot]);
+  const launchApp = useCallback(async (path: string) => {
+    try {
+      await quickLaunchClient.launch(path);
+      setError(null);
+    } catch (cause) {
+      setError(messageFor(cause));
+    }
+  }, []);
+
+  const actions = useMemo<QuickLaunchActions>(() => ({
+    syncSnapshot,
+    reload,
+    refresh,
+    addPinnedApp,
+    addManually,
+    removePinnedApp,
+    reorderPinnedApp,
+    swapPinnedApps,
+    setAppVisible,
+    launchApp,
+    updateToolMenu
+  }), [
+    addManually,
+    addPinnedApp,
+    launchApp,
+    refresh,
+    reload,
+    removePinnedApp,
+    reorderPinnedApp,
+    setAppVisible,
+    swapPinnedApps,
+    syncSnapshot,
+    updateToolMenu
+  ]);
+
+  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      iconsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      iconsRef.current.clear();
+    };
+  }, []);
 
   return useMemo(() => {
     const visiblePinnedApps = snapshot.pinnedApps.filter((app) => app.visible);
-    const run = (operation: Promise<QuickLaunchSnapshotPayload>) => apply(operation);
     return {
       sourceAvailable: true,
       loading, error, pinnedApps: snapshot.pinnedApps, discoveredApps: snapshot.discoveredApps, visiblePinnedApps,
       previewItems: toToolMenuPreviewItems(visiblePinnedApps), toolMenu: snapshot.toolMenu,
-      actions: {
-        syncSnapshot: (next) => { void apply(Promise.resolve(next)); },
-        reload: () => run(quickLaunchClient.getSnapshot()),
-        refresh: () => run(quickLaunchClient.rescan()),
-        addPinnedApp: (app) => run(quickLaunchClient.pin(app.path, app.source)),
-        addManually: async () => { const path = await quickLaunchClient.selectFile(); if (path) await run(quickLaunchClient.pin(path, "手动添加")); },
-        removePinnedApp: (path) => run(quickLaunchClient.unpin(path)),
-        reorderPinnedApp: (activePath, overPath) => run(quickLaunchClient.reorder(activePath, overPath)),
-        setAppVisible: (path, visible) => run(quickLaunchClient.setVisible(path, visible)),
-        updateToolMenu: (preferences) => run(quickLaunchClient.updateToolMenu(preferences)),
-        launchApp: async (path) => { try { await quickLaunchClient.launch(path); setError(null); } catch (cause) { setError(messageFor(cause)); } }
-      }
+      actions
     };
-  }, [error, icons, loading, snapshot]);
+  }, [actions, error, loading, snapshot]);
 }
