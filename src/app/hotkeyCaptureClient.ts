@@ -1,26 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { HOTKEY_MODIFIER_ORDER, isCanonicalHotkeyKey } from "./hotkeyKeyContract";
 
 const HOTKEY_CAPTURE_EVENT = "hotkey://capture-token";
 const SESSION_ID_PATTERN = /^hotkey-capture-[1-9]\d*$/;
-const MODIFIER_ORDER = ["Ctrl", "Alt", "Shift", "Win"] as const;
-const NAMED_KEYS = new Set([
-  "Backspace",
-  "Enter",
-  "Space",
-  "PageUp",
-  "PageDown",
-  "End",
-  "Home",
-  "ArrowLeft",
-  "ArrowUp",
-  "ArrowRight",
-  "ArrowDown",
-  "PrintScreen",
-  "Insert",
-  "Delete",
-  "Backquote"
-]);
 
 type InvokeFunction = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 type ListenFunction = (
@@ -59,24 +42,16 @@ function parseSessionId(value: unknown): string {
   return value;
 }
 
-function isNormalizedKey(value: string): boolean {
-  if (/^[A-Z0-9]$/.test(value) || NAMED_KEYS.has(value)) {
-    return true;
-  }
-  const functionKey = /^F([1-9]|1\d|2[0-4])$/.exec(value);
-  return functionKey !== null;
-}
-
 function isNormalizedToken(value: string): boolean {
   const parts = value.split("+");
   const key = parts.pop();
-  if (!key || !isNormalizedKey(key)) {
+  if (!key || !isCanonicalHotkeyKey(key)) {
     return false;
   }
   let previousModifierIndex = -1;
   for (const modifier of parts) {
-    const modifierIndex = MODIFIER_ORDER.indexOf(
-      modifier as (typeof MODIFIER_ORDER)[number]
+    const modifierIndex = HOTKEY_MODIFIER_ORDER.indexOf(
+      modifier as (typeof HOTKEY_MODIFIER_ORDER)[number]
     );
     if (modifierIndex <= previousModifierIndex) {
       return false;

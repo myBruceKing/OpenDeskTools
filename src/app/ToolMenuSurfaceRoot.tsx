@@ -36,17 +36,12 @@ export function ToolMenuSurfaceRoot() {
 
   useEffect(() => {
     let active = true;
-    const refresh = () => {
-      if (active) void quickLaunch.actions.reload();
+    const syncSnapshot = ({ payload }: { payload: QuickLaunchSnapshotPayload }) => {
+      if (active) quickLaunch.actions.syncSnapshot(payload);
     };
     const subscriptions = [
-      listen("tool-menu://shown", () => {
-        refresh();
-      }),
-      listen("quick-launch://changed", refresh),
-      listen<QuickLaunchSnapshotPayload>("tool-menu://snapshot", ({ payload }) => {
-        if (active) quickLaunch.actions.syncSnapshot(payload);
-      })
+      listen<QuickLaunchSnapshotPayload>("quick-launch://changed", syncSnapshot),
+      listen<QuickLaunchSnapshotPayload>("tool-menu://snapshot", syncSnapshot)
     ];
     return () => {
       active = false;

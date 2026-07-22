@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type FocusEvent, type KeyboardEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { canonicalHotkeyKeyFromInput } from "../../app/hotkeyKeyContract";
 import styles from "./primitives.module.css";
 
 type SearchFieldProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
@@ -48,15 +49,6 @@ const modifierLabels = {
   metaKey: "Win"
 } as const;
 
-const keyLabels: Record<string, string> = {
-  " ": "Space",
-  ArrowUp: "↑",
-  ArrowDown: "↓",
-  ArrowLeft: "←",
-  ArrowRight: "→",
-  Escape: "Esc"
-};
-
 const modifierKeyLabels: Record<string, string> = {
   Control: "Ctrl",
   Alt: "Alt",
@@ -65,12 +57,11 @@ const modifierKeyLabels: Record<string, string> = {
 };
 
 function normalizeShortcutKey(event: KeyboardEvent<HTMLElement>) {
-  // This is the physical key to the left of Digit1 (VK_OEM_3 on Windows).
-  // `event.key` changes between ` and ~ and may vary by keyboard layout;
-  // the global shortcut backend registers the physical Backquote code.
-  const key = event.code === "Backquote" ? "Backquote" : (keyLabels[event.key] ?? event.key);
-
   if (modifierKeyLabels[event.key]) {
+    return null;
+  }
+  const key = canonicalHotkeyKeyFromInput(event.code, event.key);
+  if (!key) {
     return null;
   }
 
@@ -78,7 +69,7 @@ function normalizeShortcutKey(event: KeyboardEvent<HTMLElement>) {
     .filter(([flag]) => event[flag as keyof typeof modifierLabels])
     .map(([, label]) => label);
 
-  parts.push(key.length === 1 ? key.toUpperCase() : key);
+  parts.push(key);
   return [...new Set(parts)].join("+");
 }
 
@@ -184,12 +175,18 @@ export const ShortcutCaptureField = forwardRef<ShortcutCaptureFieldHandle, Short
     event.preventDefault();
     event.stopPropagation();
 
-    if (event.key === "Backspace") {
+    const chordHasModifier = pendingModifiersRef.current.length > 0
+      || event.ctrlKey
+      || event.altKey
+      || event.shiftKey
+      || event.metaKey;
+
+    if (event.key === "Backspace" && !chordHasModifier) {
       onChange(tokens.slice(0, -1).join(" "));
       return;
     }
 
-    if (event.key === "Delete") {
+    if (event.key === "Delete" && !chordHasModifier) {
       onChange("");
       return;
     }
@@ -245,12 +242,11 @@ export const ShortcutCaptureField = forwardRef<ShortcutCaptureFieldHandle, Short
       return;
     }
 
-    const wasPending = pendingModifiersRef.current.includes(modifierLabel);
     setPending((current) => current.filter((label) => label !== modifierLabel));
 
-    if (wasPending && !modifierChordConsumedRef.current) {
-      appendToken(modifierLabel);
-    }
+    // A modifier without a main key cannot be registered as a global
+    // shortcut. Keep it as transient guidance instead of creating an
+    // unsaveable shortcut block.
 
     if (!event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
       modifierChordConsumedRef.current = false;

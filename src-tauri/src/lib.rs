@@ -467,13 +467,12 @@ fn handle_global_shortcut<R: Runtime>(
     let Some(runtime) = app.try_state::<ApplicationRuntime>() else {
         return;
     };
-    let binding = shortcut.to_string();
-    let Some((action_id, registration_revision)) = runtime
-        .hotkeys()
-        .registered_action_for_plugin_binding(&binding)
+    let Some((action_id, registration_revision)) =
+        runtime.hotkeys().registered_action_for_shortcut(shortcut)
     else {
         return;
     };
+    let binding = shortcut.to_string();
     let phase = match event.state {
         ShortcutState::Pressed => HotkeyActionPhase::Pressed,
         ShortcutState::Released => HotkeyActionPhase::Released,

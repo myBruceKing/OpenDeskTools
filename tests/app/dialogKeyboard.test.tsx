@@ -270,6 +270,31 @@ describe("dialog keyboard behavior", () => {
     expect(onAppendToken).toHaveBeenCalledWith("Shift+Backquote");
   });
 
+  it.each([
+    ["Alt plus top-row digit", "2", { code: "Digit2", altKey: true }, "Alt+2"],
+    ["shifted top-row digit", "@", { code: "Digit2", ctrlKey: true, shiftKey: true }, "Ctrl+Shift+2"],
+    ["punctuation", "_", { code: "Minus", ctrlKey: true, shiftKey: true }, "Ctrl+Shift+Minus"],
+    ["arrow", "ArrowUp", { code: "ArrowUp", ctrlKey: true }, "Ctrl+ArrowUp"],
+    ["numpad", "ArrowDown", { code: "Numpad2", ctrlKey: true }, "Ctrl+Numpad2"],
+    ["media", "AudioVolumeUp", { code: "AudioVolumeUp", ctrlKey: true }, "Ctrl+AudioVolumeUp"],
+    ["modified edit key", "Backspace", { code: "Backspace", ctrlKey: true }, "Ctrl+Backspace"]
+  ])("records %s by physical key identity", async (_label, key, init, expected) => {
+    const onAppendToken = vi.fn();
+    await render(
+      <ShortcutCaptureField
+        value=""
+        label="截图快捷键"
+        onChange={vi.fn()}
+        onAppendToken={onAppendToken}
+      />
+    );
+
+    const capture = document.querySelector<HTMLElement>("[role='group']")!;
+    dispatchKey(capture, key, init);
+
+    expect(onAppendToken).toHaveBeenCalledWith(expected);
+  });
+
   it("clears an interrupted Alt+F4 lifecycle on blur before the missing keyup events", async () => {
     const onAppendToken = vi.fn();
     await render(
@@ -295,8 +320,7 @@ describe("dialog keyboard behavior", () => {
     act(() => capture.dispatchEvent(createKeyboardEvent("keydown", "Alt", { altKey: true })));
     act(() => capture.dispatchEvent(createKeyboardEvent("keyup", "Alt")));
 
-    expect(onAppendToken).toHaveBeenCalledOnce();
-    expect(onAppendToken).toHaveBeenCalledWith("Alt");
+    expect(onAppendToken).not.toHaveBeenCalled();
   });
 
   it("removes ordinary pending modifier UI when the capture field blurs", async () => {

@@ -46,6 +46,18 @@ describe("hotkeyCaptureClient", () => {
         token: "Win+Backquote"
       })
     ).toEqual({ sessionId: "hotkey-capture-7", token: "Win+Backquote" });
+    for (const token of [
+      "Win+2",
+      "Ctrl+Win+Numpad2",
+      "Shift+Win+Minus",
+      "Win+AudioVolumeUp",
+      "Win+MediaPlayPause"
+    ]) {
+      expect(parseHotkeyCaptureTokenEvent({
+        sessionId: "hotkey-capture-7",
+        token
+      })).toEqual({ sessionId: "hotkey-capture-7", token });
+    }
 
     expect(() => parseHotkeyCaptureSession({ sessionId: "stale" })).toThrow();
     expect(() =>

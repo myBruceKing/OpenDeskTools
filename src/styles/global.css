@@ -86,7 +86,7 @@ html[data-window-surface="tool-menu"] #root {
   }
 
   to {
-    opacity: 0.08;
+    opacity: 0;
   }
 }
 

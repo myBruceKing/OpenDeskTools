@@ -185,6 +185,7 @@ impl CaptureKeyState {
     fn handle(
         &mut self,
         virtual_key: u32,
+        extended: bool,
         transition: KeyTransition,
         target_is_foreground: bool,
     ) -> (Option<String>, bool) {
@@ -215,7 +216,7 @@ impl CaptureKeyState {
                     return (None, false);
                 }
                 self.captured_keys.insert(virtual_key);
-                (normalized_token(&self.pressed, virtual_key), true)
+                (normalized_token(&self.pressed, virtual_key, extended), true)
             }
             KeyTransition::Up => {
                 self.pressed.remove(&virtual_key);
@@ -501,8 +502,12 @@ fn dispatch_event(inner: &BrokerInner, event: BrokerEvent) {
     }
 }
 
-fn normalized_token(pressed: &HashSet<u32>, virtual_key: u32) -> Option<String> {
-    let key = key_name(virtual_key)?;
+fn normalized_token(
+    pressed: &HashSet<u32>,
+    virtual_key: u32,
+    extended: bool,
+) -> Option<String> {
+    let key = key_name(virtual_key, extended)?;
     let mut parts = Vec::with_capacity(5);
     if pressed.iter().any(|key| is_control(*key)) {
         parts.push("Ctrl");
@@ -520,16 +525,40 @@ fn normalized_token(pressed: &HashSet<u32>, virtual_key: u32) -> Option<String> 
     Some(parts.join("+"))
 }
 
-fn key_name(virtual_key: u32) -> Option<String> {
+fn key_name(virtual_key: u32, extended: bool) -> Option<String> {
     if (0x30..=0x39).contains(&virtual_key) || (0x41..=0x5a).contains(&virtual_key) {
         return char::from_u32(virtual_key).map(|key| key.to_string());
     }
     if (0x70..=0x87).contains(&virtual_key) {
         return Some(format!("F{}", virtual_key - 0x70 + 1));
     }
+    if !extended {
+        let numpad_navigation = match virtual_key {
+            0x2d => Some("Numpad0"),
+            0x23 => Some("Numpad1"),
+            0x28 => Some("Numpad2"),
+            0x22 => Some("Numpad3"),
+            0x25 => Some("Numpad4"),
+            0x0c => Some("Numpad5"),
+            0x27 => Some("Numpad6"),
+            0x24 => Some("Numpad7"),
+            0x26 => Some("Numpad8"),
+            0x21 => Some("Numpad9"),
+            0x2e => Some("NumpadDecimal"),
+            _ => None,
+        };
+        if let Some(key) = numpad_navigation {
+            return Some(key.to_owned());
+        }
+    }
+    if (0x60..=0x69).contains(&virtual_key) {
+        return Some(format!("Numpad{}", virtual_key - 0x60));
+    }
     let key = match virtual_key {
         0x08 => "Backspace",
         0x0d => "Enter",
+        0x13 => "Pause",
+        0x14 => "CapsLock",
         0x20 => "Space",
         0x21 => "PageUp",
         0x22 => "PageDown",
@@ -542,7 +571,32 @@ fn key_name(virtual_key: u32) -> Option<String> {
         0x2c => "PrintScreen",
         0x2d => "Insert",
         0x2e => "Delete",
+        0x6a => "NumpadMultiply",
+        0x6b => "NumpadAdd",
+        0x6d => "NumpadSubtract",
+        0x6e => "NumpadDecimal",
+        0x6f => "NumpadDivide",
+        0x90 => "NumLock",
+        0x91 => "ScrollLock",
+        0xad => "AudioVolumeMute",
+        0xae => "AudioVolumeDown",
+        0xaf => "AudioVolumeUp",
+        0xb0 => "MediaTrackNext",
+        0xb1 => "MediaTrackPrevious",
+        0xb2 => "MediaStop",
+        0xb3 => "MediaPlayPause",
+        0xba => "Semicolon",
+        0xbb => "Equal",
+        0xbc => "Comma",
+        0xbd => "Minus",
+        0xbe => "Period",
+        0xbf => "Slash",
         0xc0 => "Backquote",
+        0xdb => "BracketLeft",
+        0xdc => "Backslash",
+        0xdd => "BracketRight",
+        0xde => "Quote",
+        0xfa => "MediaPlay",
         _ => return None,
     };
     Some(key.to_owned())
@@ -654,7 +708,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
     use std::ptr;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, KBDLLHOOKSTRUCT,
-        LLKHF_INJECTED, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        LLKHF_EXTENDED, LLKHF_INJECTED, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
     if code < 0 {
         return unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) };
@@ -691,6 +745,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
     if let Some(capture) = state.capture.clone() {
         let (token, suppress) = state.capture_keys.handle(
             keyboard.vkCode,
+            keyboard.flags & LLKHF_EXTENDED != 0,
             transition,
             foreground_window == Some(capture.target_window),
         );
@@ -848,5 +903,87 @@ mod tests {
         assert!(broker.inner.state.lock().unwrap().capture.is_some());
         assert!(broker.unregister_win_v(3).unwrap());
         assert!(broker.stop_capture(4).unwrap());
+    }
+
+    #[test]
+    fn native_capture_names_cover_the_safe_windows_key_contract() {
+        for virtual_key in 0x30..=0x39 {
+            assert_eq!(
+                key_name(virtual_key, false),
+                char::from_u32(virtual_key).map(|key| key.to_string())
+            );
+        }
+        for virtual_key in 0x41..=0x5a {
+            assert_eq!(
+                key_name(virtual_key, false),
+                char::from_u32(virtual_key).map(|key| key.to_string())
+            );
+        }
+        for index in 0..24 {
+            let expected = format!("F{}", index + 1);
+            assert_eq!(key_name(0x70 + index, false), Some(expected));
+        }
+        for (virtual_key, extended, expected) in [
+            (0x08, false, "Backspace"),
+            (0x0d, false, "Enter"),
+            (0x0d, true, "Enter"),
+            (0x13, false, "Pause"),
+            (0x14, false, "CapsLock"),
+            (0x20, false, "Space"),
+            (0x21, true, "PageUp"),
+            (0x22, true, "PageDown"),
+            (0x23, true, "End"),
+            (0x24, true, "Home"),
+            (0x25, true, "ArrowLeft"),
+            (0x26, true, "ArrowUp"),
+            (0x27, true, "ArrowRight"),
+            (0x28, true, "ArrowDown"),
+            (0x2c, true, "PrintScreen"),
+            (0x2d, true, "Insert"),
+            (0x2e, true, "Delete"),
+            (0x2d, false, "Numpad0"),
+            (0x23, false, "Numpad1"),
+            (0x28, false, "Numpad2"),
+            (0x22, false, "Numpad3"),
+            (0x25, false, "Numpad4"),
+            (0x0c, false, "Numpad5"),
+            (0x27, false, "Numpad6"),
+            (0x24, false, "Numpad7"),
+            (0x26, false, "Numpad8"),
+            (0x21, false, "Numpad9"),
+            (0x2e, false, "NumpadDecimal"),
+            (0x6a, false, "NumpadMultiply"),
+            (0x6b, false, "NumpadAdd"),
+            (0x6d, false, "NumpadSubtract"),
+            (0x6e, false, "NumpadDecimal"),
+            (0x6f, true, "NumpadDivide"),
+            (0x90, true, "NumLock"),
+            (0x91, false, "ScrollLock"),
+            (0xad, true, "AudioVolumeMute"),
+            (0xae, true, "AudioVolumeDown"),
+            (0xaf, true, "AudioVolumeUp"),
+            (0xb0, true, "MediaTrackNext"),
+            (0xb1, true, "MediaTrackPrevious"),
+            (0xb2, true, "MediaStop"),
+            (0xb3, true, "MediaPlayPause"),
+            (0xba, false, "Semicolon"),
+            (0xbb, false, "Equal"),
+            (0xbc, false, "Comma"),
+            (0xbd, false, "Minus"),
+            (0xbe, false, "Period"),
+            (0xbf, false, "Slash"),
+            (0xc0, false, "Backquote"),
+            (0xdb, false, "BracketLeft"),
+            (0xdc, false, "Backslash"),
+            (0xdd, false, "BracketRight"),
+            (0xde, false, "Quote"),
+            (0xfa, true, "MediaPlay"),
+        ] {
+            assert_eq!(
+                key_name(virtual_key, extended).as_deref(),
+                Some(expected),
+                "virtual key {virtual_key:#x}"
+            );
+        }
     }
 }

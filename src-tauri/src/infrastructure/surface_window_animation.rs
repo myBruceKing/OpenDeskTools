@@ -7,7 +7,7 @@ use std::{
 use tauri::{Manager, Runtime, WebviewWindow};
 
 pub const SURFACE_EXIT_FADE_DURATION_MS: u64 = 140;
-const SURFACE_EXIT_HIDE_DELAY_MS: u64 = 112;
+const SURFACE_EXIT_HIDE_DELAY_MS: u64 = SURFACE_EXIT_FADE_DURATION_MS;
 
 #[derive(Clone, Copy)]
 enum FinalHideMode {
@@ -176,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn native_hide_cuts_off_the_transparent_tail_before_host_layers_can_show() {
-        assert!(SURFACE_EXIT_HIDE_DELAY_MS < SURFACE_EXIT_FADE_DURATION_MS);
+    fn native_hide_matches_the_complete_css_fade_duration() {
+        assert_eq!(SURFACE_EXIT_HIDE_DELAY_MS, SURFACE_EXIT_FADE_DURATION_MS);
     }
 }

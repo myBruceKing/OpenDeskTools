@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
-use tauri_plugin_global_shortcut::{Error as GlobalShortcutError, GlobalShortcutExt};
+use tauri_plugin_global_shortcut::{Error as GlobalShortcutError, GlobalShortcutExt, Shortcut};
 use thiserror::Error;
 
 use super::keyboard_hook::{KeyboardHookBroker, RuntimeHotkeyEvent};
@@ -157,43 +157,38 @@ impl HotkeyChord {
 
 fn normalize_key(value: &str) -> Result<String, HotkeyValidationError> {
     let upper = value.to_ascii_uppercase();
-    if let Some(number) = upper.strip_prefix('F') {
-        if number
-            .parse::<u8>()
-            .is_ok_and(|function_key| (1..=24).contains(&function_key))
-        {
-            return Ok(upper);
-        }
-    }
-    if upper.len() == 1 && upper.chars().all(|key| key.is_ascii_alphanumeric()) {
-        return Ok(upper);
-    }
-    if let Some(letter) = upper.strip_prefix("KEY") {
-        if letter.len() == 1 && letter.chars().all(|key| key.is_ascii_alphabetic()) {
-            return Ok(letter.to_owned());
-        }
-    }
-    let normalized = match upper.as_str() {
-        "SPACE" | "SPACEBAR" => "Space",
-        "DELETE" | "DEL" => "Delete",
-        "ESCAPE" | "ESC" => "Escape",
-        "ENTER" | "RETURN" => "Enter",
-        "TAB" => "Tab",
-        "BACKSPACE" => "Backspace",
-        "INSERT" => "Insert",
-        "HOME" => "Home",
-        "END" => "End",
-        "PAGEUP" => "PageUp",
-        "PAGEDOWN" => "PageDown",
-        "ARROWUP" | "UP" => "ArrowUp",
-        "ARROWDOWN" | "DOWN" => "ArrowDown",
-        "ARROWLEFT" | "LEFT" => "ArrowLeft",
-        "ARROWRIGHT" | "RIGHT" => "ArrowRight",
-        "PRINTSCREEN" => "PrintScreen",
-        "BACKQUOTE" | "BACKTICK" | "GRAVE" | "OEM_3" | "`" | "~" => "Backquote",
-        _ => return Err(HotkeyValidationError::UnsupportedKey(value.to_owned())),
+    let plugin_key = match upper.as_str() {
+        "SPACEBAR" => "Space",
+        "DEL" => "Delete",
+        "RETURN" => "Enter",
+        "BACKTICK" | "GRAVE" | "OEM_3" | "~" => "Backquote",
+        "↑" => "ArrowUp",
+        "↓" => "ArrowDown",
+        "←" => "ArrowLeft",
+        "→" => "ArrowRight",
+        _ => value,
     };
-    Ok(normalized.to_owned())
+    let shortcut = plugin_key
+        .parse::<Shortcut>()
+        .map_err(|_| HotkeyValidationError::UnsupportedKey(value.to_owned()))?;
+    let plugin_name = shortcut.key.to_string();
+    match plugin_name.as_str() {
+        "NumpadEnter" => return Ok("Enter".to_owned()),
+        "MediaPause" => return Ok("Pause".to_owned()),
+        // global-hotkey 0.8 maps this code to VK_E on Windows. Reject it
+        // instead of silently turning a keypad binding into the letter E.
+        "NumpadEqual" => {
+            return Err(HotkeyValidationError::UnsupportedKey(value.to_owned()));
+        }
+        _ => {}
+    }
+    if let Some(letter) = plugin_name.strip_prefix("Key") {
+        return Ok(letter.to_owned());
+    }
+    if let Some(digit) = plugin_name.strip_prefix("Digit") {
+        return Ok(digit.to_owned());
+    }
+    Ok(plugin_name)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -748,12 +743,11 @@ impl HotkeyManager {
         Ok(snapshot_from_state(&state))
     }
 
-    pub fn registered_action_for_plugin_binding(
+    pub fn registered_action_for_shortcut(
         &self,
-        binding: &str,
+        shortcut: &Shortcut,
     ) -> Option<(HotkeyActionId, u64)> {
-        let binding = HotkeyBinding::parse(binding).ok()?;
-        let normalized = binding.normalized();
+        let shortcut_id = shortcut.id();
         let state = self.state.lock().ok()?;
         state
             .registrations
@@ -764,9 +758,11 @@ impl HotkeyManager {
                 };
                 entry.runtime_state == HotkeyRuntimeState::Registered
                     && token.backend == RegistrationBackend::Standard
-                    && HotkeyBinding::parse(&token.binding)
+                    && token
+                        .binding
+                        .parse::<Shortcut>()
                         .ok()
-                        .is_some_and(|token_binding| token_binding.normalized() == normalized)
+                        .is_some_and(|registered| registered.id() == shortcut_id)
             })
             .map(|entry| (entry.preference.action_id, state.revision))
     }
@@ -1171,7 +1167,7 @@ mod tests {
         ) -> Result<RegistrationToken, RegistrarFailure> {
             self.registrations.fetch_add(1, Ordering::SeqCst);
             Ok(RegistrationToken {
-                binding: binding.normalized(),
+                binding: binding.plugin_binding(),
                 backend: RegistrationBackend::Standard,
             })
         }
@@ -1201,7 +1197,10 @@ mod tests {
                 RegistrationBackend::Standard
             };
             Ok(RegistrationToken {
-                binding: binding.normalized(),
+                binding: match &backend {
+                    RegistrationBackend::Standard => binding.plugin_binding(),
+                    RegistrationBackend::ForcedWinV { .. } => binding.normalized(),
+                },
                 backend,
             })
         }
@@ -1210,6 +1209,10 @@ mod tests {
             self.unregistrations.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+    }
+
+    fn shortcut(value: &str) -> Shortcut {
+        value.parse().expect("test shortcut must be supported")
     }
 
     #[test]
@@ -1423,6 +1426,89 @@ mod tests {
             HotkeyBinding::parse("Shift+OEM_3").unwrap().normalized(),
             "Shift+Backquote"
         );
+        assert_eq!(
+            HotkeyBinding::parse("Ctrl+NumpadEnter")
+                .unwrap()
+                .normalized(),
+            "Ctrl+Enter"
+        );
+        assert_eq!(
+            HotkeyBinding::parse("Ctrl+MediaPause")
+                .unwrap()
+                .normalized(),
+            "Ctrl+Pause"
+        );
+        assert!(matches!(
+            HotkeyBinding::parse("Ctrl+NumpadEqual"),
+            Err(HotkeyValidationError::UnsupportedKey(_))
+        ));
+    }
+
+    #[test]
+    fn every_plugin_key_round_trips_from_storage_to_shortcut_id_routing() {
+        let mut cases = Vec::<(String, String)>::new();
+        for letter in b'A'..=b'Z' {
+            let letter = (letter as char).to_string();
+            cases.push((letter.clone(), format!("Key{letter}")));
+        }
+        for digit in 0..=9 {
+            cases.push((digit.to_string(), format!("Digit{digit}")));
+        }
+        for function in 1..=24 {
+            let key = format!("F{function}");
+            cases.push((key.clone(), key));
+        }
+        cases.extend(
+            [
+                "Backquote", "Backslash", "BracketLeft", "BracketRight", "Pause", "Comma",
+                "Equal", "Minus", "Period", "Quote", "Semicolon", "Slash", "Backspace",
+                "CapsLock", "Enter", "Space", "Tab", "Delete", "End", "Home", "Insert",
+                "PageDown", "PageUp", "PrintScreen", "ScrollLock", "ArrowDown", "ArrowLeft",
+                "ArrowRight", "ArrowUp", "NumLock", "Numpad0", "Numpad1", "Numpad2",
+                "Numpad3", "Numpad4", "Numpad5", "Numpad6", "Numpad7", "Numpad8",
+                "Numpad9", "NumpadAdd", "NumpadDecimal", "NumpadDivide",
+                "NumpadMultiply", "NumpadSubtract", "Escape",
+                "AudioVolumeDown", "AudioVolumeUp", "AudioVolumeMute", "MediaPlay",
+                "MediaPlayPause", "MediaStop", "MediaTrackNext",
+                "MediaTrackPrevious",
+            ]
+            .into_iter()
+            .map(|key| (key.to_owned(), key.to_owned())),
+        );
+        assert_eq!(cases.len(), 114);
+
+        let temp = tempdir().unwrap();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        let manager = HotkeyManager::initialize(storage).unwrap();
+        let registrar = FakeRegistrar::default();
+        let mut revision = 0;
+
+        for (stored_key, callback_key) in cases {
+            let callback_binding = format!("Shift+{callback_key}");
+            assert_eq!(
+                HotkeyBinding::parse(&callback_binding).unwrap().normalized(),
+                format!("Shift+{stored_key}"),
+                "parser mismatch for {callback_key}"
+            );
+            let force_override_system = stored_key == "PrintScreen";
+            let snapshot = manager
+                .update_binding(
+                    UpdateHotkeyBinding {
+                        action_id: HotkeyActionId::LauncherOpen,
+                        expected_revision: revision,
+                        binding: format!("Shift+{stored_key}"),
+                        force_override_system,
+                    },
+                    &registrar,
+                )
+                .unwrap();
+            revision = snapshot.revision;
+            assert_eq!(
+                manager.registered_action_for_shortcut(&shortcut(&callback_binding)),
+                Some((HotkeyActionId::LauncherOpen, revision)),
+                "route mismatch for {callback_key}"
+            );
+        }
     }
 
     #[test]
@@ -1454,7 +1540,7 @@ mod tests {
         );
         assert_eq!(registrar.registrations.load(Ordering::SeqCst), 1);
         assert_eq!(
-            manager.registered_action_for_plugin_binding("Ctrl+Shift+Space"),
+            manager.registered_action_for_shortcut(&shortcut("Ctrl+Shift+Space")),
             Some((HotkeyActionId::LauncherOpen, 0))
         );
         assert!(storage.read_setting(HOTKEY_SNAPSHOT_KEY).unwrap().is_some());
@@ -1600,9 +1686,8 @@ mod tests {
             manager.snapshot().unwrap().actions[4].runtime_state,
             HotkeyRuntimeState::Registered
         );
-        assert_eq!(manager.registered_action_for_plugin_binding("Win+V"), None);
         assert_eq!(
-            manager.registered_action_for_plugin_binding("Super+V"),
+            manager.registered_action_for_shortcut(&shortcut("Super+V")),
             None
         );
         assert!(manager
@@ -1686,7 +1771,7 @@ mod tests {
             HotkeyRuntimeState::Registered
         );
         assert_eq!(
-            manager.registered_action_for_plugin_binding("Ctrl+Alt+V"),
+            manager.registered_action_for_shortcut(&shortcut("Ctrl+Alt+V")),
             Some((HotkeyActionId::ClipboardOpenPanel, 1))
         );
     }

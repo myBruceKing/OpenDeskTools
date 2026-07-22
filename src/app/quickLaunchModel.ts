@@ -64,6 +64,7 @@ export function useQuickLaunchViewModel(): QuickLaunchViewModel {
   const [error, setError] = useState<string | null>(null);
   const iconsRef = useRef(new Map<string, string>());
   const loadingIconsRef = useRef(new Set<string>());
+  const requestGenerationRef = useRef(0);
   const mountedRef = useRef(true);
 
   const loadPinnedIcons = useCallback((next: QuickLaunchSnapshotPayload) => {
@@ -108,13 +109,17 @@ export function useQuickLaunchViewModel(): QuickLaunchViewModel {
   }, [loadPinnedIcons]);
 
   const run = useCallback(async (operation: () => Promise<QuickLaunchSnapshotPayload>) => {
+    const generation = ++requestGenerationRef.current;
     setLoading(true);
     try {
-      commitSnapshot(await operation());
+      const next = await operation();
+      if (generation !== requestGenerationRef.current) return;
+      commitSnapshot(next);
     } catch (cause) {
+      if (generation !== requestGenerationRef.current) return;
       setError(messageFor(cause));
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) setLoading(false);
     }
   }, [commitSnapshot]);
 
@@ -135,7 +140,14 @@ export function useQuickLaunchViewModel(): QuickLaunchViewModel {
     run(() => quickLaunchClient.setVisible(path, visible)), [run]);
   const updateToolMenu = useCallback((preferences: ToolMenuPreferences) =>
     run(() => quickLaunchClient.updateToolMenu(preferences)), [run]);
-  const syncSnapshot = useCallback((next: QuickLaunchSnapshotPayload) => commitSnapshot(next), [commitSnapshot]);
+  const syncSnapshot = useCallback((next: QuickLaunchSnapshotPayload) => {
+    // Native mutation events already contain the persisted snapshot. Invalidate
+    // any older reload so a late response cannot restore a deleted item or
+    // remove one that was just added.
+    requestGenerationRef.current += 1;
+    commitSnapshot(next);
+    setLoading(false);
+  }, [commitSnapshot]);
   const launchApp = useCallback(async (path: string) => {
     try {
       await quickLaunchClient.launch(path);
