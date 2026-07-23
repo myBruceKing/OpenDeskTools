@@ -8,6 +8,10 @@ use thiserror::Error;
 
 use super::{
     debug_qa,
+    popup_geometry::{
+        fit_centered_surface_to_work_area as fit_surface_to_work_area, point_in_rect,
+        squared_distance_to_rect,
+    },
     quick_launch::{QuickLaunchSnapshot, ToolMenuLayout},
     surface_window_animation,
 };
@@ -513,60 +517,6 @@ fn placement_for_pointer<R: Runtime>(
     .ok_or(ToolMenuSurfaceError::InvalidDimensions)
 }
 
-fn point_in_rect(point: (i32, i32), origin: (i32, i32), size: (u32, u32)) -> bool {
-    let right = i64::from(origin.0) + i64::from(size.0);
-    let bottom = i64::from(origin.1) + i64::from(size.1);
-    i64::from(point.0) >= i64::from(origin.0)
-        && i64::from(point.0) < right
-        && i64::from(point.1) >= i64::from(origin.1)
-        && i64::from(point.1) < bottom
-}
-
-fn squared_distance_to_rect(point: (i32, i32), origin: (i32, i32), size: (u32, u32)) -> i128 {
-    let right = i64::from(origin.0) + i64::from(size.0);
-    let bottom = i64::from(origin.1) + i64::from(size.1);
-    let x = if i64::from(point.0) < i64::from(origin.0) {
-        i64::from(origin.0) - i64::from(point.0)
-    } else if i64::from(point.0) >= right {
-        i64::from(point.0) - right.saturating_sub(1)
-    } else {
-        0
-    };
-    let y = if i64::from(point.1) < i64::from(origin.1) {
-        i64::from(origin.1) - i64::from(point.1)
-    } else if i64::from(point.1) >= bottom {
-        i64::from(point.1) - bottom.saturating_sub(1)
-    } else {
-        0
-    };
-    i128::from(x) * i128::from(x) + i128::from(y) * i128::from(y)
-}
-
-fn fit_surface_to_work_area(
-    center: (i32, i32),
-    surface_size: (u32, u32),
-    work_origin: (i32, i32),
-    work_size: (u32, u32),
-) -> Option<(i32, i32)> {
-    if surface_size.0 == 0
-        || surface_size.1 == 0
-        || surface_size.0 > work_size.0
-        || surface_size.1 > work_size.1
-    {
-        return None;
-    }
-    let work_left = i64::from(work_origin.0);
-    let work_top = i64::from(work_origin.1);
-    let maximum_x = work_left + i64::from(work_size.0 - surface_size.0);
-    let maximum_y = work_top + i64::from(work_size.1 - surface_size.1);
-    let requested_x = i64::from(center.0) - i64::from(surface_size.0 / 2);
-    let requested_y = i64::from(center.1) - i64::from(surface_size.1 / 2);
-    Some((
-        i32::try_from(requested_x.clamp(work_left, maximum_x)).ok()?,
-        i32::try_from(requested_y.clamp(work_top, maximum_y)).ok()?,
-    ))
-}
-
 #[cfg(windows)]
 fn apply_circular_region<R: Runtime>(
     window: &WebviewWindow<R>,
@@ -727,29 +677,5 @@ mod tests {
         assert!(windows
             .iter()
             .any(|label| label.as_str() == Some(TOOL_MENU_SURFACE_LABEL)));
-    }
-
-    #[test]
-    fn pointer_centered_surface_is_clamped_inside_positive_work_area() {
-        assert_eq!(
-            fit_surface_to_work_area((1910, 1070), (320, 320), (0, 0), (1920, 1040)),
-            Some((1600, 720))
-        );
-    }
-
-    #[test]
-    fn pointer_centered_surface_respects_negative_monitor_coordinates() {
-        assert_eq!(
-            fit_surface_to_work_area((-1915, -5), (388, 140), (-1920, -40), (1920, 1080)),
-            Some((-1920, -40))
-        );
-    }
-
-    #[test]
-    fn surface_larger_than_work_area_is_rejected() {
-        assert_eq!(
-            fit_surface_to_work_area((0, 0), (700, 700), (0, 0), (640, 480)),
-            None
-        );
     }
 }

@@ -2,10 +2,12 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 use tauri::{
-    window::Color, AppHandle, Emitter, Manager, Monitor, Runtime, WebviewUrl, WebviewWindow,
+    window::Color, AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 use thiserror::Error;
+
+mod geometry;
 
 use super::application::ApplicationRuntime;
 use super::clipboard_surface_foreground::{self, ForegroundMonitorError};
@@ -13,6 +15,13 @@ use super::clipboard_surface_pointer::{self, PointerMonitorError};
 use super::debug_qa;
 use super::surface::{SurfaceError, SurfaceManager};
 use super::surface_window_animation;
+use geometry::{
+    convert_caret_client_to_physical_screen, monitor_geometry, preview_surface_placement,
+    rect_from_origin_size, resolve_surface_anchor, select_anchor_monitor, surface_placement,
+    PixelPoint, SurfacePlacement,
+};
+#[cfg(test)]
+use geometry::{MonitorGeometry, PixelRect, PixelSize, SurfaceAnchorSource};
 
 pub const CLIPBOARD_SURFACE_LABEL: &str = "clipboard-surface";
 pub const CLIPBOARD_PREVIEW_SURFACE_LABEL: &str = "clipboard-preview-surface";
@@ -164,54 +173,6 @@ static CLIPBOARD_PREVIEW_SELECTION: OnceLock<Mutex<ClipboardPreviewSelection>> =
 
 fn preview_selection() -> &'static Mutex<ClipboardPreviewSelection> {
     CLIPBOARD_PREVIEW_SELECTION.get_or_init(|| Mutex::new(ClipboardPreviewSelection::default()))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PixelPoint {
-    x: i32,
-    y: i32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PixelSize {
-    width: u32,
-    height: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PixelRect {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct MonitorGeometry {
-    bounds: PixelRect,
-    work_area: PixelRect,
-    scale_factor: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SurfacePlacement {
-    position: PixelPoint,
-    size: PixelSize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SurfaceAnchorSource {
-    Caret,
-    Cursor,
-}
-
-impl SurfaceAnchorSource {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Caret => "caret",
-            Self::Cursor => "cursor",
-        }
-    }
 }
 
 trait NativeVisibilityApi {
@@ -997,237 +958,6 @@ fn hide_native_verified<R: Runtime>(
     } else {
         Ok(())
     }
-}
-
-fn monitor_geometry(monitor: &Monitor) -> Option<MonitorGeometry> {
-    let bounds = rect_from_origin_size(
-        monitor.position().x,
-        monitor.position().y,
-        monitor.size().width,
-        monitor.size().height,
-    )?;
-    let work = monitor.work_area();
-    let work_area = rect_from_origin_size(
-        work.position.x,
-        work.position.y,
-        work.size.width,
-        work.size.height,
-    )?;
-    PixelRect::is_valid(bounds)
-        .then_some(())
-        .and_then(|_| PixelRect::is_valid(work_area).then_some(()))?;
-    let scale_factor = monitor.scale_factor();
-    (scale_factor.is_finite() && scale_factor > 0.0).then_some(MonitorGeometry {
-        bounds,
-        work_area,
-        scale_factor,
-    })
-}
-
-fn rect_from_origin_size(x: i32, y: i32, width: u32, height: u32) -> Option<PixelRect> {
-    let right = i64::from(x).checked_add(i64::from(width))?;
-    let bottom = i64::from(y).checked_add(i64::from(height))?;
-    Some(PixelRect {
-        left: x,
-        top: y,
-        right: i32::try_from(right).ok()?,
-        bottom: i32::try_from(bottom).ok()?,
-    })
-}
-
-impl PixelRect {
-    fn is_valid(self) -> bool {
-        self.right > self.left && self.bottom > self.top
-    }
-
-    fn contains(self, point: PixelPoint) -> bool {
-        point.x >= self.left && point.x < self.right && point.y >= self.top && point.y < self.bottom
-    }
-
-    fn width(self) -> u32 {
-        u32::try_from(i64::from(self.right) - i64::from(self.left)).unwrap_or(0)
-    }
-
-    fn height(self) -> u32 {
-        u32::try_from(i64::from(self.bottom) - i64::from(self.top)).unwrap_or(0)
-    }
-}
-
-fn select_anchor_monitor(
-    anchor: PixelPoint,
-    monitors: &[MonitorGeometry],
-) -> Option<MonitorGeometry> {
-    monitors
-        .iter()
-        .copied()
-        .find(|monitor| monitor.bounds.contains(anchor))
-        .or_else(|| {
-            monitors
-                .iter()
-                .copied()
-                .min_by_key(|monitor| squared_distance_to_rect(anchor, monitor.bounds))
-        })
-}
-
-fn squared_distance_to_rect(point: PixelPoint, rect: PixelRect) -> i128 {
-    let x = axis_distance(point.x, rect.left, rect.right);
-    let y = axis_distance(point.y, rect.top, rect.bottom);
-    i128::from(x) * i128::from(x) + i128::from(y) * i128::from(y)
-}
-
-fn axis_distance(point: i32, start: i32, end: i32) -> i64 {
-    if point < start {
-        i64::from(start) - i64::from(point)
-    } else if point >= end {
-        i64::from(point) - i64::from(end.saturating_sub(1))
-    } else {
-        0
-    }
-}
-
-fn resolve_surface_anchor<E>(
-    valid_caret: Option<PixelPoint>,
-    cursor_fallback: impl FnOnce() -> Result<PixelPoint, E>,
-) -> Result<(PixelPoint, SurfaceAnchorSource), E> {
-    if let Some(caret) = valid_caret {
-        Ok((caret, SurfaceAnchorSource::Caret))
-    } else {
-        cursor_fallback().map(|cursor| (cursor, SurfaceAnchorSource::Cursor))
-    }
-}
-
-fn convert_caret_client_to_physical_screen<T: Copy, M, E>(
-    client_point: T,
-    client_to_screen: impl FnOnce(T) -> Result<T, E>,
-    logical_to_physical: impl FnOnce(T) -> Result<(T, M), E>,
-) -> Result<(T, T, M), E> {
-    let logical_screen = client_to_screen(client_point)?;
-    let (physical_screen, mode) = logical_to_physical(logical_screen)?;
-    Ok((logical_screen, physical_screen, mode))
-}
-
-fn surface_placement(cursor: PixelPoint, monitor: MonitorGeometry) -> Option<SurfacePlacement> {
-    if !monitor.bounds.is_valid()
-        || !monitor.work_area.is_valid()
-        || !monitor.scale_factor.is_finite()
-        || monitor.scale_factor <= 0.0
-    {
-        return None;
-    }
-    let requested_width = scaled_dimension(CLIPBOARD_SURFACE_WIDTH, monitor.scale_factor)?;
-    let requested_height = scaled_dimension(CLIPBOARD_SURFACE_HEIGHT, monitor.scale_factor)?;
-    let size = PixelSize {
-        width: requested_width.min(monitor.work_area.width()),
-        height: requested_height.min(monitor.work_area.height()),
-    };
-    if size.width == 0 || size.height == 0 {
-        return None;
-    }
-    let gap = scaled_dimension(CLIPBOARD_SURFACE_CURSOR_GAP, monitor.scale_factor)?;
-    let gap = i32::try_from(gap).ok()?;
-    Some(SurfacePlacement {
-        position: PixelPoint {
-            x: place_axis(
-                cursor.x,
-                monitor.work_area.left,
-                monitor.work_area.right,
-                size.width,
-                gap,
-            )?,
-            y: place_axis(
-                cursor.y,
-                monitor.work_area.top,
-                monitor.work_area.bottom,
-                size.height,
-                gap,
-            )?,
-        },
-        size,
-    })
-}
-
-fn preview_surface_placement(
-    anchor: PixelRect,
-    monitor: MonitorGeometry,
-) -> Option<SurfacePlacement> {
-    if !anchor.is_valid()
-        || !monitor.bounds.is_valid()
-        || !monitor.work_area.is_valid()
-        || !monitor.scale_factor.is_finite()
-        || monitor.scale_factor <= 0.0
-    {
-        return None;
-    }
-    let requested_width = scaled_dimension(CLIPBOARD_PREVIEW_SURFACE_WIDTH, monitor.scale_factor)?;
-    let requested_height =
-        scaled_dimension(CLIPBOARD_PREVIEW_SURFACE_HEIGHT, monitor.scale_factor)?;
-    // Preview and main are one visual surface group. Their outer rectangles
-    // touch; the independent cursor/caret gap only applies to the main popup.
-    let right_start = anchor.right;
-    let left_end = anchor.left;
-    let right_space = axis_space(right_start, monitor.work_area.right);
-    let left_space = axis_space(monitor.work_area.left, left_end);
-    let (on_right, available_width) = if right_space >= requested_width {
-        (true, right_space)
-    } else if left_space >= requested_width {
-        (false, left_space)
-    } else if right_space >= left_space {
-        (true, right_space)
-    } else {
-        (false, left_space)
-    };
-    let width = requested_width.min(available_width);
-    let height = requested_height.min(monitor.work_area.height());
-    if width == 0 || height == 0 {
-        return None;
-    }
-    let width_i32 = i32::try_from(width).ok()?;
-    let x = if on_right {
-        right_start
-    } else {
-        left_end.checked_sub(width_i32)?
-    };
-    let maximum_y = i64::from(monitor.work_area.bottom).checked_sub(i64::from(height))?;
-    let y = i64::from(anchor.top).clamp(i64::from(monitor.work_area.top), maximum_y);
-    Some(SurfacePlacement {
-        position: PixelPoint {
-            x,
-            y: i32::try_from(y).ok()?,
-        },
-        size: PixelSize { width, height },
-    })
-}
-
-fn axis_space(start: i32, end: i32) -> u32 {
-    u32::try_from(i64::from(end) - i64::from(start)).unwrap_or(0)
-}
-
-fn scaled_dimension(logical: f64, scale_factor: f64) -> Option<u32> {
-    let physical = logical * scale_factor;
-    if !physical.is_finite() || physical <= 0.0 || physical > f64::from(u32::MAX) {
-        return None;
-    }
-    u32::try_from(physical.round() as u64).ok()
-}
-
-fn place_axis(cursor: i32, start: i32, end: i32, length: u32, gap: i32) -> Option<i32> {
-    let start = i64::from(start);
-    let end = i64::from(end);
-    let cursor = i64::from(cursor);
-    let length = i64::from(length);
-    let gap = i64::from(gap);
-    if end <= start || length <= 0 || length > end - start || gap < 0 {
-        return None;
-    }
-    let after = cursor.checked_add(gap)?;
-    if after >= start && after.checked_add(length)? <= end {
-        return i32::try_from(after).ok();
-    }
-    let before = cursor.checked_sub(gap)?.checked_sub(length)?;
-    if before >= start && before.checked_add(length)? <= end {
-        return i32::try_from(before).ok();
-    }
-    i32::try_from(after.clamp(start, end - length)).ok()
 }
 
 #[cfg(windows)]

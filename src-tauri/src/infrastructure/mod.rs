@@ -17,6 +17,7 @@ pub mod hotkey;
 pub mod hotkey_capture;
 pub mod image;
 pub mod keyboard_hook;
+pub mod popup_geometry;
 pub mod qr;
 pub mod qr_toast_surface_window;
 pub mod quick_launch;

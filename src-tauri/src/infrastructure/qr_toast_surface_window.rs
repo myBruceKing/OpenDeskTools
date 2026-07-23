@@ -8,7 +8,7 @@ use tauri::{
 };
 use thiserror::Error;
 
-use super::surface_window_animation;
+use super::{popup_geometry::top_right_position, surface_window_animation};
 
 pub const QR_TOAST_SURFACE_LABEL: &str = "qr-toast-surface";
 pub const QR_CONVERSION_EVENT: &str = "qr://conversion-result";
@@ -136,27 +136,6 @@ fn place_at_primary_work_area_top_right<R: Runtime>(
     Ok(())
 }
 
-fn top_right_position(
-    work_origin: (i32, i32),
-    work_size: (u32, u32),
-    surface_size: (i32, i32),
-    gap: i32,
-) -> Option<(i32, i32)> {
-    if surface_size.0 <= 0
-        || surface_size.1 <= 0
-        || gap < 0
-        || i64::from(surface_size.0) + i64::from(gap) > i64::from(work_size.0)
-        || i64::from(surface_size.1) + i64::from(gap) > i64::from(work_size.1)
-    {
-        return None;
-    }
-    let x = i64::from(work_origin.0) + i64::from(work_size.0)
-        - i64::from(surface_size.0)
-        - i64::from(gap);
-    let y = i64::from(work_origin.1) + i64::from(gap);
-    Some((i32::try_from(x).ok()?, i32::try_from(y).ok()?))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,17 +150,5 @@ mod tests {
             .expect("default capability should declare windows")
             .iter()
             .any(|label| label.as_str() == Some(QR_TOAST_SURFACE_LABEL)));
-    }
-
-    #[test]
-    fn enlarged_surface_is_placed_at_the_top_right_of_the_work_area() {
-        assert_eq!(
-            top_right_position((0, 0), (1920, 1040), (390, 88), 16),
-            Some((1514, 16))
-        );
-        assert_eq!(
-            top_right_position((-1920, -40), (1920, 1080), (390, 88), 16),
-            Some((-406, -24))
-        );
     }
 }
