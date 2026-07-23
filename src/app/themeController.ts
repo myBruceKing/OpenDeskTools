@@ -7,6 +7,7 @@ import {
   type ThemeSnapshot
 } from "./themeModel";
 import type { ThemeClient } from "./themeClient";
+import type { ThemeUpdateResult } from "./themeModel";
 
 type PendingUpdate = {
   patch: ThemePatch;
@@ -137,6 +138,79 @@ export class ThemeController {
       });
       void this.processQueue();
     });
+  }
+
+  selectBackground(): Promise<void> {
+    return this.runBackgroundMutation((expectedRevision) =>
+      this.client.selectBackground(expectedRevision)
+    );
+  }
+
+  removeBackground(): Promise<void> {
+    return this.runBackgroundMutation((expectedRevision) =>
+      this.client.removeBackground(expectedRevision)
+    );
+  }
+
+  private async runBackgroundMutation(
+    mutation: (expectedRevision: number) => Promise<ThemeUpdateResult | null>
+  ): Promise<void> {
+    if (
+      !this.active
+      || this.state.status !== "ready"
+      || this.state.confirmed === null
+      || this.state.saving
+      || this.pending.length > 0
+    ) {
+      return;
+    }
+    const session = this.session;
+    const expectedRevision = this.state.confirmed.revision;
+    this.setState({
+      ...this.state,
+      saving: true,
+      error: null,
+      warning: null
+    });
+    try {
+      const result = await mutation(expectedRevision);
+      if (!this.active || session !== this.session) {
+        return;
+      }
+      if (result === null) {
+        this.setState({ ...this.state, saving: false });
+        return;
+      }
+      this.acceptSnapshot(result.snapshot, true, false);
+      this.setState({
+        ...this.state,
+        saving: false,
+        warning: result.broadcastWarning,
+        error: null
+      });
+    } catch (error: unknown) {
+      if (!this.active || session !== this.session) {
+        return;
+      }
+      let issue = normalizeThemeCommandError(error);
+      if (issue.applied || issue.code === "theme_revision_conflict") {
+        try {
+          const snapshot = await this.client.get();
+          if (!this.active || session !== this.session) {
+            return;
+          }
+          this.acceptSnapshot(snapshot, true, false);
+        } catch (refreshError: unknown) {
+          issue = normalizeThemeCommandError(refreshError);
+        }
+      }
+      this.setState({
+        ...this.state,
+        saving: false,
+        error: issue,
+        warning: null
+      });
+    }
   }
 
   private async processQueue() {

@@ -56,7 +56,7 @@ pub struct ApplicationRuntime {
     system_hotkeys: SystemHotkeyDisabler,
     autostart: AutostartManager,
     data_directory: DataDirectoryPreference,
-    theme: ThemeService,
+    theme: Arc<ThemeService>,
     usage_statistics: UsageStatisticsService,
     startup_ready: AtomicBool,
 }
@@ -129,6 +129,10 @@ impl ApplicationRuntime {
 
     pub(crate) fn theme(&self) -> &ThemeService {
         &self.theme
+    }
+
+    pub(crate) fn theme_service(&self) -> Arc<ThemeService> {
+        Arc::clone(&self.theme)
     }
 
     pub(crate) fn usage_statistics(&self) -> &UsageStatisticsService {
@@ -308,7 +312,7 @@ impl ApplicationRuntime {
         clipboard
             .reconcile_retention_and_capacity()
             .map_err(|error| ApplicationRuntimeError::Clipboard(error.to_string()))?;
-        let theme = ThemeService::initialize(Arc::clone(&storage))?;
+        let theme = Arc::new(ThemeService::initialize(Arc::clone(&storage))?);
         let hotkeys = HotkeyManager::initialize(Arc::clone(&storage))?;
         let keyboard_hook = Arc::new(KeyboardHookBroker::default());
         let surface = Arc::new(SurfaceManager::default());

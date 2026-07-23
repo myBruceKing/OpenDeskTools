@@ -17,6 +17,8 @@ export function useThemeController() {
 
   return {
     state,
-    update: controller.update.bind(controller)
+    update: controller.update.bind(controller),
+    selectBackground: controller.selectBackground.bind(controller),
+    removeBackground: controller.removeBackground.bind(controller)
   };
 }

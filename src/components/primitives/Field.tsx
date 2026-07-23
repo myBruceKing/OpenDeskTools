@@ -38,6 +38,120 @@ export function SelectField({ className = "", children, ...props }: SelectHTMLAt
   );
 }
 
+type RangeNumberFieldProps = {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  unit: string;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+};
+
+export function RangeNumberField({
+  label,
+  value,
+  min,
+  max,
+  unit,
+  disabled = false,
+  onChange
+}: RangeNumberFieldProps) {
+  const [draft, setDraft] = useState(String(value));
+  const [rangeValue, setRangeValue] = useState(value);
+  const pendingValueRef = useRef(value);
+  const lastCommittedValueRef = useRef(value);
+
+  useEffect(() => {
+    setDraft(String(value));
+    setRangeValue(value);
+    pendingValueRef.current = value;
+    lastCommittedValueRef.current = value;
+  }, [value]);
+
+  const normalizedValue = (candidate: number) =>
+    Math.min(max, Math.max(min, Math.round(candidate)));
+
+  const setPendingValue = (candidate: number) => {
+    const next = normalizedValue(candidate);
+    pendingValueRef.current = next;
+    setRangeValue(next);
+    setDraft(String(next));
+  };
+
+  const commitValue = (candidate: number) => {
+    const next = normalizedValue(candidate);
+    pendingValueRef.current = next;
+    setRangeValue(next);
+    setDraft(String(next));
+    if (next !== lastCommittedValueRef.current) {
+      lastCommittedValueRef.current = next;
+      onChange(next);
+    }
+  };
+
+  const commitDraft = () => {
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+
+    commitValue(parsed);
+  };
+
+  return (
+    <div className={styles.rangeNumberField}>
+      <input
+        className={styles.rangeInput}
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={rangeValue}
+        disabled={disabled}
+        aria-label={`${label}滑杆`}
+        onChange={(event) => setPendingValue(Number(event.target.value))}
+        onPointerUp={() => commitValue(pendingValueRef.current)}
+        onPointerCancel={() => {
+          pendingValueRef.current = value;
+          setRangeValue(value);
+          setDraft(String(value));
+        }}
+        onBlur={() => commitValue(pendingValueRef.current)}
+        onKeyUp={(event) => {
+          if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
+            commitValue(pendingValueRef.current);
+          }
+        }}
+      />
+      <TextField
+        className={styles.rangeValueField}
+        type="number"
+        min={min}
+        max={max}
+        step={1}
+        value={draft}
+        unit={unit}
+        disabled={disabled}
+        aria-label={`${label}数值`}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commitDraft}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.currentTarget.blur();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setDraft(String(value));
+            event.currentTarget.blur();
+          }
+        }}
+      />
+    </div>
+  );
+}
+
 export function TextAreaField({ className = "", ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea className={[styles.textArea, className].filter(Boolean).join(" ")} {...props} />;
 }

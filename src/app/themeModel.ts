@@ -8,23 +8,38 @@ export const THEME_ACCENTS = [
   "#6d7782"
 ] as const;
 export const ANIMATION_SPEEDS = ["slow", "normal", "fast"] as const;
+export const BACKGROUND_FITS = ["cover", "contain"] as const;
 
 export type ThemeMode = (typeof THEME_MODES)[number];
-export type ThemeAccent = (typeof THEME_ACCENTS)[number];
+export type ThemeAccent = string;
 export type AnimationSpeed = (typeof ANIMATION_SPEEDS)[number];
+export type BackgroundFit = (typeof BACKGROUND_FITS)[number];
+
+export type ThemeBackgroundAsset = {
+  id: string;
+  fileName: string;
+  byteSize: number;
+  width: number;
+  height: number;
+};
 
 export type ThemePreferences = {
   mode: ThemeMode;
   accent: ThemeAccent;
   animationSpeed: AnimationSpeed;
   reduceTransparency: boolean;
+  background: ThemeBackgroundAsset | null;
+  backgroundFit: BackgroundFit;
+  backgroundDim: number;
+  backgroundBlur: number;
+  panelOpacity: number;
 };
 
 export type ThemeSnapshot = ThemePreferences & {
   revision: number;
 };
 
-export type ThemePatch = Partial<ThemePreferences>;
+export type ThemePatch = Partial<Omit<ThemePreferences, "background">>;
 
 export type ThemeBroadcastWarning = {
   code: string;
@@ -71,16 +86,61 @@ function requiredString(record: Record<string, unknown>, key: string): string {
   return value;
 }
 
+function requiredSafeInteger(
+  record: Record<string, unknown>,
+  key: string,
+  minimum: number,
+  maximum: number
+): number {
+  const value = record[key];
+  if (!Number.isSafeInteger(value) || Number(value) < minimum || Number(value) > maximum) {
+    throw new Error(`Invalid theme payload field: ${key}`);
+  }
+  return Number(value);
+}
+
+function parseThemeBackgroundAsset(value: unknown): ThemeBackgroundAsset | null {
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    throw new Error("Invalid theme payload field: background");
+  }
+  const id = requiredString(value, "id");
+  const fileName = requiredString(value, "fileName");
+  if (!/^[a-f0-9]{64}$/.test(id) || fileName.includes("/") || fileName.includes("\\")) {
+    throw new Error("Invalid theme payload field: background");
+  }
+  return {
+    id,
+    fileName,
+    byteSize: requiredSafeInteger(value, "byteSize", 1, 64 * 1024 * 1024),
+    width: requiredSafeInteger(value, "width", 1, 16_384),
+    height: requiredSafeInteger(value, "height", 1, 16_384)
+  };
+}
+
 export function parseThemeSnapshot(value: unknown): ThemeSnapshot {
   if (!isRecord(value)) {
     throw new Error("Invalid theme snapshot payload");
   }
 
-  const { mode, accent, animationSpeed, reduceTransparency, revision } = value;
+  const {
+    mode,
+    accent,
+    animationSpeed,
+    reduceTransparency,
+    background,
+    backgroundFit,
+    backgroundDim,
+    backgroundBlur,
+    panelOpacity,
+    revision
+  } = value;
   if (!isOneOf(mode, THEME_MODES)) {
     throw new Error("Invalid theme payload field: mode");
   }
-  if (!isOneOf(accent, THEME_ACCENTS)) {
+  if (typeof accent !== "string" || !/^#[0-9a-f]{6}$/.test(accent)) {
     throw new Error("Invalid theme payload field: accent");
   }
   if (!isOneOf(animationSpeed, ANIMATION_SPEEDS)) {
@@ -88,6 +148,9 @@ export function parseThemeSnapshot(value: unknown): ThemeSnapshot {
   }
   if (typeof reduceTransparency !== "boolean") {
     throw new Error("Invalid theme payload field: reduceTransparency");
+  }
+  if (!isOneOf(backgroundFit, BACKGROUND_FITS)) {
+    throw new Error("Invalid theme payload field: backgroundFit");
   }
   if (!Number.isSafeInteger(revision) || Number(revision) < 0) {
     throw new Error("Invalid theme payload field: revision");
@@ -98,6 +161,11 @@ export function parseThemeSnapshot(value: unknown): ThemeSnapshot {
     accent,
     animationSpeed,
     reduceTransparency,
+    background: parseThemeBackgroundAsset(background),
+    backgroundFit,
+    backgroundDim: requiredSafeInteger(value, "backgroundDim", 0, 100),
+    backgroundBlur: requiredSafeInteger(value, "backgroundBlur", 0, 24),
+    panelOpacity: requiredSafeInteger(value, "panelOpacity", 0, 100),
     revision: Number(revision)
   };
 }

@@ -259,7 +259,10 @@ pub fn run() {
             commands::general::set_crash_diagnostics_enabled,
             commands::general::select_and_migrate_data_directory,
             commands::theme::get_theme_preferences,
-            commands::theme::update_theme_preferences
+            commands::theme::update_theme_preferences,
+            commands::theme::select_theme_background,
+            commands::theme::remove_theme_background,
+            commands::theme::get_theme_background_image
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

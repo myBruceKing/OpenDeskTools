@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
+use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::infrastructure::application::ApplicationRuntime;
 use crate::infrastructure::theme::{
-    AccentColor, AnimationSpeed, ThemeMode, ThemePreferencesPatch, ThemeSnapshot,
+    AccentColor, AnimationSpeed, BackgroundFit, ThemeMode, ThemePreferencesPatch, ThemeSnapshot,
     ThemeValidationError,
 };
 
@@ -17,6 +18,10 @@ pub struct ThemePreferencesPatchInput {
     accent: Option<String>,
     animation_speed: Option<String>,
     reduce_transparency: Option<bool>,
+    background_fit: Option<String>,
+    background_dim: Option<u8>,
+    background_blur: Option<u8>,
+    panel_opacity: Option<u8>,
 }
 
 impl TryFrom<ThemePreferencesPatchInput> for ThemePreferencesPatch {
@@ -36,12 +41,28 @@ impl TryFrom<ThemePreferencesPatchInput> for ThemePreferencesPatch {
                 .map(AnimationSpeed::parse)
                 .transpose()?,
             reduce_transparency: input.reduce_transparency,
+            background_fit: input
+                .background_fit
+                .as_deref()
+                .map(BackgroundFit::parse)
+                .transpose()?,
+            background_dim: input.background_dim,
+            background_blur: input.background_blur,
+            panel_opacity: input.panel_opacity,
+            background: None,
         };
         if patch.is_empty() {
             return Err(ThemeValidationError::EmptyPatch);
         }
+        patch.validate()?;
         Ok(patch)
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThemeBackgroundMutationInput {
+    expected_revision: u64,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -88,6 +109,78 @@ pub fn update_theme_preferences(
     })
 }
 
+#[tauri::command]
+pub async fn select_theme_background(
+    app: AppHandle,
+    runtime: State<'_, ApplicationRuntime>,
+    input: ThemeBackgroundMutationInput,
+) -> Result<Option<ThemeUpdateResultDto>, ThemeCommandErrorDto> {
+    #[cfg(windows)]
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("选择 OpenDeskTools 背景图片")
+        .add_filter("背景图片", &["png", "jpg", "jpeg", "webp"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    #[cfg(not(windows))]
+    let path = {
+        return Err(ThemeCommandErrorDto {
+            code: "theme_background_selection_unavailable",
+            message: "Theme background selection is unavailable on this platform.",
+            field: Some("background"),
+            retryable: false,
+            applied: false,
+        });
+    };
+
+    let service = runtime.theme_service();
+    let expected_revision = input.expected_revision;
+    let updated = tauri::async_runtime::spawn_blocking(move || {
+        service.import_background(expected_revision, &path)
+    })
+    .await
+    .map_err(|_| ThemeCommandErrorDto {
+        code: "theme_background_import_failed",
+        message: "Unable to process the selected background image.",
+        field: Some("background"),
+        retryable: true,
+        applied: false,
+    })?
+    .map_err(theme_update_error)?;
+    Ok(Some(result_with_broadcast(updated, |snapshot| {
+        app.emit(THEME_CHANGED_EVENT, snapshot)
+            .map_err(|error| error.to_string())
+    })))
+}
+
+#[tauri::command]
+pub fn remove_theme_background(
+    app: AppHandle,
+    runtime: State<'_, ApplicationRuntime>,
+    input: ThemeBackgroundMutationInput,
+) -> Result<ThemeUpdateResultDto, ThemeCommandErrorDto> {
+    let updated = runtime
+        .theme()
+        .remove_background(input.expected_revision)
+        .map_err(theme_update_error)?;
+    Ok(result_with_broadcast(updated, |snapshot| {
+        app.emit(THEME_CHANGED_EVENT, snapshot)
+            .map_err(|error| error.to_string())
+    }))
+}
+
+#[tauri::command]
+pub fn get_theme_background_image(
+    runtime: State<'_, ApplicationRuntime>,
+) -> Result<Response, ThemeCommandErrorDto> {
+    runtime
+        .theme()
+        .read_background()
+        .map(Response::new)
+        .map_err(theme_background_read_error)
+}
+
 fn get_preferences(runtime: &ApplicationRuntime) -> Result<ThemeSnapshot, ThemeCommandErrorDto> {
     runtime
         .theme()
@@ -116,14 +209,21 @@ where
         .update(expected_revision, patch)
         .map_err(theme_update_error)?;
 
+    Ok(result_with_broadcast(updated, broadcast))
+}
+
+fn result_with_broadcast<F>(updated: ThemeSnapshot, broadcast: F) -> ThemeUpdateResultDto
+where
+    F: FnOnce(&ThemeSnapshot) -> Result<(), String>,
+{
     let broadcast_warning = broadcast(&updated).err().map(|_| ThemeBroadcastWarningDto {
         code: "theme_broadcast_failed",
         message: "Theme saved, but some windows may not update immediately.",
     });
-    Ok(ThemeUpdateResultDto {
+    ThemeUpdateResultDto {
         snapshot: updated,
         broadcast_warning,
-    })
+    }
 }
 
 fn validation_error(error: ThemeValidationError) -> ThemeCommandErrorDto {
@@ -133,6 +233,24 @@ fn validation_error(error: ThemeValidationError) -> ThemeCommandErrorDto {
         ThemeValidationError::InvalidAnimationSpeed(_) => {
             ("Unsupported animation speed.", Some("animationSpeed"))
         }
+        ThemeValidationError::InvalidBackgroundFit(_) => {
+            ("Unsupported background fit.", Some("backgroundFit"))
+        }
+        ThemeValidationError::InvalidBackgroundAsset => {
+            ("Invalid background image metadata.", Some("background"))
+        }
+        ThemeValidationError::InvalidBackgroundDim => (
+            "Background dim is outside the supported range.",
+            Some("backgroundDim"),
+        ),
+        ThemeValidationError::InvalidBackgroundBlur => (
+            "Background blur is outside the supported range.",
+            Some("backgroundBlur"),
+        ),
+        ThemeValidationError::InvalidPanelOpacity => (
+            "Panel opacity is outside the supported range.",
+            Some("panelOpacity"),
+        ),
         ThemeValidationError::EmptyPatch => (
             "Theme update must include at least one field.",
             Some("patch"),
@@ -161,10 +279,58 @@ fn theme_update_error(error: crate::infrastructure::theme::ThemeError) -> ThemeC
         };
     }
 
+    if let crate::infrastructure::theme::ThemeError::Asset(asset_error) = &error {
+        use crate::infrastructure::theme_asset::ThemeAssetError;
+        let (code, message, retryable) = match asset_error {
+            ThemeAssetError::UnsupportedFormat => (
+                "theme_background_format_unsupported",
+                "Choose a PNG, JPEG, or WebP image.",
+                false,
+            ),
+            ThemeAssetError::TooLarge => (
+                "theme_background_too_large",
+                "The selected background image is too large.",
+                false,
+            ),
+            ThemeAssetError::InvalidSource
+            | ThemeAssetError::InvalidMetadata
+            | ThemeAssetError::Corrupt
+            | ThemeAssetError::Decode(_) => (
+                "theme_background_invalid",
+                "The selected background image is invalid or damaged.",
+                false,
+            ),
+            ThemeAssetError::Missing | ThemeAssetError::Io(_) | ThemeAssetError::Storage(_) => (
+                "theme_background_import_failed",
+                "Unable to import the selected background image.",
+                true,
+            ),
+        };
+        return ThemeCommandErrorDto {
+            code,
+            message,
+            field: Some("background"),
+            retryable,
+            applied: false,
+        };
+    }
+
     ThemeCommandErrorDto {
         code: "theme_update_failed",
         message: "Unable to save theme preferences.",
         field: None,
+        retryable: true,
+        applied: false,
+    }
+}
+
+fn theme_background_read_error(
+    _error: crate::infrastructure::theme::ThemeError,
+) -> ThemeCommandErrorDto {
+    ThemeCommandErrorDto {
+        code: "theme_background_unavailable",
+        message: "The active theme background is unavailable.",
+        field: Some("background"),
         retryable: true,
         applied: false,
     }
@@ -198,7 +364,7 @@ mod tests {
         };
         assert_eq!(
             json,
-            r##"{"mode":"light","accent":"#216bd9","animationSpeed":"normal","reduceTransparency":false,"revision":0}"##
+            r##"{"mode":"light","accent":"#216bd9","animationSpeed":"normal","reduceTransparency":false,"background":null,"backgroundFit":"cover","backgroundDim":24,"backgroundBlur":6,"panelOpacity":86,"revision":0}"##
         );
     }
 
@@ -265,7 +431,7 @@ mod tests {
         };
         assert_eq!(
             json,
-            r##"{"mode":"dark","accent":"#216bd9","animationSpeed":"normal","reduceTransparency":false,"revision":1,"broadcastWarning":{"code":"theme_broadcast_failed","message":"Theme saved, but some windows may not update immediately."}}"##
+            r##"{"mode":"dark","accent":"#216bd9","animationSpeed":"normal","reduceTransparency":false,"background":null,"backgroundFit":"cover","backgroundDim":24,"backgroundBlur":6,"panelOpacity":86,"revision":1,"broadcastWarning":{"code":"theme_broadcast_failed","message":"Theme saved, but some windows may not update immediately."}}"##
         );
     }
 
@@ -275,7 +441,7 @@ mod tests {
         let broadcast_count = Mutex::new(0_u32);
         let input = ThemePreferencesPatchInput {
             expected_revision: 0,
-            accent: Some("#ffffff".to_owned()),
+            accent: Some("#fffffg".to_owned()),
             ..ThemePreferencesPatchInput::default()
         };
 

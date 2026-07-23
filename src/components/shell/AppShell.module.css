@@ -1,4 +1,6 @@
 .shell {
+  position: relative;
+  isolation: isolate;
   width: 100vw;
   height: 100vh;
   min-width: 0;
@@ -9,6 +11,54 @@
   border: var(--border-width) solid var(--border-default);
   border-radius: 0;
   background: var(--surface-window);
+}
+
+.skinBackground {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  background: var(--surface-window-solid);
+  pointer-events: none;
+}
+
+.skinBackgroundImage,
+.skinBackgroundShade {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.skinBackgroundImage {
+  filter: blur(var(--skin-background-blur));
+  transition:
+    filter var(--motion-duration-standard) var(--motion-easing-standard),
+    transform var(--motion-duration-standard) var(--motion-easing-standard);
+}
+
+.skinBackgroundShade {
+  background: rgb(0 0 0 / var(--skin-background-dim));
+}
+
+.shell[data-has-background="true"] {
+  --surface-window: rgb(var(--surface-window-rgb) / var(--skin-panel-opacity));
+  --surface-sidebar: rgb(var(--surface-sidebar-rgb) / var(--skin-panel-opacity));
+  --surface-page: rgb(var(--surface-page-rgb) / var(--skin-panel-opacity));
+  --surface-card: rgb(var(--surface-card-rgb) / var(--skin-panel-opacity));
+  --surface-card-subtle: rgb(var(--surface-card-subtle-rgb) / var(--skin-panel-opacity));
+}
+
+.shell[data-reduce-transparency="true"] {
+  --skin-panel-opacity: 100%;
+  --skin-background-blur: 0px;
+}
+
+.topbar,
+.sidebar,
+.content {
+  position: relative;
+  z-index: 1;
 }
 
 .topbar {

@@ -175,7 +175,18 @@ export function AppShell({
   footerVariant,
   children
 }: AppShellProps) {
-  const themeStyle = { "--accent-primary": theme.accent } as CSSProperties;
+  const hasBackground = theme.background !== null && theme.backgroundUrl !== null;
+  const themeStyle = {
+    "--accent-primary": theme.accent,
+    "--text-on-accent": theme.accentText,
+    "--skin-panel-opacity": `${theme.reduceTransparency ? 100 : theme.panelOpacity}%`,
+    "--skin-background-dim": `${theme.backgroundDim}%`,
+    "--skin-background-blur": `${theme.reduceTransparency ? 0 : theme.backgroundBlur}px`
+  } as CSSProperties;
+  const backgroundImageStyle = {
+    objectFit: theme.backgroundFit,
+    transform: theme.reduceTransparency || theme.backgroundBlur === 0 ? "none" : "scale(1.04)"
+  } as CSSProperties;
 
   return (
     <main
@@ -185,8 +196,21 @@ export function AppShell({
       data-reduce-transparency={String(theme.reduceTransparency)}
       data-animation-speed={theme.animationSpeed}
       data-reduced-motion={String(theme.reducedMotion)}
+      data-has-background={String(hasBackground)}
       style={themeStyle}
     >
+      {hasBackground && (
+        <div className={styles.skinBackground} aria-hidden="true">
+          <img
+            className={styles.skinBackgroundImage}
+            src={theme.backgroundUrl ?? undefined}
+            style={backgroundImageStyle}
+            alt=""
+            draggable={false}
+          />
+          <span className={styles.skinBackgroundShade} />
+        </div>
+      )}
       <TopBar serviceState={serviceState} />
       <Sidebar
         activeRoute={activeRoute}

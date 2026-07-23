@@ -35,11 +35,17 @@ vi.mock("../../src/app/overviewClient", () => ({
 }));
 vi.mock("../../src/app/themeRuntime", () => ({
   createThemeRootPresentation: vi.fn(() => ({})),
+  useThemeBackgroundImage: vi.fn(() => ({ status: "idle", url: null })),
   useDocumentTheme: vi.fn(),
   useSystemThemePreferences: vi.fn(() => ({ systemDark: false, systemReducedMotion: false }))
 }));
 vi.mock("../../src/app/useThemeController", () => ({
-  useThemeController: () => ({ state: { current: {} }, update: vi.fn() })
+  useThemeController: () => ({
+    state: { current: {} },
+    update: vi.fn(),
+    selectBackground: vi.fn(),
+    removeBackground: vi.fn()
+  })
 }));
 vi.mock("../../src/app/useDesktopWebViewGuards", () => ({ useDesktopWebViewGuards: vi.fn() }));
 vi.mock("../../src/components/shell/AppShell", () => ({

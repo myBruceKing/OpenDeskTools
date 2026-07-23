@@ -25,6 +25,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 thiserror = "2"
 png = "0.17"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 regex = "1.11"
 qrcodegen = "1.8.0"
 quircs = "0.10.3"

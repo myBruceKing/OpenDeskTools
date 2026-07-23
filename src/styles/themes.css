@@ -1,11 +1,21 @@
 :root,
 [data-theme="light"] {
   color-scheme: light;
-  --surface-window: #f9f8f6;
-  --surface-sidebar: #f7f6f5;
-  --surface-page: #f9f8f6;
-  --surface-card: #faf9f7;
-  --surface-card-subtle: #fcfbf9;
+  --surface-window-solid: #f9f8f6;
+  --surface-sidebar-solid: #f7f6f5;
+  --surface-page-solid: #f9f8f6;
+  --surface-card-solid: #faf9f7;
+  --surface-card-subtle-solid: #fcfbf9;
+  --surface-window-rgb: 249 248 246;
+  --surface-sidebar-rgb: 247 246 245;
+  --surface-page-rgb: 249 248 246;
+  --surface-card-rgb: 250 249 247;
+  --surface-card-subtle-rgb: 252 251 249;
+  --surface-window: var(--surface-window-solid);
+  --surface-sidebar: var(--surface-sidebar-solid);
+  --surface-page: var(--surface-page-solid);
+  --surface-card: var(--surface-card-solid);
+  --surface-card-subtle: var(--surface-card-subtle-solid);
   --surface-disabled: #f3f2f0;
   --surface-titlebar-control-hover: #ebe9e6;
   --surface-titlebar-control-active: #dfddd9;
@@ -69,11 +79,21 @@
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --surface-window: #17191c;
-  --surface-sidebar: #1b1d20;
-  --surface-page: #17191c;
-  --surface-card: #202226;
-  --surface-card-subtle: #25282c;
+  --surface-window-solid: #17191c;
+  --surface-sidebar-solid: #1b1d20;
+  --surface-page-solid: #17191c;
+  --surface-card-solid: #202226;
+  --surface-card-subtle-solid: #25282c;
+  --surface-window-rgb: 23 25 28;
+  --surface-sidebar-rgb: 27 29 32;
+  --surface-page-rgb: 23 25 28;
+  --surface-card-rgb: 32 34 38;
+  --surface-card-subtle-rgb: 37 40 44;
+  --surface-window: var(--surface-window-solid);
+  --surface-sidebar: var(--surface-sidebar-solid);
+  --surface-page: var(--surface-page-solid);
+  --surface-card: var(--surface-card-solid);
+  --surface-card-subtle: var(--surface-card-subtle-solid);
   --surface-disabled: #292c30;
   --surface-titlebar-control-hover: #2b2e32;
   --surface-titlebar-control-active: #35393e;

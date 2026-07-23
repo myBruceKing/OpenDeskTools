@@ -310,6 +310,30 @@
   line-height: var(--line-height-body);
 }
 
+.rangeNumberField {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) 82px;
+  gap: 10px;
+  align-items: center;
+}
+
+.rangeInput {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent-primary);
+}
+
+.rangeInput:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.rangeValueField input {
+  text-align: right;
+}
+
 .textArea {
   min-width: 0;
   width: 100%;

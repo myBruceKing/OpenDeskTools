@@ -28,6 +28,7 @@ pub mod storage;
 pub mod surface;
 pub mod surface_window_animation;
 pub mod theme;
+pub mod theme_asset;
 pub mod tool_menu_surface_window;
 pub mod tray;
 pub mod usage_statistics;

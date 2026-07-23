@@ -38,7 +38,10 @@ describe("settings production source boundary", () => {
 
     expect(app).toContain("useThemeController");
     expect(app).toContain("useDocumentTheme(themePresentation)");
-    expect(app).toContain("<ThemePage state={themeController.state} onUpdate={themeController.update}");
+    expect(app).toContain("state={themeController.state}");
+    expect(app).toContain("onUpdate={themeController.update}");
+    expect(app).toContain("onSelectBackground={themeController.selectBackground}");
+    expect(app).toContain("useThemeBackgroundImage");
     expect(shell).not.toContain('data-theme="light"');
     expect(shell).toContain("data-theme={theme.resolvedTheme}");
     expect(shell).toContain("data-accent={theme.accent}");

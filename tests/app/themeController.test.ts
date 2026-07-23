@@ -4,14 +4,19 @@ import { ThemeController } from "../../src/app/themeController";
 import type { ThemeSnapshot } from "../../src/app/themeModel";
 
 function makeSnapshot(revision = 0, overrides: Partial<ThemeSnapshot> = {}): ThemeSnapshot {
-  return {
+  const snapshot: ThemeSnapshot = {
     mode: "system",
     accent: "#216bd9",
     animationSpeed: "normal",
     reduceTransparency: false,
+    background: null,
+    backgroundFit: "cover",
+    backgroundDim: 24,
+    backgroundBlur: 6,
+    panelOpacity: 86,
     revision,
-    ...overrides
   };
+  return { ...snapshot, ...overrides, background: overrides.background ?? snapshot.background };
 }
 
 function deferred<T>() {
@@ -38,6 +43,12 @@ function makeClient(overrides: Partial<ThemeClient> = {}): ThemeClient {
       snapshot: makeSnapshot(1, patch),
       broadcastWarning: null
     }),
+    selectBackground: async () => null,
+    removeBackground: async (expectedRevision) => ({
+      snapshot: makeSnapshot(expectedRevision + 1, { background: null }),
+      broadcastWarning: null
+    }),
+    getBackgroundImage: async () => new Blob(),
     subscribe: async () => () => undefined,
     ...overrides
   };
@@ -253,6 +264,51 @@ describe("ThemeController", () => {
       current: makeSnapshot(1, { reduceTransparency: true }),
       error: null,
       warning: { code: "theme_broadcast_failed" }
+    });
+  });
+
+  it("applies and removes a selected background through revision-checked mutations", async () => {
+    const background = {
+      id: "a".repeat(64),
+      fileName: "forest.webp",
+      byteSize: 2048,
+      width: 1920,
+      height: 1080
+    };
+    const selectBackground = vi.fn<ThemeClient["selectBackground"]>().mockResolvedValue({
+      snapshot: makeSnapshot(1, { background }),
+      broadcastWarning: null
+    });
+    const removeBackground = vi.fn<ThemeClient["removeBackground"]>().mockResolvedValue({
+      snapshot: makeSnapshot(2, { background: null }),
+      broadcastWarning: null
+    });
+    const controller = new ThemeController(makeClient({ selectBackground, removeBackground }));
+    controller.start();
+    await flush();
+
+    await controller.selectBackground();
+    expect(selectBackground).toHaveBeenCalledWith(0);
+    expect(controller.getSnapshot().current?.background).toEqual(background);
+
+    await controller.removeBackground();
+    expect(removeBackground).toHaveBeenCalledWith(1);
+    expect(controller.getSnapshot().current?.background).toBeNull();
+    expect(controller.getSnapshot().saving).toBe(false);
+  });
+
+  it("keeps the current theme unchanged when the native image picker is cancelled", async () => {
+    const selectBackground = vi.fn<ThemeClient["selectBackground"]>().mockResolvedValue(null);
+    const controller = new ThemeController(makeClient({ selectBackground }));
+    controller.start();
+    await flush();
+
+    await controller.selectBackground();
+
+    expect(controller.getSnapshot()).toMatchObject({
+      current: makeSnapshot(),
+      saving: false,
+      error: null
     });
   });
 

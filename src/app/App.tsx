@@ -17,6 +17,7 @@ import { useClipboardController } from "./useClipboardController";
 import { useDesktopWebViewGuards } from "./useDesktopWebViewGuards";
 import {
   createThemeRootPresentation,
+  useThemeBackgroundImage,
   useDocumentTheme,
   useSystemThemePreferences
 } from "./themeRuntime";
@@ -53,10 +54,14 @@ function App() {
   const overviewRequest = useRef(0);
   const themeController = useThemeController();
   const { systemDark, systemReducedMotion } = useSystemThemePreferences();
+  const themeBackground = useThemeBackgroundImage(
+    themeController.state.current?.background?.id ?? null
+  );
   const themePresentation = createThemeRootPresentation(
     themeController.state.current,
     systemDark,
-    systemReducedMotion
+    systemReducedMotion,
+    themeBackground.url
   );
   useDocumentTheme(themePresentation);
   useDesktopWebViewGuards();
@@ -136,7 +141,15 @@ function App() {
       case "captureQr":
         return <CaptureQrPage />;
       case "floatingTheme":
-        return <ThemePage state={themeController.state} onUpdate={themeController.update} />;
+        return (
+          <ThemePage
+            state={themeController.state}
+            backgroundImageState={themeBackground}
+            onUpdate={themeController.update}
+            onSelectBackground={themeController.selectBackground}
+            onRemoveBackground={themeController.removeBackground}
+          />
+        );
       case "general":
         return <GeneralPage />;
       case "overview":

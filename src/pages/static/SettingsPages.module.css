@@ -7,13 +7,32 @@
 }
 
 .captureGrid,
-.generalGrid,
-.themeGrid {
+.generalGrid {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.themeGrid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.72fr) minmax(420px, 1.28fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.themeSettingsGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.themeSettingsGroup {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 14px;
 }
 
 .panelHeader,
@@ -174,6 +193,108 @@
   gap: 10px;
 }
 
+.themeControlLabel {
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-body);
+}
+
+.colorPickerButton {
+  min-width: 74px;
+}
+
+.nativeColorInput {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.skinActions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.skinHeader {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  align-items: start;
+}
+
+.skinHeaderDescription {
+  grid-column: 1 / -1;
+}
+
+.skinEditor {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+.skinPreview {
+  position: relative;
+  height: clamp(144px, 20vh, 190px);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 24%), transparent),
+    var(--surface-card-subtle);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  text-align: center;
+}
+
+.skinPreview img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.skinPreview[data-state="error"] {
+  border-color: color-mix(in srgb, var(--status-danger) 38%, var(--border-default));
+  color: var(--status-danger);
+}
+
+.skinSettings {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.skinAssetMeta {
+  min-width: 0;
+}
+
+.skinControlGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.skinControlGrid[data-disabled="true"] .fieldRow {
+  color: var(--text-disabled);
+}
+
+.skinAccessibilityNote {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-secondary);
+  line-height: var(--line-height-secondary);
+}
+
 .themeIssueError,
 .themeIssueWarning {
   flex: 0 0 auto;
@@ -213,108 +334,24 @@
     inset 0 0 0 1px rgb(0 0 0 / 12%);
 }
 
-.themePreviewWindow {
-  --theme-preview-color: var(--accent-primary);
-
-  min-height: 190px;
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 14px;
-  padding: 14px;
-  border: var(--border-width) solid var(--border-subtle);
-  border-radius: var(--radius-card);
-  background: var(--surface-card-subtle);
-}
-
-.themePreviewSidebar {
-  border-radius: var(--radius-button);
-  background: color-mix(in srgb, var(--theme-preview-color) 14%, var(--surface-card));
-}
-
-.themePreviewContent {
-  border-radius: var(--radius-button);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--theme-preview-color) 10%, transparent),
-      transparent
-    ),
-    var(--surface-card);
-  box-shadow: inset 0 0 0 var(--border-width) var(--border-subtle);
-}
-
-.themePreviewAccent {
-  grid-column: 2;
-  height: 12px;
-  align-self: end;
-  border-radius: var(--radius-pill);
-  background: var(--theme-preview-color);
-}
-
-.themePreviewToast {
-  --theme-preview-color: var(--accent-primary);
-
-  min-height: 120px;
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
-  padding: 16px;
-  border: var(--border-width) solid var(--border-subtle);
-  border-radius: var(--radius-card);
-  background: var(--surface-card-subtle);
-  box-shadow: var(--shadow-card);
-}
-
-.themePreviewToast strong,
-.themePreviewToast span {
-  display: block;
-}
-
-.themePreviewToast span {
-  margin-top: 3px;
-  color: var(--text-secondary);
-  font-size: var(--font-size-secondary);
-}
-
-.themePreviewDot {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--theme-preview-color) 18%, var(--surface-card));
-  box-shadow: inset 0 0 0 8px color-mix(in srgb, var(--theme-preview-color) 72%, transparent);
-}
-
-.themeSurfaceGrid {
-  --theme-preview-color: var(--accent-primary);
-
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.themeSurfaceCard {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
-  padding: 14px;
-  border: var(--border-width) solid var(--border-subtle);
-  border-radius: var(--radius-card);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--theme-preview-color) 10%, transparent), transparent),
-    var(--surface-card-subtle);
-}
-
 @media (max-width: 899px) {
   .hotkeyLayout,
   .captureGrid,
   .generalGrid,
-  .themeGrid,
-  .themeSurfaceGrid,
   .formGrid {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .themeSettingsGrid,
+  .skinEditor,
+  .skinControlGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+}
+
+@media (max-width: 1019px) {
+  .themeGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
