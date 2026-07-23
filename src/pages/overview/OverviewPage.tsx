@@ -6,6 +6,7 @@ import {
 } from "@fluentui/react-icons";
 import {
   getToolWheelShortcutLabel,
+  type OverviewLoadState,
   type OverviewHotkeyViewModel,
   type OverviewViewModel,
   type ServiceState
@@ -23,6 +24,8 @@ import styles from "./OverviewPage.module.css";
 
 type OverviewPageProps = {
   viewModel: OverviewViewModel;
+  loadState: OverviewLoadState;
+  onRetry: () => Promise<void>;
 };
 
 const serviceLabels: Record<ServiceState, string> = {
@@ -33,7 +36,7 @@ const serviceLabels: Record<ServiceState, string> = {
   unknown: "未知"
 };
 
-function Summary({ viewModel }: OverviewPageProps) {
+function Summary({ viewModel }: Pick<OverviewPageProps, "viewModel">) {
   const startupLabel =
     viewModel.startupEnabled === null
       ? "—"
@@ -81,23 +84,58 @@ function Summary({ viewModel }: OverviewPageProps) {
   );
 }
 
-function HotkeyPanel({ hotkeys }: { hotkeys: OverviewHotkeyViewModel[] }) {
+function HotkeyPanel({
+  hotkeys,
+  loadState,
+  onRetry
+}: {
+  hotkeys: OverviewHotkeyViewModel[];
+  loadState: OverviewLoadState;
+  onRetry: () => Promise<void>;
+}) {
   return (
     <section className={styles.hotkeyPanel} aria-label="全局快捷键">
       <SectionTitle className={styles.hotkeyTitle}>全局快捷键</SectionTitle>
-      <HotkeyList hotkeys={hotkeys} density="full" toggleDisabled editDisabled />
+      {loadState === "ready" ? (
+        <HotkeyList hotkeys={hotkeys} density="full" toggleDisabled editDisabled />
+      ) : (
+        <div className={styles.overviewDataState} role={loadState === "error" ? "alert" : "status"}>
+          <span>
+            {loadState === "loading"
+              ? "正在读取快捷键运行状态…"
+              : "快捷键概览读取失败，未使用“未绑定”代替真实状态。"}
+          </span>
+          {loadState === "error" && (
+            <Button size="inline" onClick={() => void onRetry()}>
+              重试
+            </Button>
+          )}
+        </div>
+      )}
     </section>
   );
 }
 
-function ToolWheelPanel({ hotkeys }: { hotkeys: OverviewHotkeyViewModel[] }) {
+function ToolWheelPanel({
+  hotkeys,
+  loadState
+}: {
+  hotkeys: OverviewHotkeyViewModel[];
+  loadState: OverviewLoadState;
+}) {
   const { previewItems } = useQuickLaunchViewModel();
+  const subtitle =
+    loadState === "ready"
+      ? getToolWheelShortcutLabel(hotkeys)
+      : loadState === "loading"
+        ? "正在读取快捷键状态…"
+        : "快捷键状态不可用";
 
   return (
     <Section
       className={styles.toolPanel}
       title="工具盘预览"
-      subtitle={getToolWheelShortcutLabel(hotkeys)}
+      subtitle={subtitle}
       action={<HintTooltip content="这是工具盘预览。应用服务接入后，顺序会跟随快速启动页面里的固定项变化。" />}
       aria-label="工具盘预览"
     >
@@ -112,11 +150,20 @@ function formatCount(value: number | null) {
   return value === null ? "—" : new Intl.NumberFormat("zh-CN").format(value);
 }
 
-function formatSavedTime(minutes: number | null) {
-  if (minutes === null) {
+function formatSavedTime(seconds: number | null) {
+  if (seconds === null) {
     return "—";
   }
 
+  if (seconds === 0) {
+    return "0 分钟";
+  }
+
+  if (seconds < 60) {
+    return "< 1 分钟";
+  }
+
+  const minutes = Math.floor(seconds / 60);
   if (minutes < 60) {
     return `${minutes} 分钟`;
   }
@@ -147,7 +194,7 @@ function StatsPanel({ statistics }: Pick<OverviewViewModel, "statistics">) {
     },
     {
       label: "节省时间（本月）",
-      value: formatSavedTime(statistics.savedMinutesThisMonth),
+      value: formatSavedTime(statistics.savedSecondsThisMonth),
       icon: Clock32Regular,
       tone: "purple" as const
     }
@@ -159,7 +206,7 @@ function StatsPanel({ statistics }: Pick<OverviewViewModel, "statistics">) {
         <div>
           <SectionTitle>使用统计</SectionTitle>
         </div>
-        <HintTooltip content="统计数据来自本地使用记录；后端接入前仅展示结构。" />
+        <HintTooltip content="只统计实际执行成功的工具操作，数据保存在本机。节省时间按不同工具的保守估算累计。" />
       </div>
       <div className={styles.statsGrid}>
         {statItems.map((item) => (
@@ -170,7 +217,7 @@ function StatsPanel({ statistics }: Pick<OverviewViewModel, "statistics">) {
   );
 }
 
-export function OverviewPage({ viewModel }: OverviewPageProps) {
+export function OverviewPage({ viewModel, loadState, onRetry }: OverviewPageProps) {
   return (
     <PageScaffold
       title="概览"
@@ -179,8 +226,12 @@ export function OverviewPage({ viewModel }: OverviewPageProps) {
     >
       <Summary viewModel={viewModel} />
       <TwoColumn className={styles.middle} sideWidth="minmax(270px, 34%)">
-        <HotkeyPanel hotkeys={viewModel.hotkeys} />
-        <ToolWheelPanel hotkeys={viewModel.hotkeys} />
+        <HotkeyPanel
+          hotkeys={viewModel.hotkeys}
+          loadState={loadState}
+          onRetry={onRetry}
+        />
+        <ToolWheelPanel hotkeys={viewModel.hotkeys} loadState={loadState} />
       </TwoColumn>
       <StatsPanel statistics={viewModel.statistics} />
     </PageScaffold>

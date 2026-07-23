@@ -23,7 +23,7 @@ export const OVERVIEW_PREVIEW_DATA: OverviewBackendSnapshot = {
     todayTriggers: 128,
     weekTriggers: 1248,
     monthTriggers: 8653,
-    savedMinutesThisMonth: 9120
+    savedSecondsThisMonth: 547200
   }
 };
 

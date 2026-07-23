@@ -28,7 +28,10 @@ vi.mock("../../src/app/useClipboardController", () => ({
   }
 }));
 vi.mock("../../src/app/overviewClient", () => ({
-  overviewClient: { load: vi.fn(async () => ({ version: "0.1.0", startupEnabled: false, serviceState: "running" })) }
+  overviewClient: {
+    load: vi.fn(async () => ({ version: "0.1.0", startupEnabled: false, serviceState: "running" })),
+    subscribeToUsageChanges: vi.fn(async () => () => undefined)
+  }
 }));
 vi.mock("../../src/app/themeRuntime", () => ({
   createThemeRootPresentation: vi.fn(() => ({})),

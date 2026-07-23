@@ -10,6 +10,7 @@ import { ThemePage } from "../pages/theme/ThemePage";
 import { overviewClient } from "./overviewClient";
 import {
   EMPTY_OVERVIEW_VIEW_MODEL,
+  type OverviewLoadState,
   type OverviewViewModel
 } from "./overviewModel";
 import { useClipboardController } from "./useClipboardController";
@@ -47,6 +48,7 @@ function readInitialRoute(): AppRoute {
 
 function App() {
   const [overview, setOverview] = useState<OverviewViewModel>(EMPTY_OVERVIEW_VIEW_MODEL);
+  const [overviewLoadState, setOverviewLoadState] = useState<OverviewLoadState>("loading");
   const [route, setRoute] = useState<AppRoute>(readInitialRoute);
   const overviewRequest = useRef(0);
   const themeController = useThemeController();
@@ -61,15 +63,18 @@ function App() {
 
   const refreshOverview = useCallback(async () => {
     const request = ++overviewRequest.current;
+    setOverviewLoadState((current) => (current === "ready" ? current : "loading"));
     try {
       const viewModel = await overviewClient.load();
       if (request === overviewRequest.current) {
         setOverview(viewModel);
+        setOverviewLoadState("ready");
       }
     } catch (error: unknown) {
       console.error("Unable to load the overview view model", error);
       if (request === overviewRequest.current) {
         setOverview(EMPTY_OVERVIEW_VIEW_MODEL);
+        setOverviewLoadState("error");
       }
     }
   }, []);
@@ -79,6 +84,34 @@ function App() {
 
     return () => {
       overviewRequest.current += 1;
+    };
+  }, [refreshOverview]);
+
+  useEffect(() => {
+    let active = true;
+    let unsubscribe: (() => void) | null = null;
+
+    void overviewClient
+      .subscribeToUsageChanges(() => {
+        if (active) {
+          void refreshOverview();
+        }
+      })
+      .then((stop) => {
+        if (active) {
+          unsubscribe = stop;
+          void refreshOverview();
+        } else {
+          stop();
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("Unable to subscribe to usage statistics changes", error);
+      });
+
+    return () => {
+      active = false;
+      unsubscribe?.();
     };
   }, [refreshOverview]);
 
@@ -108,7 +141,13 @@ function App() {
         return <GeneralPage />;
       case "overview":
       default:
-        return <OverviewPage viewModel={overview} />;
+        return (
+          <OverviewPage
+            viewModel={overview}
+            loadState={overviewLoadState}
+            onRetry={refreshOverview}
+          />
+        );
     }
   })();
 

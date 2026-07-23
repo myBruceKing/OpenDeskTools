@@ -1,6 +1,9 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use tauri::{AppHandle, Manager, Runtime};
 use thiserror::Error;
@@ -28,6 +31,7 @@ use super::quick_launch::{QuickLaunchError, QuickLaunchService};
 use super::storage::{StorageError, StorageService};
 use super::surface::SurfaceManager;
 use super::theme::{ThemeError, ThemeService};
+use super::usage_statistics::UsageStatisticsService;
 
 const DATA_DIR_ARGUMENT: &str = "--data-dir";
 
@@ -53,6 +57,8 @@ pub struct ApplicationRuntime {
     autostart: AutostartManager,
     data_directory: DataDirectoryPreference,
     theme: ThemeService,
+    usage_statistics: UsageStatisticsService,
+    startup_ready: AtomicBool,
 }
 
 #[derive(Debug, Error)]
@@ -123,6 +129,18 @@ impl ApplicationRuntime {
 
     pub(crate) fn theme(&self) -> &ThemeService {
         &self.theme
+    }
+
+    pub(crate) fn usage_statistics(&self) -> &UsageStatisticsService {
+        &self.usage_statistics
+    }
+
+    pub(crate) fn mark_startup_ready(&self) {
+        self.startup_ready.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_startup_ready(&self) -> bool {
+        self.startup_ready.load(Ordering::Acquire)
     }
 
     pub(crate) fn clipboard(&self) -> &ClipboardService {
@@ -298,6 +316,7 @@ impl ApplicationRuntime {
             ClipboardInputCoordinator::new(Arc::clone(&clipboard), Arc::clone(&surface));
         let qr = QrService::new(Arc::clone(&clipboard));
         let quick_launch = Arc::new(QuickLaunchService::initialize(Arc::clone(&storage))?);
+        let usage_statistics = UsageStatisticsService::new(Arc::clone(&storage));
         let system_hotkeys =
             SystemHotkeyDisabler::for_system(Arc::clone(&storage) as Arc<dyn OwnedLettersStore>);
         let autostart = AutostartManager::for_system()?;
@@ -317,6 +336,8 @@ impl ApplicationRuntime {
             autostart,
             data_directory,
             theme,
+            usage_statistics,
+            startup_ready: AtomicBool::new(false),
         })
     }
 }

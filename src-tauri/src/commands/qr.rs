@@ -1,9 +1,10 @@
 use serde::Serialize;
 use tauri::{AppHandle, Runtime, State};
 
-use crate::clipboard_history_event_sink;
 use crate::infrastructure::application::ApplicationRuntime;
 use crate::infrastructure::qr::{QrConversionKind, QrConversionResult, QrError};
+use crate::infrastructure::usage_statistics::UsageAction;
+use crate::{clipboard_history_event_sink, record_usage_success};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +45,7 @@ pub(crate) fn convert_latest_and_notify<R: Runtime>(
     runtime: &ApplicationRuntime,
 ) -> Result<QrConversionDto, QrCommandErrorDto> {
     let result = convert_latest(runtime)?;
+    record_usage_success(app, runtime, UsageAction::ClipboardQrConversion);
     clipboard_history_event_sink(app)();
     Ok(result)
 }

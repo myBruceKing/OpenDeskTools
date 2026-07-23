@@ -8,7 +8,7 @@ use thiserror::Error;
 
 const DATABASE_FILE_NAME: &str = "opendesktools.sqlite3";
 const FILES_DIRECTORY_NAME: &str = "files";
-const LATEST_SCHEMA_VERSION: u32 = 5;
+const LATEST_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -547,6 +547,28 @@ fn run_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
     }
 
+    if current_version < 6 {
+        transaction.execute_batch(
+            "CREATE TABLE usage_statistics_daily (
+                day TEXT PRIMARY KEY NOT NULL CHECK (
+                    length(day) = 10
+                    AND substr(day, 5, 1) = '-'
+                    AND substr(day, 8, 1) = '-'
+                ),
+                trigger_count INTEGER NOT NULL DEFAULT 0 CHECK (
+                    trigger_count >= 0 AND trigger_count <= 9007199254740991
+                ),
+                saved_seconds INTEGER NOT NULL DEFAULT 0 CHECK (
+                    saved_seconds >= 0 AND saved_seconds <= 9007199254740991
+                )
+             );",
+        )?;
+        transaction.execute(
+            "INSERT INTO schema_migrations (version) VALUES (?1)",
+            [6_u32],
+        )?;
+    }
+
     transaction.commit()?;
     Ok(())
 }
@@ -673,7 +695,7 @@ mod tests {
 
         let storage = StorageService::initialize(&data_root).unwrap();
 
-        assert_eq!(storage.migration_version().unwrap(), 5);
+        assert_eq!(storage.migration_version().unwrap(), LATEST_SCHEMA_VERSION);
         assert_eq!(
             storage.read_setting("theme.mode").unwrap().as_deref(),
             Some("dark")
@@ -682,6 +704,16 @@ mod tests {
             storage
                 .query_i64(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'clipboard_history'",
+                    &[]
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            storage
+                .query_i64(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'usage_statistics_daily'",
                     &[]
                 )
                 .unwrap(),
@@ -733,7 +765,7 @@ mod tests {
 
         let storage = StorageService::initialize(&data_root).unwrap();
 
-        assert_eq!(storage.migration_version().unwrap(), 5);
+        assert_eq!(storage.migration_version().unwrap(), LATEST_SCHEMA_VERSION);
         assert_eq!(
             storage
                 .query_i64("SELECT content_revision FROM clipboard_history", &[])

@@ -15,6 +15,7 @@ use super::application::ApplicationRuntime;
 use super::clipboard_surface_foreground::{self, ForegroundMonitorError};
 use super::clipboard_surface_pointer::{self, PointerMonitorError};
 use super::debug_qa;
+use super::keyboard_hook::KeyboardHookError;
 use super::surface::{SurfaceError, SurfaceManager};
 use super::surface_window_animation;
 use geometry::{
@@ -109,6 +110,7 @@ pub enum ClipboardSurfaceCloseReason {
     FocusLost,
     ForegroundChanged,
     PointerOutside,
+    Escape,
     PreviewDestroyed,
     Command,
     InputSucceeded,
@@ -119,6 +121,7 @@ pub enum ClipboardPreviewCloseReason {
     MainSurfaceClosing,
     ForegroundChanged,
     PointerOutside,
+    Escape,
     Command,
     WindowRequest,
     MainSurfaceDestroyed,
@@ -130,6 +133,7 @@ impl ClipboardPreviewCloseReason {
             Self::MainSurfaceClosing => "main_surface_closing",
             Self::ForegroundChanged => "foreground_changed",
             Self::PointerOutside => "pointer_outside",
+            Self::Escape => "escape",
             Self::Command => "command",
             Self::WindowRequest => "window_request",
             Self::MainSurfaceDestroyed => "main_surface_destroyed",
@@ -148,6 +152,7 @@ impl ClipboardSurfaceCloseReason {
             Self::FocusLost => "focused_false",
             Self::ForegroundChanged => "foreground_changed",
             Self::PointerOutside => "pointer_outside",
+            Self::Escape => "escape",
             Self::PreviewDestroyed => "preview_destroyed",
             Self::Command => "command",
             Self::InputSucceeded => "input_succeeded",
@@ -217,6 +222,10 @@ pub enum ClipboardSurfaceWindowError {
     ForegroundMonitor(#[from] ForegroundMonitorError),
     #[error(transparent)]
     PointerMonitor(#[from] PointerMonitorError),
+    #[error(transparent)]
+    KeyboardHook(#[from] KeyboardHookError),
+    #[error("application runtime is unavailable while showing the clipboard surface")]
+    ApplicationRuntimeUnavailable,
     #[cfg(windows)]
     #[error("Windows could not read the cursor position")]
     CursorPosition,
@@ -542,6 +551,13 @@ pub fn close<R: Runtime>(
         }
     }
     result?;
+    if let Some(runtime) = app.try_state::<ApplicationRuntime>() {
+        if let Err(error) = runtime.keyboard_hook().stop_surface_escape() {
+            eprintln!("failed to stop clipboard Escape capture after closing: {error}");
+        } else {
+            debug_qa::trace("surface Escape capture stopped");
+        }
+    }
     notify_state_or_log(app, CLIPBOARD_SURFACE_CLOSED_CHANGE);
     debug_qa::trace(format!("close success reason={}", reason.as_str()));
     Ok(())
@@ -565,9 +581,24 @@ fn start_surface_monitors<R: Runtime>(
     target_top_window: Option<usize>,
 ) -> Result<(), ClipboardSurfaceWindowError> {
     let internal_surface_roots = internal_surface_roots(app)?;
+    let runtime = app
+        .try_state::<ApplicationRuntime>()
+        .ok_or(ClipboardSurfaceWindowError::ApplicationRuntimeUnavailable)?;
+    let escape_app = app.clone();
+    let escape_generation = runtime
+        .keyboard_hook()
+        .register_surface_escape(move |generation| {
+            debug_qa::trace(format!(
+                "surface Escape captured generation={generation} source=WH_KEYBOARD_LL"
+            ));
+            queue_escape_surface_close(escape_app.clone());
+        })?;
+    debug_qa::trace(format!(
+        "surface Escape capture start generation={escape_generation}"
+    ));
     if let Some(target_top_window) = target_top_window {
         let dispatch_app = app.clone();
-        clipboard_surface_foreground::start(
+        if let Err(error) = clipboard_surface_foreground::start(
             target_top_window,
             internal_surface_roots.clone(),
             move || {
@@ -579,7 +610,12 @@ fn start_surface_monitors<R: Runtime>(
                     None,
                 );
             },
-        )?;
+        ) {
+            let _ = runtime
+                .keyboard_hook()
+                .unregister_surface_escape(escape_generation);
+            return Err(error.into());
+        }
     }
 
     let dispatch_app = app.clone();
@@ -595,6 +631,9 @@ fn start_surface_monitors<R: Runtime>(
         })
     {
         let _ = clipboard_surface_foreground::stop();
+        let _ = runtime
+            .keyboard_hook()
+            .unregister_surface_escape(escape_generation);
         return Err(error.into());
     }
     Ok(())
@@ -660,6 +699,39 @@ fn queue_external_surface_close<R: Runtime>(
         }
     }) {
         eprintln!("failed to queue clipboard surface close after {source}: {error}");
+    }
+}
+
+#[cfg(windows)]
+fn queue_escape_surface_close<R: Runtime>(dispatch_app: AppHandle<R>) {
+    let close_app = dispatch_app.clone();
+    if let Err(error) = dispatch_app.run_on_main_thread(move || {
+        let Some(runtime) = close_app.try_state::<ApplicationRuntime>() else {
+            return;
+        };
+        match preview_state(&close_app) {
+            Ok(preview) if preview.visible => {
+                if let Err(error) = close_preview(&close_app, ClipboardPreviewCloseReason::Escape) {
+                    eprintln!("failed to close clipboard preview after Escape: {error}");
+                }
+                return;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("failed to inspect clipboard preview after Escape: {error}");
+            }
+        }
+        if is_visible(&close_app) {
+            if let Err(error) = close(
+                &close_app,
+                runtime.surface(),
+                ClipboardSurfaceCloseReason::Escape,
+            ) {
+                eprintln!("failed to close clipboard surface after Escape: {error}");
+            }
+        }
+    }) {
+        eprintln!("failed to queue clipboard surface close after Escape: {error}");
     }
 }
 

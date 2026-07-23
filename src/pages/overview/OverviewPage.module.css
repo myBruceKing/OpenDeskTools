@@ -72,6 +72,22 @@
   margin-bottom: 6px;
 }
 
+.overviewDataState {
+  min-height: 120px;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  text-align: center;
+}
+
 .toolPanel {
   container-type: inline-size;
   height: 100%;

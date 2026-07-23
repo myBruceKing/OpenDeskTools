@@ -43,7 +43,7 @@ describe("production source boundary", () => {
       "todayTriggers: 128",
       "weekTriggers: 1248",
       "monthTriggers: 8653",
-      "savedMinutesThisMonth: 9120"
+      "savedSecondsThisMonth: 547200"
     ]) {
       expect(productionSource, marker).not.toContain(marker);
     }

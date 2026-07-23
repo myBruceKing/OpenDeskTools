@@ -41,7 +41,7 @@ describe("createOverviewViewModel", () => {
       todayTriggers: null,
       weekTriggers: null,
       monthTriggers: null,
-      savedMinutesThisMonth: null
+      savedSecondsThisMonth: null
     });
   });
 
@@ -99,6 +99,26 @@ describe("createOverviewViewModel", () => {
     expect(viewModel.hotkeys.find((hotkey) => hotkey.id === "clipboardPanel")).toEqual(
       expect.objectContaining({ id: "clipboardPanel", ...EMPTY_RUNTIME })
     );
+  });
+
+  it("keeps zero and persisted usage statistics as real values", () => {
+    const viewModel = createOverviewViewModel(
+      snapshot({
+        statistics: {
+          todayTriggers: 0,
+          weekTriggers: 4,
+          monthTriggers: 12,
+          savedSecondsThisMonth: 55
+        }
+      })
+    );
+
+    expect(viewModel.statistics).toEqual({
+      todayTriggers: 0,
+      weekTriggers: 4,
+      monthTriggers: 12,
+      savedSecondsThisMonth: 55
+    });
   });
 });
 

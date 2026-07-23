@@ -21,6 +21,7 @@ use infrastructure::tool_menu_surface_window::{self, TOOL_MENU_SURFACE_LABEL};
 use infrastructure::tray::{
     route_window_lifecycle, TrayLifecycle, WindowLifecycleInput, WindowLifecycleRoute,
 };
+use infrastructure::usage_statistics::UsageAction;
 use infrastructure::windowing::{configure_main_window, MAIN_WEBVIEW_LABEL};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -28,6 +29,7 @@ use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent, ShortcutState};
 
 const HOTKEY_ACTION_EVENT: &str = "hotkey://action";
 const CLIPBOARD_HISTORY_CHANGED_EVENT: &str = "clipboard://history-changed";
+const USAGE_STATISTICS_CHANGED_EVENT: &str = "usage://statistics-changed";
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -171,6 +173,7 @@ pub fn run() {
             if let Err(error) = runtime_state.autostart().sync_if_enabled() {
                 eprintln!("failed to reconcile the autostart command: {error}");
             }
+            runtime_state.mark_startup_ready();
             let autostart_launch =
                 infrastructure::autostart::is_autostart_launch(std::env::args_os());
             let start_minimized = runtime_state.start_minimized();
@@ -447,6 +450,9 @@ fn handle_clipboard_surface_window_event<R: Runtime>(
             }
         }
         tauri::WindowEvent::Destroyed => {
+            if let Err(error) = runtime.keyboard_hook().stop_surface_escape() {
+                eprintln!("failed to stop destroyed clipboard Escape capture: {error}");
+            }
             if let Err(error) = clipboard_surface_foreground::stop() {
                 eprintln!("failed to stop destroyed clipboard surface monitor: {error}");
             }
@@ -502,8 +508,11 @@ fn handle_global_shortcut<R: Runtime>(
     if action_id == HotkeyActionId::ClipboardOpenPanel
         && matches!(phase, HotkeyActionPhase::Pressed)
     {
-        if let Err(error) = clipboard_surface_controller::toggle_from_foreground(app, &runtime) {
-            eprintln!("failed to process clipboard surface hotkey request: {error}");
+        match clipboard_surface_controller::toggle_from_foreground(app, &runtime) {
+            Ok(()) => record_usage_success(app, &runtime, UsageAction::ClipboardPanel),
+            Err(error) => {
+                eprintln!("failed to process clipboard surface hotkey request: {error}");
+            }
         }
     }
     if action_id == HotkeyActionId::ClipboardQrConvert
@@ -516,8 +525,14 @@ fn handle_global_shortcut<R: Runtime>(
             HotkeyActionPhase::Pressed => show_tool_menu_surface(app, &runtime),
             HotkeyActionPhase::Released => release_tool_menu_surface(app, &runtime),
         };
-        if let Err(error) = result {
-            eprintln!("failed to process tool menu hotkey: {error}");
+        match result {
+            Ok(()) if matches!(phase, HotkeyActionPhase::Pressed) => {
+                record_usage_success(app, &runtime, UsageAction::ToolMenu);
+            }
+            Ok(()) => {}
+            Err(error) => {
+                eprintln!("failed to process tool menu hotkey: {error}");
+            }
         }
     }
     if !should_broadcast_hotkey_action(action_id) {
@@ -567,6 +582,7 @@ pub(crate) fn handle_forced_hotkey_event<R: Runtime>(
             disable_forced_hotkey_after_route_failure(app, event.generation, error.user_message());
             return;
         }
+        record_usage_success(app, &runtime, UsageAction::ClipboardPanel);
     }
     if action_id == HotkeyActionId::ClipboardQrConvert
         && matches!(phase, HotkeyActionPhase::Pressed)
@@ -585,6 +601,9 @@ pub(crate) fn handle_forced_hotkey_event<R: Runtime>(
                 format!("工具盘窗口操作失败：{error}"),
             );
             return;
+        }
+        if matches!(phase, HotkeyActionPhase::Pressed) {
+            record_usage_success(app, &runtime, UsageAction::ToolMenu);
         }
     }
     if !should_broadcast_hotkey_action(action_id) {
@@ -634,6 +653,24 @@ fn trigger_qr_conversion<R: Runtime>(app: &AppHandle<R>, _runtime: &ApplicationR
             eprintln!("failed to dispatch QR conversion feedback: {error}");
         }
     });
+}
+
+pub(crate) fn record_usage_success<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime: &ApplicationRuntime,
+    action: UsageAction,
+) {
+    match runtime.usage_statistics().record_success(action) {
+        Ok(()) => {
+            if let Err(error) = app.emit_to(MAIN_WEBVIEW_LABEL, USAGE_STATISTICS_CHANGED_EVENT, ())
+            {
+                eprintln!("failed to publish usage statistics change: {error}");
+            }
+        }
+        Err(error) => {
+            eprintln!("failed to record successful tool usage: {error}");
+        }
+    }
 }
 
 pub(crate) fn queue_forced_hotkey_event<R: Runtime>(app: &AppHandle<R>, event: RuntimeHotkeyEvent) {
@@ -829,6 +866,7 @@ mod tests {
             ClipboardSurfaceCloseReason::PointerOutside.as_str(),
             "pointer_outside"
         );
+        assert_eq!(ClipboardSurfaceCloseReason::Escape.as_str(), "escape");
         assert_eq!(
             ClipboardSurfaceCloseReason::PreviewDestroyed.as_str(),
             "preview_destroyed"

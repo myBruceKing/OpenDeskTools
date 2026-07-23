@@ -5,6 +5,7 @@ import {
 } from "./hotkeyModel";
 
 export type ServiceState = "running" | "starting" | "stopped" | "error" | "unknown";
+export type OverviewLoadState = "loading" | "ready" | "error";
 export type { HotkeyState };
 
 export type OverviewBackendHotkey = {
@@ -24,7 +25,7 @@ export type OverviewBackendSnapshot = {
     todayTriggers: number | null;
     weekTriggers: number | null;
     monthTriggers: number | null;
-    savedMinutesThisMonth: number | null;
+    savedSecondsThisMonth: number | null;
   } | null;
 };
 
@@ -49,7 +50,7 @@ export type OverviewViewModel = {
     todayTriggers: number | null;
     weekTriggers: number | null;
     monthTriggers: number | null;
-    savedMinutesThisMonth: number | null;
+    savedSecondsThisMonth: number | null;
   };
   sourceAvailable: boolean;
 };
@@ -70,7 +71,7 @@ const EMPTY_STATISTICS: OverviewViewModel["statistics"] = {
   todayTriggers: null,
   weekTriggers: null,
   monthTriggers: null,
-  savedMinutesThisMonth: null
+  savedSecondsThisMonth: null
 };
 
 export function createOverviewViewModel(
