@@ -4,6 +4,7 @@ mod infrastructure;
 use std::sync::Arc;
 
 use infrastructure::application::ApplicationRuntime;
+use infrastructure::clipboard_surface_controller;
 use infrastructure::clipboard_surface_foreground;
 use infrastructure::clipboard_surface_pointer;
 use infrastructure::clipboard_surface_window::{
@@ -20,14 +21,13 @@ use infrastructure::tool_menu_surface_window::{self, TOOL_MENU_SURFACE_LABEL};
 use infrastructure::tray::{
     route_window_lifecycle, TrayLifecycle, WindowLifecycleInput, WindowLifecycleRoute,
 };
-use infrastructure::windowing::configure_main_window;
+use infrastructure::windowing::{configure_main_window, MAIN_WEBVIEW_LABEL};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent, ShortcutState};
 
 const HOTKEY_ACTION_EVENT: &str = "hotkey://action";
 const CLIPBOARD_HISTORY_CHANGED_EVENT: &str = "clipboard://history-changed";
-const MAIN_WEBVIEW_LABEL: &str = "main";
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -72,38 +72,6 @@ pub(crate) fn clipboard_history_event_sink<R: Runtime>(
             }
         }
     })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClipboardSurfaceRequest {
-    Toggle,
-    #[cfg(debug_assertions)]
-    Open,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClipboardSurfaceRequestSource {
-    OrdinaryHotkey,
-    #[cfg(debug_assertions)]
-    DebugQa,
-}
-
-impl ClipboardSurfaceRequestSource {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::OrdinaryHotkey => "ordinary_hotkey",
-            #[cfg(debug_assertions)]
-            Self::DebugQa => "debug_qa",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClipboardSurfaceRequestRoute {
-    Open,
-    #[cfg(debug_assertions)]
-    KeepOpen,
-    Close(ClipboardSurfaceCloseReason),
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -534,12 +502,7 @@ fn handle_global_shortcut<R: Runtime>(
     if action_id == HotkeyActionId::ClipboardOpenPanel
         && matches!(phase, HotkeyActionPhase::Pressed)
     {
-        if let Err(error) = request_clipboard_surface_from_foreground(
-            app,
-            &runtime,
-            ClipboardSurfaceRequest::Toggle,
-            ClipboardSurfaceRequestSource::OrdinaryHotkey,
-        ) {
+        if let Err(error) = clipboard_surface_controller::toggle_from_foreground(app, &runtime) {
             eprintln!("failed to process clipboard surface hotkey request: {error}");
         }
     }
@@ -594,60 +557,15 @@ pub(crate) fn handle_forced_hotkey_event<R: Runtime>(
     if action_id == HotkeyActionId::ClipboardOpenPanel
         && matches!(phase, HotkeyActionPhase::Pressed)
     {
-        if clipboard_surface_window::is_visible(app) {
-            if let Err(error) = clipboard_surface_window::close(
-                app,
-                runtime.surface(),
-                ClipboardSurfaceCloseReason::ForcedHotkeyToggle,
-            ) {
-                eprintln!("failed to toggle the forced clipboard surface closed: {error}");
-                disable_forced_hotkey_after_route_failure(
-                    app,
-                    event.generation,
-                    format!("关闭剪贴板面板失败：{error}"),
-                );
-                return;
-            }
-        } else {
-            let candidate = match (
-                event.foreground_window,
-                event.foreground_process_id,
-                app.get_webview_window(MAIN_WEBVIEW_LABEL),
-            ) {
-                (Some(candidate), Some(candidate_pid), Some(main)) => {
-                    #[cfg(windows)]
-                    let own_window = main.hwnd().ok().map(|hwnd| hwnd.0 as usize);
-                    #[cfg(not(windows))]
-                    let own_window = Some(0);
-                    own_window.map(|own_window| (candidate, candidate_pid, own_window))
-                }
-                _ => None,
-            };
-            let captured = candidate.is_some_and(|(candidate, candidate_pid, own_window)| {
-                runtime
-                    .surface()
-                    .capture_external_candidate(candidate, candidate_pid, own_window)
-                    .is_ok()
-            });
-            if !captured {
-                if let Err(error) = runtime.surface().activate_without_target() {
-                    disable_forced_hotkey_after_route_failure(
-                        app,
-                        event.generation,
-                        format!("初始化剪贴板面板失败：{error}"),
-                    );
-                    return;
-                }
-            }
-            if let Err(error) = show_clipboard_surface(app, &runtime, "forced_hotkey") {
-                eprintln!("failed to show forced clipboard surface: {error}");
-                disable_forced_hotkey_after_route_failure(
-                    app,
-                    event.generation,
-                    format!("显示剪贴板面板失败：{error}"),
-                );
-                return;
-            }
+        if let Err(error) = clipboard_surface_controller::toggle_from_forced_candidate(
+            app,
+            &runtime,
+            event.foreground_window,
+            event.foreground_process_id,
+        ) {
+            eprintln!("failed to process forced clipboard surface toggle: {error}");
+            disable_forced_hotkey_after_route_failure(app, event.generation, error.user_message());
+            return;
         }
     }
     if action_id == HotkeyActionId::ClipboardQrConvert
@@ -776,116 +694,6 @@ fn disable_forced_hotkey_after_route_failure<R: Runtime>(
     }
 }
 
-fn clipboard_surface_request_route(
-    visible: bool,
-    request: ClipboardSurfaceRequest,
-    source: ClipboardSurfaceRequestSource,
-) -> ClipboardSurfaceRequestRoute {
-    match (visible, request) {
-        (true, ClipboardSurfaceRequest::Toggle) => {
-            ClipboardSurfaceRequestRoute::Close(match source {
-                ClipboardSurfaceRequestSource::OrdinaryHotkey => {
-                    ClipboardSurfaceCloseReason::HotkeyToggle
-                }
-                #[cfg(debug_assertions)]
-                ClipboardSurfaceRequestSource::DebugQa => ClipboardSurfaceCloseReason::DebugQaReset,
-            })
-        }
-        #[cfg(debug_assertions)]
-        (true, ClipboardSurfaceRequest::Open) => ClipboardSurfaceRequestRoute::KeepOpen,
-        (false, _) => ClipboardSurfaceRequestRoute::Open,
-    }
-}
-
-fn request_clipboard_surface_from_foreground<R: Runtime>(
-    app: &AppHandle<R>,
-    runtime: &ApplicationRuntime,
-    request: ClipboardSurfaceRequest,
-    source: ClipboardSurfaceRequestSource,
-) -> Result<(), String> {
-    let visible = clipboard_surface_window::is_visible(app);
-    debug_qa::trace(format!(
-        "surface request source={} request={request:?} visible_before={visible}",
-        source.as_str()
-    ));
-    match clipboard_surface_request_route(visible, request, source) {
-        ClipboardSurfaceRequestRoute::Close(reason) => {
-            return clipboard_surface_window::close(app, runtime.surface(), reason)
-                .map_err(|error| error.to_string());
-        }
-        #[cfg(debug_assertions)]
-        ClipboardSurfaceRequestRoute::KeepOpen => {
-            debug_qa::trace(format!(
-                "surface request source={} kept existing visible surface",
-                source.as_str()
-            ));
-            return Ok(());
-        }
-        ClipboardSurfaceRequestRoute::Open => {}
-    }
-
-    let main_window = app
-        .get_webview_window(MAIN_WEBVIEW_LABEL)
-        .ok_or_else(|| "main window is unavailable".to_owned())?;
-    #[cfg(windows)]
-    let owner_window = main_window
-        .hwnd()
-        .map(|handle| handle.0 as usize)
-        .map_err(|error| format!("main HWND is unavailable: {error}"))?;
-    #[cfg(not(windows))]
-    let owner_window = {
-        let _ = main_window;
-        return Err("native clipboard surface is unavailable".to_owned());
-    };
-
-    let capture_result = runtime.surface().capture_external_target(owner_window);
-    if let Err(error) = &capture_result {
-        debug_qa::trace(format!(
-            "target capture unavailable source={} error={error}",
-            source.as_str()
-        ));
-        runtime
-            .surface()
-            .activate_without_target()
-            .map_err(|fallback| {
-                format!("target capture failed: {error}; fallback failed: {fallback}")
-            })?;
-    }
-    debug_qa::trace(format!(
-        "target captured source={} target_top={:?} input_available={}",
-        source.as_str(),
-        runtime.surface().target_top_window(),
-        runtime.surface().input_available()
-    ));
-    show_clipboard_surface(app, runtime, source.as_str())
-}
-
-fn show_clipboard_surface<R: Runtime>(
-    app: &AppHandle<R>,
-    runtime: &ApplicationRuntime,
-    source: &str,
-) -> Result<(), String> {
-    let result = clipboard_surface_window::prepared_main(app)
-        .and_then(|window| clipboard_surface_window::show(&window, runtime.surface()));
-    match result {
-        Ok(()) => {
-            notify_clipboard_surface_opened(app);
-            debug_qa::trace(format!(
-                "show success source={source} visible_after={}",
-                clipboard_surface_window::is_visible(app)
-            ));
-            Ok(())
-        }
-        Err(error) => {
-            let clear_result = runtime.surface().clear();
-            debug_qa::trace(format!(
-                "show failure source={source} error={error} clear_result={clear_result:?}"
-            ));
-            Err(error.to_string())
-        }
-    }
-}
-
 #[cfg(debug_assertions)]
 fn schedule_debug_qa<R: Runtime>(app: &AppHandle<R>, options: DebugQaOptions) {
     let Some(delay) = options.open_clipboard_surface_after else {
@@ -908,12 +716,9 @@ fn schedule_debug_qa<R: Runtime>(app: &AppHandle<R>, options: DebugQaOptions) {
                     debug_qa::trace("deterministic open failed: runtime state unavailable");
                     return;
                 };
-                if let Err(error) = request_clipboard_surface_from_foreground(
-                    &request_app,
-                    &runtime,
-                    ClipboardSurfaceRequest::Open,
-                    ClipboardSurfaceRequestSource::DebugQa,
-                ) {
+                if let Err(error) =
+                    clipboard_surface_controller::open_from_foreground(&request_app, &runtime)
+                {
                     debug_qa::trace(format!("deterministic open failed: {error}"));
                 }
             }) {
@@ -925,28 +730,8 @@ fn schedule_debug_qa<R: Runtime>(app: &AppHandle<R>, options: DebugQaOptions) {
     }
 }
 
-fn notify_clipboard_surface_opened<R: Runtime>(app: &AppHandle<R>) {
-    clipboard_surface_window::notify_opened(app);
-}
-
 fn should_broadcast_hotkey_action(action_id: HotkeyActionId) -> bool {
     action_id != HotkeyActionId::ClipboardOpenPanel
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClipboardSurfaceOpenRoute {
-    ShowWithInput,
-    ShowBrowseOnly,
-}
-
-#[cfg(test)]
-fn clipboard_surface_open_route(target_captured: bool) -> ClipboardSurfaceOpenRoute {
-    if target_captured {
-        ClipboardSurfaceOpenRoute::ShowWithInput
-    } else {
-        ClipboardSurfaceOpenRoute::ShowBrowseOnly
-    }
 }
 
 #[cfg(test)]
@@ -1011,61 +796,6 @@ mod tests {
         ] {
             assert!(should_broadcast_hotkey_action(action));
         }
-    }
-
-    #[test]
-    fn clipboard_surface_always_opens_and_only_external_target_enables_input() {
-        // Main/own foreground and absent HWND/PID both fail target capture but still
-        // open a browse/copy-capable surface. A validated external target enables input.
-        assert_eq!(
-            clipboard_surface_open_route(false),
-            ClipboardSurfaceOpenRoute::ShowBrowseOnly
-        );
-        assert_eq!(
-            clipboard_surface_open_route(false),
-            ClipboardSurfaceOpenRoute::ShowBrowseOnly
-        );
-        assert_eq!(
-            clipboard_surface_open_route(true),
-            ClipboardSurfaceOpenRoute::ShowWithInput
-        );
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn ordinary_toggle_and_debug_open_share_the_same_surface_request_router() {
-        assert_eq!(
-            clipboard_surface_request_route(
-                false,
-                ClipboardSurfaceRequest::Toggle,
-                ClipboardSurfaceRequestSource::OrdinaryHotkey,
-            ),
-            ClipboardSurfaceRequestRoute::Open
-        );
-        assert_eq!(
-            clipboard_surface_request_route(
-                true,
-                ClipboardSurfaceRequest::Toggle,
-                ClipboardSurfaceRequestSource::OrdinaryHotkey,
-            ),
-            ClipboardSurfaceRequestRoute::Close(ClipboardSurfaceCloseReason::HotkeyToggle)
-        );
-        assert_eq!(
-            clipboard_surface_request_route(
-                false,
-                ClipboardSurfaceRequest::Open,
-                ClipboardSurfaceRequestSource::DebugQa,
-            ),
-            ClipboardSurfaceRequestRoute::Open
-        );
-        assert_eq!(
-            clipboard_surface_request_route(
-                true,
-                ClipboardSurfaceRequest::Open,
-                ClipboardSurfaceRequestSource::DebugQa,
-            ),
-            ClipboardSurfaceRequestRoute::KeepOpen
-        );
     }
 
     #[test]

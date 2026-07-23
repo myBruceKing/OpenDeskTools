@@ -4,6 +4,7 @@ pub mod clipboard;
 pub mod clipboard_input;
 pub mod clipboard_listener;
 pub mod clipboard_settings;
+pub mod clipboard_surface_controller;
 pub mod clipboard_surface_foreground;
 pub mod clipboard_surface_pointer;
 pub mod clipboard_surface_window;

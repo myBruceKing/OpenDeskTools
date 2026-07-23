@@ -1,5 +1,6 @@
 use tauri::{LogicalSize, Runtime, WebviewWindow};
 
+pub const MAIN_WEBVIEW_LABEL: &str = "main";
 const DEFAULT_WIDTH: u32 = 1080;
 const DEFAULT_HEIGHT: u32 = 720;
 const MIN_WIDTH: u32 = 960;
