@@ -4,13 +4,7 @@ import {
   parseQrConversionFeedback,
   type QrConversionFeedback
 } from "./qrClient";
-import {
-  createThemeRootPresentation,
-  useDocumentTheme,
-  useSystemThemePreferences
-} from "./themeRuntime";
-import { useDesktopWebViewGuards } from "./useDesktopWebViewGuards";
-import { useThemeController } from "./useThemeController";
+import { useWindowSurfaceRuntime } from "./useWindowSurfaceRuntime";
 
 declare global {
   interface Window {
@@ -19,18 +13,10 @@ declare global {
 }
 
 export function QrToastSurfaceRoot() {
-  const themeController = useThemeController();
-  const { systemDark, systemReducedMotion } = useSystemThemePreferences();
-  const theme = createThemeRootPresentation(
-    themeController.state.current,
-    systemDark,
-    systemReducedMotion
-  );
   const [feedback, setFeedback] = useState<QrConversionFeedback | null>(() =>
     parseQrConversionFeedback(window.__OPENDESK_QR_FEEDBACK)
   );
-  useDocumentTheme(theme);
-  useDesktopWebViewGuards();
+  useWindowSurfaceRuntime();
 
   useEffect(() => {
     const sync = () => {
@@ -42,5 +28,5 @@ export function QrToastSurfaceRoot() {
     return () => window.removeEventListener("opendesk-qr-feedback", sync);
   }, []);
 
-  return <QrConversionToast feedback={feedback} />;
+  return <QrConversionToast feedback={feedback} presentation="surface" />;
 }

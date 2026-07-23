@@ -6,14 +6,8 @@ import {
   clipboardHistoryPreviewLabel
 } from "../components/patterns/ClipboardHistoryItem";
 import { useClipboardImagePreview } from "../pages/clipboard/useClipboardImagePreview";
-import {
-  createThemeRootPresentation,
-  useDocumentTheme,
-  useSystemThemePreferences
-} from "./themeRuntime";
 import { useClipboardController } from "./useClipboardController";
-import { useDesktopWebViewGuards } from "./useDesktopWebViewGuards";
-import { useThemeController } from "./useThemeController";
+import { useWindowSurfaceRuntime } from "./useWindowSurfaceRuntime";
 import { useWindowSurfaceMetricsTrace } from "./windowSurfaceMetrics";
 import styles from "./ClipboardPreviewSurfaceRoot.module.css";
 
@@ -32,16 +26,8 @@ const INITIAL_PREVIEW_STATE: PreviewSelectionState = {
 export function ClipboardPreviewSurfaceRoot() {
   const windowRootRef = useRef<HTMLDivElement>(null);
   const clipboard = useClipboardController(false);
-  const themeController = useThemeController();
-  const { systemDark, systemReducedMotion } = useSystemThemePreferences();
   const [preview, setPreview] = useState(INITIAL_PREVIEW_STATE);
-  const theme = createThemeRootPresentation(
-    themeController.state.current,
-    systemDark,
-    systemReducedMotion
-  );
-  useDocumentTheme(theme);
-  useDesktopWebViewGuards();
+  const theme = useWindowSurfaceRuntime();
   useClipboardSurfaceUnderlayColor(theme.resolvedTheme, clipboardClient.setSurfaceUnderlayColor);
   useWindowSurfaceMetricsTrace("clipboard-preview", windowRootRef, clipboardClient.tracePreviewDebug);
 

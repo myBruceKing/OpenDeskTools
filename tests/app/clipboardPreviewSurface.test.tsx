@@ -90,6 +90,7 @@ const previewState: ClipboardControllerState = {
 
 const previewCss = readFileSync("src/app/ClipboardPreviewSurfaceRoot.module.css", "utf8");
 const surfaceRootCss = readFileSync("src/app/ClipboardSurfaceRoot.module.css", "utf8");
+const sharedSurfaceRootCss = readFileSync("src/styles/windowSurfaces.module.css", "utf8");
 const globalCss = readFileSync("src/styles/global.css", "utf8");
 const mainSource = readFileSync("src/main.tsx", "utf8");
 
@@ -186,12 +187,16 @@ describe("ClipboardPreviewSurfaceRoot", () => {
 
   it("uses one border-box transparent root and one symmetric tokenized rounded border", async () => {
     await render();
-    const rootRule = previewCss.match(/\.windowRoot\s*\{[^}]*\}/)?.[0] ?? "";
+    const localRootRule = previewCss.match(/\.windowRoot\s*\{[^}]*\}/)?.[0] ?? "";
+    const rootRule = sharedSurfaceRootCss.match(/\.windowRoot\s*\{[^}]*\}/)?.[0] ?? "";
+    const underlayRule = sharedSurfaceRootCss.match(/\.underlayWindowRoot\s*\{[^}]*\}/)?.[0] ?? "";
     const surfaceRule = previewCss.match(/\.previewSurface\s*\{[^}]*\}/)?.[0] ?? "";
     const sharedSurfaceRule = globalCss.match(/\[data-window-border-layer="true"\]\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(localRootRule).toMatch(/composes:\s*underlayWindowRoot from "\.\.\/styles\/windowSurfaces\.module\.css"/);
     expect(rootRule).toMatch(/position:\s*relative/);
     expect(rootRule).toMatch(/box-sizing:\s*border-box/);
-    expect(rootRule).toMatch(/background:\s*var\(--border-default\);/);
+    expect(underlayRule).toMatch(/composes:\s*windowRoot/);
+    expect(underlayRule).toMatch(/background:\s*var\(--border-default\);/);
     expect(rootRule).not.toMatch(/border:|clip-path:/);
     expect(surfaceRule).toMatch(/position:\s*absolute/);
     expect(surfaceRule).toMatch(/inset:\s*0/);

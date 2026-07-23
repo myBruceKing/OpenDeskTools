@@ -288,10 +288,16 @@ describe("ClipboardSurface", () => {
     expect(css).toMatch(/\.row\s*\{[\s\S]*user-select:\s*none/);
     expect(css).toMatch(/\.history\s*\{[\s\S]*overflow-y:\s*auto/);
     const rootCss = readFileSync("src/app/ClipboardSurfaceRoot.module.css", "utf8");
-    const rootRule = rootCss.match(/\.windowRoot\s*\{[^}]*\}/)?.[0] ?? "";
+    const sharedRootCss = readFileSync("src/styles/windowSurfaces.module.css", "utf8");
+    const rootRule = sharedRootCss.match(/\.windowRoot\s*\{[^}]*\}/)?.[0] ?? "";
+    const underlayRule = sharedRootCss.match(/\.underlayWindowRoot\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(rootCss).toMatch(/composes:\s*underlayWindowRoot from "\.\.\/styles\/windowSurfaces\.module\.css"/);
     expect(rootRule).toMatch(/position:\s*relative/);
     expect(rootRule).toMatch(/box-sizing:\s*border-box/);
-    expect(rootCss).toMatch(/\.windowRoot\s*\{[\s\S]*width:\s*100vw;[\s\S]*height:\s*100vh;[\s\S]*background:\s*var\(--border-default\);/);
+    expect(rootRule).toMatch(/width:\s*100vw/);
+    expect(rootRule).toMatch(/height:\s*100vh/);
+    expect(underlayRule).toMatch(/composes:\s*windowRoot/);
+    expect(underlayRule).toMatch(/background:\s*var\(--border-default\)/);
     expect(rootCss).not.toMatch(/padding:\s*1px|clip-path|\.windowRoot\s*>\s*section/);
     expect(rootRule).not.toMatch(/border:|clip-path/);
     expect(globalCss).toMatch(/html\[data-window-surface="clipboard"\][\s\S]*#root\s*\{\s*background:\s*var\(--border-default\);/);

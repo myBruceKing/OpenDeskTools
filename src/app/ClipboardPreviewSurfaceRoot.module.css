@@ -1,11 +1,5 @@
 .windowRoot {
-  position: relative;
-  box-sizing: border-box;
-  width: 100vw;
-  height: 100vh;
-  min-width: 0;
-  overflow: hidden;
-  background: var(--border-default);
+  composes: underlayWindowRoot from "../styles/windowSurfaces.module.css";
 }
 
 .previewSurface {

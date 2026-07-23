@@ -13,8 +13,8 @@ use super::surface_window_animation;
 pub const QR_TOAST_SURFACE_LABEL: &str = "qr-toast-surface";
 pub const QR_CONVERSION_EVENT: &str = "qr://conversion-result";
 const QR_TOAST_SURFACE_ROUTE: &str = "index.html#qr-toast-surface";
-const QR_TOAST_WIDTH: f64 = 400.0;
-const QR_TOAST_HEIGHT: f64 = 96.0;
+const QR_TOAST_WIDTH: f64 = 390.0;
+const QR_TOAST_HEIGHT: f64 = 88.0;
 const QR_TOAST_EDGE_GAP: i32 = 16;
 const QR_TOAST_SUCCESS_DWELL_MS: u64 = 3_200;
 const QR_TOAST_ERROR_DWELL_MS: u64 = 4_800;
@@ -63,7 +63,7 @@ pub fn show<R: Runtime>(app: &AppHandle<R>, payload: &Value) -> Result<(), QrToa
     let window = app
         .get_webview_window(QR_TOAST_SURFACE_LABEL)
         .ok_or(QrToastSurfaceError::NotPrepared)?;
-    place_at_primary_work_area_bottom_right(&window)?;
+    place_at_primary_work_area_top_right(&window)?;
     surface_window_animation::prepare_show(&window);
     publish_feedback(&window, payload)?;
     window.show()?;
@@ -115,7 +115,7 @@ fn publish_feedback<R: Runtime>(
     Ok(())
 }
 
-fn place_at_primary_work_area_bottom_right<R: Runtime>(
+fn place_at_primary_work_area_top_right<R: Runtime>(
     window: &WebviewWindow<R>,
 ) -> Result<(), QrToastSurfaceError> {
     let monitor = window
@@ -125,17 +125,36 @@ fn place_at_primary_work_area_bottom_right<R: Runtime>(
     let size = window.outer_size()?;
     let width = i32::try_from(size.width).map_err(|_| QrToastSurfaceError::InvalidDimensions)?;
     let height = i32::try_from(size.height).map_err(|_| QrToastSurfaceError::InvalidDimensions)?;
-    let x = i64::from(work.position.x) + i64::from(work.size.width)
-        - i64::from(width)
-        - i64::from(QR_TOAST_EDGE_GAP);
-    let y = i64::from(work.position.y) + i64::from(work.size.height)
-        - i64::from(height)
-        - i64::from(QR_TOAST_EDGE_GAP);
-    window.set_position(PhysicalPosition::new(
-        i32::try_from(x).map_err(|_| QrToastSurfaceError::InvalidDimensions)?,
-        i32::try_from(y).map_err(|_| QrToastSurfaceError::InvalidDimensions)?,
-    ))?;
+    let (x, y) = top_right_position(
+        (work.position.x, work.position.y),
+        (work.size.width, work.size.height),
+        (width, height),
+        QR_TOAST_EDGE_GAP,
+    )
+    .ok_or(QrToastSurfaceError::InvalidDimensions)?;
+    window.set_position(PhysicalPosition::new(x, y))?;
     Ok(())
+}
+
+fn top_right_position(
+    work_origin: (i32, i32),
+    work_size: (u32, u32),
+    surface_size: (i32, i32),
+    gap: i32,
+) -> Option<(i32, i32)> {
+    if surface_size.0 <= 0
+        || surface_size.1 <= 0
+        || gap < 0
+        || i64::from(surface_size.0) + i64::from(gap) > i64::from(work_size.0)
+        || i64::from(surface_size.1) + i64::from(gap) > i64::from(work_size.1)
+    {
+        return None;
+    }
+    let x = i64::from(work_origin.0) + i64::from(work_size.0)
+        - i64::from(surface_size.0)
+        - i64::from(gap);
+    let y = i64::from(work_origin.1) + i64::from(gap);
+    Some((i32::try_from(x).ok()?, i32::try_from(y).ok()?))
 }
 
 #[cfg(test)]
@@ -152,5 +171,17 @@ mod tests {
             .expect("default capability should declare windows")
             .iter()
             .any(|label| label.as_str() == Some(QR_TOAST_SURFACE_LABEL)));
+    }
+
+    #[test]
+    fn enlarged_surface_is_placed_at_the_top_right_of_the_work_area() {
+        assert_eq!(
+            top_right_position((0, 0), (1920, 1040), (390, 88), 16),
+            Some((1514, 16))
+        );
+        assert_eq!(
+            top_right_position((-1920, -40), (1920, 1080), (390, 88), 16),
+            Some((-406, -24))
+        );
     }
 }

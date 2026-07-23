@@ -4,13 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ToolMenuPreview, type ToolMenuPreviewItem } from "../components/patterns/ToolMenuPreview";
 import { quickLaunchClient, type QuickLaunchSnapshotPayload, type ToolMenuLayout } from "./quickLaunchClient";
 import { toToolMenuPreviewItems, useQuickLaunchViewModel } from "./quickLaunchModel";
-import {
-  createThemeRootPresentation,
-  useDocumentTheme,
-  useSystemThemePreferences
-} from "./themeRuntime";
-import { useDesktopWebViewGuards } from "./useDesktopWebViewGuards";
-import { useThemeController } from "./useThemeController";
+import { useWindowSurfaceRuntime } from "./useWindowSurfaceRuntime";
 import styles from "./ToolMenuSurfaceRoot.module.css";
 
 declare global {
@@ -26,13 +20,9 @@ function nativeToolMenuLayout(): ToolMenuLayout {
 
 export function ToolMenuSurfaceRoot() {
   const quickLaunch = useQuickLaunchViewModel();
-  const themeController = useThemeController();
-  const { systemDark, systemReducedMotion } = useSystemThemePreferences();
   const [message, setMessage] = useState<string | null>(null);
   const [nativeLayout, setNativeLayout] = useState<ToolMenuLayout>(nativeToolMenuLayout);
-  const theme = createThemeRootPresentation(themeController.state.current, systemDark, systemReducedMotion);
-  useDocumentTheme(theme);
-  useDesktopWebViewGuards();
+  useWindowSurfaceRuntime();
 
   useEffect(() => {
     let active = true;

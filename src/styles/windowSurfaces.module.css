@@ -1,0 +1,25 @@
+.windowRoot {
+  position: relative;
+  box-sizing: border-box;
+  width: 100vw;
+  height: 100vh;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.underlayWindowRoot {
+  composes: windowRoot;
+  background: var(--border-default);
+}
+
+.transparentWindowRoot {
+  composes: windowRoot;
+  background: transparent;
+}
+
+.centeredTransparentWindowRoot {
+  composes: transparentWindowRoot;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+}

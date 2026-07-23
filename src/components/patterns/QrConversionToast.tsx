@@ -5,9 +5,13 @@ import styles from "./QrConversionToast.module.css";
 
 type QrConversionToastProps = {
   feedback?: QrConversionFeedback | null;
+  presentation?: "overlay" | "surface";
 };
 
-export function QrConversionToast({ feedback: controlledFeedback }: QrConversionToastProps) {
+export function QrConversionToast({
+  feedback: controlledFeedback,
+  presentation = "overlay"
+}: QrConversionToastProps) {
   const [localFeedback, setLocalFeedback] = useState<QrConversionFeedback | null>(null);
   const controlled = controlledFeedback !== undefined;
   const feedback = controlled ? controlledFeedback : localFeedback;
@@ -39,7 +43,11 @@ export function QrConversionToast({ feedback: controlledFeedback }: QrConversion
 
   if (!feedback) return null;
   return (
-    <div className={styles.toast} role={feedback.success ? "status" : "alert"} aria-live="polite">
+    <div
+      className={`${styles.toast} ${presentation === "surface" ? styles.surfaceToast : ""}`}
+      role={feedback.success ? "status" : "alert"}
+      aria-live="polite"
+    >
       {feedback.success ? <CheckmarkCircle20Regular aria-hidden="true" /> : <Warning20Regular aria-hidden="true" />}
       <span>{feedback.message}</span>
     </div>

@@ -2,29 +2,15 @@ import { useRef } from "react";
 import { ClipboardSurface } from "../surfaces/clipboard/ClipboardSurface";
 import { clipboardClient } from "./clipboardClient";
 import { useClipboardSurfaceUnderlayColor } from "./clipboardSurfaceUnderlay";
-import {
-  createThemeRootPresentation,
-  useDocumentTheme,
-  useSystemThemePreferences
-} from "./themeRuntime";
 import { useClipboardController } from "./useClipboardController";
-import { useDesktopWebViewGuards } from "./useDesktopWebViewGuards";
-import { useThemeController } from "./useThemeController";
+import { useWindowSurfaceRuntime } from "./useWindowSurfaceRuntime";
 import { useWindowSurfaceMetricsTrace } from "./windowSurfaceMetrics";
 import styles from "./ClipboardSurfaceRoot.module.css";
 
 export function ClipboardSurfaceRoot() {
   const windowRootRef = useRef<HTMLDivElement>(null);
   const clipboard = useClipboardController(true);
-  const themeController = useThemeController();
-  const { systemDark, systemReducedMotion } = useSystemThemePreferences();
-  const theme = createThemeRootPresentation(
-    themeController.state.current,
-    systemDark,
-    systemReducedMotion
-  );
-  useDocumentTheme(theme);
-  useDesktopWebViewGuards();
+  const theme = useWindowSurfaceRuntime();
   useClipboardSurfaceUnderlayColor(theme.resolvedTheme, clipboardClient.setSurfaceUnderlayColor);
   useWindowSurfaceMetricsTrace("clipboard", windowRootRef, clipboardClient.tracePreviewDebug);
 
