@@ -253,6 +253,10 @@ fn map_error(error: QuickLaunchError) -> QuickLaunchCommandError {
             "所选文件不是可启动的程序或快捷方式。",
         ),
         QuickLaunchError::AlreadyPinned => ("quick_launch_already_pinned", "该程序已固定。"),
+        QuickLaunchError::CapacityReached => (
+            "quick_launch_capacity_reached",
+            "固定程序已达到 48 个上限；请先移除不再使用的程序。",
+        ),
         QuickLaunchError::NotPinned => ("quick_launch_not_pinned", "该程序已不在固定列表中。"),
         QuickLaunchError::Unavailable => ("quick_launch_unavailable", "该程序或图标当前不可用。"),
         QuickLaunchError::LaunchFailed => (
@@ -261,9 +265,14 @@ fn map_error(error: QuickLaunchError) -> QuickLaunchCommandError {
         ),
         QuickLaunchError::Storage(_)
         | QuickLaunchError::Icon(_)
-        | QuickLaunchError::DiscoveryState => (
+        | QuickLaunchError::DiscoveryState
+        | QuickLaunchError::StateLockPoisoned => (
             "quick_launch_operation_failed",
             "快速启动操作未完成，请重试。",
+        ),
+        QuickLaunchError::CorruptSettings(_) => (
+            "quick_launch_settings_corrupt",
+            "快速启动配置已损坏，应用未覆盖原始数据；请从备份恢复或重置配置。",
         ),
     };
     QuickLaunchCommandError {

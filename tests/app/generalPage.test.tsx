@@ -122,7 +122,7 @@ describe("GeneralPage autostart", () => {
     ).toBe("false");
   });
 
-  it("opens native path selection then presents the restart requirement after migration", async () => {
+  it("opens native path selection then reports the scheduled safe restart", async () => {
     mocks.load.mockResolvedValue(snapshot());
     mocks.selectAndMigrateDataDirectory.mockResolvedValue({
       dataDirectory: "D:\\OpenDeskToolsData",
@@ -137,7 +137,7 @@ describe("GeneralPage autostart", () => {
     await act(async () => chooseButton.click());
 
     expect(mocks.selectAndMigrateDataDirectory).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain("请退出并重新启动后生效");
+    expect(container.textContent).toContain("应用正在安全重启");
   });
 
   it("surfaces a failure without flipping the switch", async () => {

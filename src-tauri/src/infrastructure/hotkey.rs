@@ -596,6 +596,8 @@ pub enum HotkeyError {
     RevisionConflict { expected: u64, actual: u64 },
     #[error("hotkey revision overflow")]
     RevisionOverflow,
+    #[error("hotkey action availability must be configured before runtime registration")]
+    AvailabilityAlreadyReconciled,
     #[error(transparent)]
     Validation(#[from] HotkeyValidationError),
 }
@@ -662,7 +664,9 @@ impl HotkeyManager {
             .map(|preference| {
                 let action_available = matches!(
                     preference.action_id,
-                    HotkeyActionId::ClipboardOpenPanel | HotkeyActionId::LauncherOpen
+                    HotkeyActionId::ClipboardQrConvert
+                        | HotkeyActionId::ClipboardOpenPanel
+                        | HotkeyActionId::LauncherOpen
                 );
                 build_registration(preference, action_available)
             })
@@ -682,6 +686,31 @@ impl HotkeyManager {
             .lock()
             .map_err(|_| HotkeyError::StateLockPoisoned)?;
         Ok(snapshot_from_state(&state))
+    }
+
+    pub fn set_initial_action_available(
+        &self,
+        action_id: HotkeyActionId,
+        action_available: bool,
+    ) -> Result<(), HotkeyError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| HotkeyError::StateLockPoisoned)?;
+        if state
+            .registrations
+            .iter()
+            .any(|entry| entry.token.is_some())
+        {
+            return Err(HotkeyError::AvailabilityAlreadyReconciled);
+        }
+        let entry = state
+            .registrations
+            .iter_mut()
+            .find(|entry| entry.preference.action_id == action_id)
+            .ok_or_else(|| HotkeyValidationError::UnknownAction(action_id.to_string()))?;
+        entry.action_available = action_available;
+        Ok(())
     }
 
     pub fn update_binding(
@@ -1560,7 +1589,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_persist_with_launcher_and_clipboard_panel_available() {
+    fn defaults_persist_with_qr_launcher_and_clipboard_panel_available() {
         let temp = tempdir().unwrap();
         let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
         let manager = HotkeyManager::initialize(Arc::clone(&storage)).unwrap();
@@ -1582,14 +1611,19 @@ mod tests {
                 .map(|entry| entry.action_id)
                 .collect::<Vec<_>>(),
             vec![
+                HotkeyActionId::ClipboardQrConvert,
                 HotkeyActionId::LauncherOpen,
                 HotkeyActionId::ClipboardOpenPanel
             ]
         );
-        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 1);
+        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 2);
         assert_eq!(
             manager.registered_action_for_shortcut(&shortcut("Ctrl+Shift+Space")),
             Some((HotkeyActionId::LauncherOpen, 0))
+        );
+        assert_eq!(
+            manager.registered_action_for_shortcut(&shortcut("F4")),
+            Some((HotkeyActionId::ClipboardQrConvert, 0))
         );
         assert!(storage.read_setting(HOTKEY_SNAPSHOT_KEY).unwrap().is_some());
         assert_eq!(
@@ -1623,9 +1657,9 @@ mod tests {
 
         assert_eq!(updated.revision, 1);
         assert_eq!(updated.actions[0].binding, "Ctrl+Shift+S");
-        // The launcher is now a separately available default registration;
+        // Launcher and QR conversion are separately available defaults;
         // changing an unavailable screenshot action must not add another one.
-        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 1);
+        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 2);
         assert_eq!(
             updated.actions[0].runtime_state,
             HotkeyRuntimeState::Unavailable
@@ -1636,6 +1670,32 @@ mod tests {
         let restored_manager = HotkeyManager::initialize(reopened).unwrap();
         let restored = restored_manager.reconcile(&registrar).unwrap();
         assert_eq!(restored, updated);
+    }
+
+    #[test]
+    fn prepared_surface_failure_keeps_the_action_unregistered_and_truthful() {
+        let temp = tempdir().unwrap();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        let manager = HotkeyManager::initialize(storage).unwrap();
+        let registrar = FakeRegistrar::default();
+
+        manager
+            .set_initial_action_available(HotkeyActionId::LauncherOpen, false)
+            .unwrap();
+        let snapshot = manager.reconcile(&registrar).unwrap();
+        let launcher = snapshot
+            .actions
+            .iter()
+            .find(|entry| entry.action_id == HotkeyActionId::LauncherOpen)
+            .unwrap();
+
+        assert!(!launcher.action_available);
+        assert_eq!(launcher.runtime_state, HotkeyRuntimeState::Unavailable);
+        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            manager.set_initial_action_available(HotkeyActionId::LauncherOpen, true),
+            Err(HotkeyError::AvailabilityAlreadyReconciled)
+        ));
     }
 
     #[test]
@@ -1671,7 +1731,7 @@ mod tests {
             updated.actions[4].runtime_backend,
             Some(HotkeyRuntimeBackend::Standard)
         );
-        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 2);
+        assert_eq!(registrar.registrations.load(Ordering::SeqCst), 3);
     }
 
     #[test]

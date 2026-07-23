@@ -1,6 +1,7 @@
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Runtime, State};
 
+use crate::clipboard_history_event_sink;
 use crate::infrastructure::application::ApplicationRuntime;
 use crate::infrastructure::qr::{QrConversionKind, QrConversionResult, QrError};
 
@@ -21,10 +22,11 @@ pub struct QrCommandErrorDto {
 }
 
 #[tauri::command]
-pub fn convert_latest_clipboard_qr(
+pub fn convert_latest_clipboard_qr<R: Runtime>(
+    app: AppHandle<R>,
     runtime: State<'_, ApplicationRuntime>,
 ) -> Result<QrConversionDto, QrCommandErrorDto> {
-    convert_latest(&runtime)
+    convert_latest_and_notify(&app, &runtime)
 }
 
 pub(crate) fn convert_latest(
@@ -35,6 +37,15 @@ pub(crate) fn convert_latest(
         .convert_latest(|sequence| runtime.clipboard_listener().suppress_sequence(sequence))
         .map(conversion_dto)
         .map_err(map_error)
+}
+
+pub(crate) fn convert_latest_and_notify<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime: &ApplicationRuntime,
+) -> Result<QrConversionDto, QrCommandErrorDto> {
+    let result = convert_latest(runtime)?;
+    clipboard_history_event_sink(app)();
+    Ok(result)
 }
 
 pub(crate) fn conversion_dto(result: QrConversionResult) -> QrConversionDto {

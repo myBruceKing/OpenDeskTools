@@ -6,7 +6,8 @@
     "main",
     "clipboard-surface",
     "clipboard-preview-surface",
-    "tool-menu-surface"
+    "tool-menu-surface",
+    "qr-toast-surface"
   ],
   "permissions": [
     "core:default",

@@ -15,6 +15,7 @@ use infrastructure::debug_qa;
 use infrastructure::debug_qa::DebugQaOptions;
 use infrastructure::hotkey::{HotkeyActionId, OrdinaryHotkeyTransition, TauriHotkeyRegistrar};
 use infrastructure::keyboard_hook::{RuntimeHotkeyEvent, RuntimeHotkeyPhase};
+use infrastructure::qr_toast_surface_window;
 use infrastructure::tool_menu_surface_window::{self, TOOL_MENU_SURFACE_LABEL};
 use infrastructure::tray::{
     route_window_lifecycle, TrayLifecycle, WindowLifecycleInput, WindowLifecycleRoute,
@@ -25,7 +26,6 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent, ShortcutState};
 
 const HOTKEY_ACTION_EVENT: &str = "hotkey://action";
-const QR_CONVERSION_EVENT: &str = "qr://conversion-result";
 const CLIPBOARD_HISTORY_CHANGED_EVENT: &str = "clipboard://history-changed";
 const MAIN_WEBVIEW_LABEL: &str = "main";
 
@@ -51,8 +51,8 @@ struct ClipboardHistoryChangedEvent {
     change: &'static str,
 }
 
-pub(crate) fn clipboard_history_event_sink(
-    app: &AppHandle,
+pub(crate) fn clipboard_history_event_sink<R: Runtime>(
+    app: &AppHandle<R>,
 ) -> infrastructure::clipboard_listener::ClipboardHistoryEventSink {
     let event_app = app.clone();
     Arc::new(move || {
@@ -139,8 +139,57 @@ pub fn run() {
                     eprintln!("clipboard listener unavailable during startup: {error}");
                 }
             }
+            // Construct every hotkey-owned WebView before registration. A
+            // prepared failure changes the corresponding action to honestly
+            // unavailable instead of leaving a registered shortcut that can
+            // only log an error when pressed.
+            let clipboard_surface_ready =
+                match clipboard_surface_window::prepare_group(app.handle()) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        eprintln!(
+                            "clipboard surface window group unavailable; the main toolbox will continue: {error}"
+                        );
+                        false
+                    }
+                };
+            let quick_launch_ready = match runtime_state.quick_launch().snapshot() {
+                Ok(_) => true,
+                Err(error) => {
+                    eprintln!("quick launch state unavailable during startup: {error}");
+                    false
+                }
+            };
+            let tool_menu_surface_ready = quick_launch_ready
+                && match tool_menu_surface_window::prepare(app.handle()) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        eprintln!("tool menu surface unavailable: {error}");
+                        false
+                    }
+                };
+            let qr_toast_surface_ready =
+                match qr_toast_surface_window::prepare(app.handle()) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        eprintln!("QR feedback surface unavailable: {error}");
+                        false
+                    }
+                };
             let forced_app = app.handle().clone();
             let runtime_state = app.state::<ApplicationRuntime>();
+            runtime_state.hotkeys().set_initial_action_available(
+                HotkeyActionId::ClipboardOpenPanel,
+                clipboard_surface_ready,
+            )?;
+            runtime_state.hotkeys().set_initial_action_available(
+                HotkeyActionId::LauncherOpen,
+                tool_menu_surface_ready,
+            )?;
+            runtime_state.hotkeys().set_initial_action_available(
+                HotkeyActionId::ClipboardQrConvert,
+                qr_toast_surface_ready,
+            )?;
             let registrar = TauriHotkeyRegistrar::new(
                 app.handle(),
                 runtime_state.keyboard_hook(),
@@ -171,16 +220,6 @@ pub fn run() {
             }
             app.manage(TrayLifecycle::default());
             infrastructure::tray::install(app.handle())?;
-            // Window-group construction must stay on Tauri's setup/main-thread
-            // path. Runtime IPC commands only reuse these hidden windows.
-            if let Err(error) = clipboard_surface_window::prepare_group(app.handle()) {
-                eprintln!(
-                    "clipboard surface window group unavailable; the main toolbox will continue: {error}"
-                );
-            }
-            if let Err(error) = tool_menu_surface_window::prepare(app.handle()) {
-                eprintln!("tool menu surface unavailable: {error}");
-            }
             #[cfg(debug_assertions)]
             schedule_debug_qa(app.handle(), qa_options);
             #[cfg(not(debug_assertions))]
@@ -647,23 +686,36 @@ pub(crate) fn handle_forced_hotkey_event<R: Runtime>(
     );
 }
 
-fn trigger_qr_conversion<R: Runtime>(app: &AppHandle<R>, runtime: &ApplicationRuntime) {
-    let payload = match commands::qr::convert_latest(runtime) {
-        Ok(result) => serde_json::json!({
-            "success": true,
-            "kind": result.kind,
-            "systemClipboardSynced": result.system_clipboard_synced,
-            "message": result.message,
-        }),
-        Err(error) => serde_json::json!({
-            "success": false,
-            "kind": null,
-            "systemClipboardSynced": false,
-            "message": error.message,
-            "code": error.code,
-        }),
-    };
-    let _ = app.emit(QR_CONVERSION_EVENT, payload);
+fn trigger_qr_conversion<R: Runtime>(app: &AppHandle<R>, _runtime: &ApplicationRuntime) {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(runtime) = worker_app.try_state::<ApplicationRuntime>() else {
+            return;
+        };
+        let payload = match commands::qr::convert_latest_and_notify(&worker_app, &runtime) {
+            Ok(result) => serde_json::json!({
+                "success": true,
+                "kind": result.kind,
+                "systemClipboardSynced": result.system_clipboard_synced,
+                "message": result.message,
+            }),
+            Err(error) => serde_json::json!({
+                "success": false,
+                "kind": null,
+                "systemClipboardSynced": false,
+                "message": error.message,
+                "code": error.code,
+            }),
+        };
+        let toast_app = worker_app.clone();
+        if let Err(error) = worker_app.run_on_main_thread(move || {
+            if let Err(error) = qr_toast_surface_window::show(&toast_app, &payload) {
+                eprintln!("failed to show QR conversion feedback: {error}");
+            }
+        }) {
+            eprintln!("failed to dispatch QR conversion feedback: {error}");
+        }
+    });
 }
 
 pub(crate) fn queue_forced_hotkey_event<R: Runtime>(app: &AppHandle<R>, event: RuntimeHotkeyEvent) {

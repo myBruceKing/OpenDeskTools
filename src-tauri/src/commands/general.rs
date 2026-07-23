@@ -98,7 +98,8 @@ pub fn set_crash_diagnostics_enabled<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn select_and_migrate_data_directory(
+pub async fn select_and_migrate_data_directory<R: Runtime>(
+    app: AppHandle<R>,
     runtime: State<'_, ApplicationRuntime>,
 ) -> Result<Option<DataDirectoryMigrationResult>, GeneralCommandError> {
     #[cfg(windows)]
@@ -115,17 +116,30 @@ pub fn select_and_migrate_data_directory(
             message: "当前平台不支持选择数据目录".to_owned(),
         });
     };
-    let copied =
-        runtime
-            .migrate_data_directory(directory)
-            .map_err(|error| GeneralCommandError {
-                code: "data_directory_migration_failed",
-                message: format!("数据目录迁移未完成：{error}"),
-            })?;
-    Ok(Some(DataDirectoryMigrationResult {
+    let (storage, data_directory) = runtime.data_directory_migration_context();
+    let copied = tauri::async_runtime::spawn_blocking(move || {
+        let copied = storage.copy_to_new_data_root(directory)?;
+        data_directory.set(&copied)?;
+        Ok::<_, crate::infrastructure::application::DataDirectoryChangeError>(copied)
+    })
+    .await
+    .map_err(|error| GeneralCommandError {
+        code: "data_directory_migration_task_failed",
+        message: format!("数据目录迁移任务意外终止：{error}"),
+    })?
+    .map_err(|error| GeneralCommandError {
+        code: "data_directory_migration_failed",
+        message: format!("数据目录迁移未完成：{error}"),
+    })?;
+    let result = DataDirectoryMigrationResult {
         data_directory: display_data_directory(&copied),
         restart_required: true,
-    }))
+    };
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        app.request_restart();
+    });
+    Ok(Some(result))
 }
 
 fn current_view_model<R: Runtime>(

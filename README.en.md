@@ -25,7 +25,7 @@ Clipboard history, application launching, region capture, image pinning, and QR 
 | Clipboard | Implemented, validation ongoing | Text, image, and file history; search and filters; favorites, deletion, editing, source icons; quick surface; copy and paste-to-target flows |
 | Quick launch | Implemented, refinement ongoing | Application discovery and manual add; pinning, ordering, visibility, and removal; wheel/horizontal/vertical surfaces; real application icons |
 | Global hotkeys | Implemented, compatibility testing ongoing | Visual rebinding, native key capture, conflict states, Windows shortcut handling, and runtime routing |
-| QR conversion | Implemented | Generate a QR image from the latest internal text or decode one from an image, then save the result to internal history and attempt to sync the system clipboard |
+| QR conversion | Implemented, under continuous validation | Use the F4 global shortcut to generate a QR image from the latest internal text or decode one from an image; the result is saved to internal history, system clipboard sync is attempted, and a non-activating bottom-right toast reports the outcome |
 | Theme and general settings | Core flow implemented | Light/dark themes, accent color, motion/transparency preferences, tray behavior, autostart, data-directory migration, and local diagnostics preference |
 | F1 region capture | Planned | In-house multi-monitor capture pipeline, region selection, clipboard output, and file output |
 | F3 image pinning | Planned | Borderless always-on-top image windows with drag, resize, and multiple instances |

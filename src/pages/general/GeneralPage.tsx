@@ -60,7 +60,7 @@ export function GeneralPage() {
           </Button>
           {dataDirectoryMigration ? (
             <InlineNotice variant="success">
-              数据已复制到 {dataDirectoryMigration.dataDirectory}。请退出并重新启动后生效；原目录保留作恢复备份。
+              数据已复制到 {dataDirectoryMigration.dataDirectory}，应用正在安全重启；原目录保留作恢复备份。
             </InlineNotice>
           ) : null}
           <InlineNotice variant="info">设置、剪贴板历史和图片仅保存在本机，不会上传云端。</InlineNotice>

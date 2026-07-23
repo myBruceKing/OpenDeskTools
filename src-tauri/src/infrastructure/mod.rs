@@ -18,6 +18,7 @@ pub mod hotkey_capture;
 pub mod image;
 pub mod keyboard_hook;
 pub mod qr;
+pub mod qr_toast_surface_window;
 pub mod quick_launch;
 pub mod source_icon;
 #[allow(dead_code)]

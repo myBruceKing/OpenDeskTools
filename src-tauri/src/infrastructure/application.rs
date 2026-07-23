@@ -238,17 +238,10 @@ impl ApplicationRuntime {
         diagnostics::set_enabled(&self.storage, enabled)
     }
 
-    /// Copies the active data root and makes the copy the persisted root for a
-    /// normal subsequent launch. The current runtime intentionally remains on
-    /// the original root, so callers must ask the user to restart before
-    /// treating the change as active.
-    pub(crate) fn migrate_data_directory(
+    pub(crate) fn data_directory_migration_context(
         &self,
-        target: PathBuf,
-    ) -> Result<PathBuf, DataDirectoryChangeError> {
-        let copied = self.storage.copy_to_new_data_root(target)?;
-        self.data_directory.set(&copied)?;
-        Ok(copied)
+    ) -> (Arc<StorageService>, DataDirectoryPreference) {
+        (Arc::clone(&self.storage), self.data_directory.clone())
     }
 
     /// Keeps the system `DisabledHotkeys` registry value aligned with the

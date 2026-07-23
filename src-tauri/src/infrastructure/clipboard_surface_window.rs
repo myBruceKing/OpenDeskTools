@@ -980,7 +980,7 @@ fn hide_native_verified<R: Runtime>(
         } else {
             "failed"
         },
-        surface_window_animation::SURFACE_EXIT_FADE_DURATION_MS
+        surface_window_animation::exit_duration_ms(window)
     ));
     animated
         .then_some(())

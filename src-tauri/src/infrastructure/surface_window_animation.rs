@@ -6,8 +6,9 @@ use std::{
 
 use tauri::{Manager, Runtime, WebviewWindow};
 
-pub const SURFACE_EXIT_FADE_DURATION_MS: u64 = 140;
-const SURFACE_EXIT_HIDE_DELAY_MS: u64 = SURFACE_EXIT_FADE_DURATION_MS;
+use super::{application::ApplicationRuntime, theme::AnimationSpeed};
+
+pub const DEFAULT_SURFACE_EXIT_FADE_DURATION_MS: u64 = 140;
 
 #[derive(Clone, Copy)]
 enum FinalHideMode {
@@ -59,20 +60,47 @@ pub fn fade_hide_native<R: Runtime>(window: &WebviewWindow<R>) -> bool {
     fade_hide_with(window, FinalHideMode::NativeWindow)
 }
 
+pub fn exit_duration_ms<R: Runtime>(window: &WebviewWindow<R>) -> u64 {
+    if system_reduces_motion() {
+        return 0;
+    }
+    window
+        .app_handle()
+        .try_state::<ApplicationRuntime>()
+        .and_then(|runtime| runtime.theme().current().ok())
+        .map_or(DEFAULT_SURFACE_EXIT_FADE_DURATION_MS, |snapshot| {
+            animation_speed_duration_ms(snapshot.preferences.animation_speed)
+        })
+}
+
+const fn animation_speed_duration_ms(speed: AnimationSpeed) -> u64 {
+    match speed {
+        AnimationSpeed::Slow => 220,
+        AnimationSpeed::Normal => DEFAULT_SURFACE_EXIT_FADE_DURATION_MS,
+        AnimationSpeed::Fast => 100,
+    }
+}
+
 fn fade_hide_with<R: Runtime>(window: &WebviewWindow<R>, mode: FinalHideMode) -> bool {
     let label = window.label().to_owned();
     let generation = advance_generation(&label);
-    if window
-        .eval("document.documentElement.setAttribute('data-surface-closing','true');")
-        .is_err()
-    {
+    let duration_ms = exit_duration_ms(window);
+    let transition_script = format!(
+        "document.documentElement.style.setProperty('--surface-exit-duration','{duration_ms}ms');document.documentElement.setAttribute('data-surface-closing','true');"
+    );
+    if window.eval(transition_script).is_err() {
         return hide_now(window, mode);
+    }
+    if duration_ms == 0 {
+        let hidden = hide_now(window, mode);
+        let _ = window.eval("document.documentElement.removeAttribute('data-surface-closing');");
+        return hidden;
     }
 
     let delayed_window = window.clone();
     let delayed_app = window.app_handle().clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(SURFACE_EXIT_HIDE_DELAY_MS));
+        std::thread::sleep(Duration::from_millis(duration_ms));
         if !is_current_generation(&label, generation) {
             return;
         }
@@ -100,6 +128,29 @@ fn fade_hide_with<R: Runtime>(window: &WebviewWindow<R>, mode: FinalHideMode) ->
         }
     });
     true
+}
+
+#[cfg(windows)]
+fn system_reduces_motion() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION,
+    };
+
+    let mut enabled = 1_i32;
+    let succeeded = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            (&mut enabled as *mut i32).cast(),
+            0,
+        )
+    } != 0;
+    succeeded && enabled == 0
+}
+
+#[cfg(not(windows))]
+fn system_reduces_motion() -> bool {
+    false
 }
 
 const fn hide_mode_name(mode: FinalHideMode) -> &'static str {
@@ -173,7 +224,9 @@ mod tests {
     }
 
     #[test]
-    fn native_hide_matches_the_complete_css_fade_duration() {
-        assert_eq!(SURFACE_EXIT_HIDE_DELAY_MS, SURFACE_EXIT_FADE_DURATION_MS);
+    fn theme_animation_speeds_map_to_the_shared_css_token_values() {
+        assert_eq!(animation_speed_duration_ms(AnimationSpeed::Slow), 220);
+        assert_eq!(animation_speed_duration_ms(AnimationSpeed::Normal), 140);
+        assert_eq!(animation_speed_duration_ms(AnimationSpeed::Fast), 100);
     }
 }

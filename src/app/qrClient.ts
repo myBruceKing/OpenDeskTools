@@ -15,6 +15,24 @@ export type QrConversionFeedback = {
   code?: string;
 };
 
+export function parseQrConversionFeedback(value: unknown): QrConversionFeedback | null {
+  if (!value || typeof value !== "object") return null;
+  const payload = value as Record<string, unknown>;
+  if (
+    typeof payload.success !== "boolean"
+    || typeof payload.systemClipboardSynced !== "boolean"
+    || typeof payload.message !== "string"
+    || (payload.kind !== null && payload.kind !== "text_to_image" && payload.kind !== "image_to_text")
+  ) return null;
+  return {
+    success: payload.success,
+    kind: payload.kind,
+    systemClipboardSynced: payload.systemClipboardSynced,
+    message: payload.message,
+    code: typeof payload.code === "string" ? payload.code : undefined
+  };
+}
+
 function result(value: unknown): QrConversionResult {
   if (!value || typeof value !== "object") throw new Error("Invalid QR conversion payload");
   const payload = value as Record<string, unknown>;
@@ -36,21 +54,7 @@ export async function convertLatestInternalClipboardQr() {
 
 export async function listenQrConversionFeedback(listener: (feedback: QrConversionFeedback) => void) {
   return listen<unknown>("qr://conversion-result", (event) => {
-    const payload = event.payload;
-    if (!payload || typeof payload !== "object") return;
-    const value = payload as Record<string, unknown>;
-    if (
-      typeof value.success !== "boolean"
-      || typeof value.systemClipboardSynced !== "boolean"
-      || typeof value.message !== "string"
-      || (value.kind !== null && value.kind !== "text_to_image" && value.kind !== "image_to_text")
-    ) return;
-    listener({
-      success: value.success,
-      kind: value.kind,
-      systemClipboardSynced: value.systemClipboardSynced,
-      message: value.message,
-      code: typeof value.code === "string" ? value.code : undefined
-    });
+    const feedback = parseQrConversionFeedback(event.payload);
+    if (feedback) listener(feedback);
   });
 }

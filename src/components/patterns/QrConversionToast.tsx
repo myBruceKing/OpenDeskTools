@@ -3,14 +3,21 @@ import { CheckmarkCircle20Regular, Warning20Regular } from "@fluentui/react-icon
 import { listenQrConversionFeedback, type QrConversionFeedback } from "../../app/qrClient";
 import styles from "./QrConversionToast.module.css";
 
-export function QrConversionToast() {
-  const [feedback, setFeedback] = useState<QrConversionFeedback | null>(null);
+type QrConversionToastProps = {
+  feedback?: QrConversionFeedback | null;
+};
+
+export function QrConversionToast({ feedback: controlledFeedback }: QrConversionToastProps) {
+  const [localFeedback, setLocalFeedback] = useState<QrConversionFeedback | null>(null);
+  const controlled = controlledFeedback !== undefined;
+  const feedback = controlled ? controlledFeedback : localFeedback;
 
   useEffect(() => {
+    if (controlled) return undefined;
     let closed = false;
     let unlisten: (() => void) | undefined;
     void listenQrConversionFeedback((next) => {
-      if (!closed) setFeedback(next);
+      if (!closed) setLocalFeedback(next);
     }).then((cleanup) => {
       if (closed) cleanup();
       else unlisten = cleanup;
@@ -19,13 +26,16 @@ export function QrConversionToast() {
       closed = true;
       unlisten?.();
     };
-  }, []);
+  }, [controlled]);
 
   useEffect(() => {
-    if (!feedback) return undefined;
-    const timer = window.setTimeout(() => setFeedback(null), feedback.success ? 3200 : 4800);
+    if (controlled || !feedback) return undefined;
+    const timer = window.setTimeout(
+      () => setLocalFeedback(null),
+      feedback.success ? 3200 : 4800
+    );
     return () => window.clearTimeout(timer);
-  }, [feedback]);
+  }, [controlled, feedback]);
 
   if (!feedback) return null;
   return (

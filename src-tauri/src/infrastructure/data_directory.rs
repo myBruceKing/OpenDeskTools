@@ -38,6 +38,15 @@ pub struct DataDirectoryPreference {
     lock: Mutex<()>,
 }
 
+impl Clone for DataDirectoryPreference {
+    fn clone(&self) -> Self {
+        Self {
+            registry: Arc::clone(&self.registry),
+            lock: Mutex::new(()),
+        }
+    }
+}
+
 impl std::fmt::Debug for DataDirectoryPreference {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter

@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -12,6 +13,7 @@ use super::storage::{StorageError, StorageService};
 
 const SETTINGS_KEY: &str = "quick_launch.pinned.v1";
 const MAX_DISCOVERED_APPS: usize = 300;
+pub const MAX_PINNED_APPS: usize = 48;
 const MAX_SCAN_DEPTH: usize = 6;
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,12 +83,44 @@ struct SavedQuickLaunchApp {
     visible: bool,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SavedQuickLaunchState {
     #[serde(default)]
     pinned_apps: Vec<SavedQuickLaunchApp>,
     #[serde(default)]
     tool_menu: ToolMenuPreferences,
+}
+
+#[derive(Debug)]
+enum StoredQuickLaunchState {
+    Ready(SavedQuickLaunchState),
+    Corrupt(String),
+}
+
+struct ReadyQuickLaunchStateGuard<'a>(MutexGuard<'a, StoredQuickLaunchState>);
+
+impl Deref for ReadyQuickLaunchStateGuard<'_> {
+    type Target = SavedQuickLaunchState;
+
+    fn deref(&self) -> &Self::Target {
+        match &*self.0 {
+            StoredQuickLaunchState::Ready(state) => state,
+            StoredQuickLaunchState::Corrupt(_) => {
+                unreachable!("corrupt quick launch state is rejected before guard construction")
+            }
+        }
+    }
+}
+
+impl DerefMut for ReadyQuickLaunchStateGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match &mut *self.0 {
+            StoredQuickLaunchState::Ready(state) => state,
+            StoredQuickLaunchState::Corrupt(_) => {
+                unreachable!("corrupt quick launch state is rejected before guard construction")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -99,6 +133,8 @@ pub enum QuickLaunchError {
     InvalidPath,
     #[error("the selected application is already pinned")]
     AlreadyPinned,
+    #[error("quick launch supports at most {MAX_PINNED_APPS} pinned applications")]
+    CapacityReached,
     #[error("the selected application is not pinned")]
     NotPinned,
     #[error("the selected application target is unavailable")]
@@ -107,26 +143,46 @@ pub enum QuickLaunchError {
     LaunchFailed,
     #[error("quick launch discovery state is unavailable")]
     DiscoveryState,
+    #[error("quick launch state is unavailable")]
+    StateLockPoisoned,
+    #[error("quick launch settings are corrupt: {0}")]
+    CorruptSettings(String),
 }
 
 #[derive(Debug)]
 pub struct QuickLaunchService {
     storage: Arc<StorageService>,
     icons: SourceIconService,
+    state: Mutex<StoredQuickLaunchState>,
     discovered: Mutex<Vec<SavedQuickLaunchApp>>,
 }
 
 impl QuickLaunchService {
     pub fn initialize(storage: Arc<StorageService>) -> Result<Self, QuickLaunchError> {
+        let state = match load_state(storage.as_ref()) {
+            Ok(state) => StoredQuickLaunchState::Ready(state),
+            Err(QuickLaunchError::CorruptSettings(detail)) => {
+                StoredQuickLaunchState::Corrupt(detail)
+            }
+            Err(error) => return Err(error),
+        };
         Ok(Self {
             icons: SourceIconService::initialize(Arc::clone(&storage))?,
             storage,
+            state: Mutex::new(state),
             discovered: Mutex::new(Vec::new()),
         })
     }
 
     pub fn snapshot(&self) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
-        let state = self.read_state()?;
+        let state = self.lock_state()?.clone();
+        self.snapshot_from_state(state)
+    }
+
+    fn snapshot_from_state(
+        &self,
+        state: SavedQuickLaunchState,
+    ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
         let discovered = self
             .discovered
             .lock()
@@ -157,17 +213,19 @@ impl QuickLaunchService {
     }
 
     pub fn tool_menu_preferences(&self) -> Result<ToolMenuPreferences, QuickLaunchError> {
-        Ok(self.read_state()?.tool_menu)
+        Ok(self.lock_state()?.tool_menu)
     }
 
     pub fn update_tool_menu_preferences(
         &self,
         preferences: ToolMenuPreferences,
     ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
-        let mut state = self.read_state()?;
+        let mut state = self.lock_state()?;
         state.tool_menu = preferences;
         self.write_state(&state)?;
-        self.snapshot()
+        let snapshot_state = state.clone();
+        drop(state);
+        self.snapshot_from_state(snapshot_state)
     }
 
     /// Performs the expensive desktop / Start Menu / App Paths enumeration on
@@ -201,13 +259,16 @@ impl QuickLaunchService {
                 source.as_deref().unwrap_or("手动添加"),
             ),
         };
-        let mut state = self.read_state()?;
+        let mut state = self.lock_state()?;
         if state
             .pinned_apps
             .iter()
             .any(|app| normalized_path(&app.path) == normalized_path(&resolved.path))
         {
             return Err(QuickLaunchError::AlreadyPinned);
+        }
+        if state.pinned_apps.len() >= MAX_PINNED_APPS {
+            return Err(QuickLaunchError::CapacityReached);
         }
         state.pinned_apps.push(SavedQuickLaunchApp {
             name: resolved.name,
@@ -220,7 +281,9 @@ impl QuickLaunchService {
             visible: true,
         });
         self.write_state(&state)?;
-        self.snapshot()
+        let snapshot_state = state.clone();
+        drop(state);
+        self.snapshot_from_state(snapshot_state)
     }
 
     pub fn set_visible(
@@ -228,7 +291,7 @@ impl QuickLaunchService {
         path: &str,
         visible: bool,
     ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
-        let mut state = self.read_state()?;
+        let mut state = self.lock_state()?;
         let Some(app) = state
             .pinned_apps
             .iter_mut()
@@ -238,11 +301,13 @@ impl QuickLaunchService {
         };
         app.visible = visible;
         self.write_state(&state)?;
-        self.snapshot()
+        let snapshot_state = state.clone();
+        drop(state);
+        self.snapshot_from_state(snapshot_state)
     }
 
     pub fn unpin(&self, path: &str) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
-        let mut state = self.read_state()?;
+        let mut state = self.lock_state()?;
         let before = state.pinned_apps.len();
         state
             .pinned_apps
@@ -251,7 +316,9 @@ impl QuickLaunchService {
             return Err(QuickLaunchError::NotPinned);
         }
         self.write_state(&state)?;
-        self.snapshot()
+        let snapshot_state = state.clone();
+        drop(state);
+        self.snapshot_from_state(snapshot_state)
     }
 
     pub fn reorder(
@@ -259,7 +326,7 @@ impl QuickLaunchService {
         active_path: &str,
         over_path: &str,
     ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
-        let mut state = self.read_state()?;
+        let mut state = self.lock_state()?;
         let active = state
             .pinned_apps
             .iter()
@@ -275,7 +342,9 @@ impl QuickLaunchService {
             state.pinned_apps.insert(over, app);
             self.write_state(&state)?;
         }
-        self.snapshot()
+        let snapshot_state = state.clone();
+        drop(state);
+        self.snapshot_from_state(snapshot_state)
     }
 
     /// Exchange two fixed slots without shifting every item between them.
@@ -287,7 +356,7 @@ impl QuickLaunchService {
         active_path: &str,
         over_path: &str,
     ) -> Result<QuickLaunchSnapshot, QuickLaunchError> {
-        let mut state = self.read_state()?;
+        let mut state = self.lock_state()?;
         let active = state
             .pinned_apps
             .iter()
@@ -302,15 +371,18 @@ impl QuickLaunchService {
             state.pinned_apps.swap(active, over);
             self.write_state(&state)?;
         }
-        self.snapshot()
+        let snapshot_state = state.clone();
+        drop(state);
+        self.snapshot_from_state(snapshot_state)
     }
 
     pub fn launch(&self, path: &str) -> Result<(), QuickLaunchError> {
-        let state = self.read_state()?;
-        let app = state
+        let app = self
+            .lock_state()?
             .pinned_apps
-            .into_iter()
+            .iter()
             .find(|app| normalized_path(&app.path) == normalized_path(path))
+            .cloned()
             .ok_or(QuickLaunchError::NotPinned)?;
         if !Path::new(&app.path).is_file() {
             return Err(QuickLaunchError::Unavailable);
@@ -355,17 +427,22 @@ impl QuickLaunchService {
         }
     }
 
-    fn read_state(&self) -> Result<SavedQuickLaunchState, QuickLaunchError> {
-        let Some(raw) = self.storage.read_setting(SETTINGS_KEY)? else {
-            return Ok(SavedQuickLaunchState::default());
-        };
-        Ok(serde_json::from_str(&raw).unwrap_or_default())
-    }
-
     fn write_state(&self, state: &SavedQuickLaunchState) -> Result<(), QuickLaunchError> {
+        validate_state(state)?;
         let payload = serde_json::to_string(state).map_err(|_| QuickLaunchError::InvalidPath)?;
         self.storage.write_settings(&[(SETTINGS_KEY, &payload)])?;
         Ok(())
+    }
+
+    fn lock_state(&self) -> Result<ReadyQuickLaunchStateGuard<'_>, QuickLaunchError> {
+        let guard = self
+            .state
+            .lock()
+            .map_err(|_| QuickLaunchError::StateLockPoisoned)?;
+        if let StoredQuickLaunchState::Corrupt(detail) = &*guard {
+            return Err(QuickLaunchError::CorruptSettings(detail.clone()));
+        }
+        Ok(ReadyQuickLaunchStateGuard(guard))
     }
 
     fn discover_apps(&self) -> Vec<SavedQuickLaunchApp> {
@@ -392,6 +469,26 @@ impl QuickLaunchService {
         apps.truncate(MAX_DISCOVERED_APPS);
         apps
     }
+}
+
+fn load_state(storage: &StorageService) -> Result<SavedQuickLaunchState, QuickLaunchError> {
+    let Some(raw) = storage.read_setting(SETTINGS_KEY)? else {
+        return Ok(SavedQuickLaunchState::default());
+    };
+    let state = serde_json::from_str::<SavedQuickLaunchState>(&raw)
+        .map_err(|error| QuickLaunchError::CorruptSettings(error.to_string()))?;
+    validate_state(&state)?;
+    Ok(state)
+}
+
+fn validate_state(state: &SavedQuickLaunchState) -> Result<(), QuickLaunchError> {
+    if state.pinned_apps.len() > MAX_PINNED_APPS {
+        return Err(QuickLaunchError::CorruptSettings(format!(
+            "pinned application count {} exceeds the supported maximum {MAX_PINNED_APPS}",
+            state.pinned_apps.len()
+        )));
+    }
+    Ok(())
 }
 
 fn normalized_path(path: &str) -> String {
@@ -773,6 +870,7 @@ fn launch_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
 
     #[test]
     fn ids_and_launchable_extensions_are_stable() {
@@ -848,6 +946,90 @@ mod tests {
             .map(|app| app.name)
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["0", "1", "7", "3", "4", "5", "6", "2"]);
+    }
+
+    #[test]
+    fn concurrent_pins_serialize_without_losing_an_update() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = (0..16)
+            .map(|index| {
+                let path = temp.path().join(format!("Concurrent-{index}.exe"));
+                std::fs::write(&path, []).unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        let service = Arc::new(QuickLaunchService::initialize(Arc::clone(&storage)).unwrap());
+        let workers = paths
+            .into_iter()
+            .map(|path| {
+                let service = Arc::clone(&service);
+                thread::spawn(move || {
+                    service
+                        .pin(
+                            path.to_string_lossy().into_owned(),
+                            Some("并发测试".to_owned()),
+                        )
+                        .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        assert_eq!(service.snapshot().unwrap().pinned_apps.len(), 16);
+        let reopened = QuickLaunchService::initialize(storage).unwrap();
+        assert_eq!(reopened.snapshot().unwrap().pinned_apps.len(), 16);
+    }
+
+    #[test]
+    fn corrupt_settings_are_reported_without_overwriting_the_original_payload() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        let corrupt = r#"{"pinned_apps":["#;
+        storage.write_settings(&[(SETTINGS_KEY, corrupt)]).unwrap();
+
+        let service = QuickLaunchService::initialize(Arc::clone(&storage)).unwrap();
+        assert!(matches!(
+            service.snapshot(),
+            Err(QuickLaunchError::CorruptSettings(_))
+        ));
+        assert_eq!(
+            storage.read_setting(SETTINGS_KEY).unwrap().as_deref(),
+            Some(corrupt)
+        );
+    }
+
+    #[test]
+    fn pinning_stops_at_the_surface_capacity() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Arc::new(StorageService::initialize(temp.path()).unwrap());
+        let service = QuickLaunchService::initialize(storage).unwrap();
+        for index in 0..MAX_PINNED_APPS {
+            let path = temp.path().join(format!("Capacity-{index}.exe"));
+            std::fs::write(&path, []).unwrap();
+            service
+                .pin(
+                    path.to_string_lossy().into_owned(),
+                    Some("容量测试".to_owned()),
+                )
+                .unwrap();
+        }
+        let overflow = temp.path().join("Capacity-overflow.exe");
+        std::fs::write(&overflow, []).unwrap();
+
+        assert!(matches!(
+            service.pin(
+                overflow.to_string_lossy().into_owned(),
+                Some("容量测试".to_owned())
+            ),
+            Err(QuickLaunchError::CapacityReached)
+        ));
+        assert_eq!(
+            service.snapshot().unwrap().pinned_apps.len(),
+            MAX_PINNED_APPS
+        );
     }
 
     #[cfg(windows)]

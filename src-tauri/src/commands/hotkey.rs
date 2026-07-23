@@ -206,11 +206,13 @@ fn map_error(error: HotkeyError) -> HotkeyCommandError {
             message: "快捷键设置未能保存，请稍后重试。".to_owned(),
             actual_revision: None,
         },
-        HotkeyError::StateLockPoisoned => HotkeyCommandError {
-            code: "hotkey_state_unavailable",
-            message: "快捷键服务暂时不可用，请重启应用后重试。".to_owned(),
-            actual_revision: None,
-        },
+        HotkeyError::StateLockPoisoned | HotkeyError::AvailabilityAlreadyReconciled => {
+            HotkeyCommandError {
+                code: "hotkey_state_unavailable",
+                message: "快捷键服务暂时不可用，请重启应用后重试。".to_owned(),
+                actual_revision: None,
+            }
+        }
         HotkeyError::RevisionOverflow => HotkeyCommandError {
             code: "hotkey_revision_overflow",
             message: "快捷键设置版本已达到上限。".to_owned(),
