@@ -44,6 +44,9 @@ yarn-error.log*
 .codex/
 design-qa.md
 docs/audits/**/*.png
+*.md
+!/README.md
+!/README.en.md
 
 # OS and editor files
 .DS_Store
