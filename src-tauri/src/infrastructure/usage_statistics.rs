@@ -11,6 +11,8 @@ const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 pub enum UsageAction {
     ClipboardPanel,
     ClipboardQrConversion,
+    ScreenshotCapture,
+    PinImage,
     ToolMenu,
 }
 
@@ -19,6 +21,8 @@ impl UsageAction {
         match self {
             Self::ClipboardPanel => 5,
             Self::ClipboardQrConversion => 20,
+            Self::ScreenshotCapture => 10,
+            Self::PinImage => 5,
             Self::ToolMenu => 5,
         }
     }

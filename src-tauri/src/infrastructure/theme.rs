@@ -83,9 +83,10 @@ impl AnimationSpeed {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackgroundFit {
+    #[default]
     Cover,
     Contain,
 }
@@ -104,12 +105,6 @@ impl BackgroundFit {
             Self::Cover => "cover",
             Self::Contain => "contain",
         }
-    }
-}
-
-impl Default for BackgroundFit {
-    fn default() -> Self {
-        Self::Cover
     }
 }
 

@@ -42,6 +42,22 @@ describe("hotkeyClient", () => {
           systemHotkeyNotice: { binding: "Win+V", letter: "V", restartRequired: true }
         };
       }
+      if (command === "update_hotkey_enabled") {
+        return {
+          snapshot: {
+            ...backendSnapshot,
+            revision: 5,
+            actions: [{
+              ...backendSnapshot.actions[0],
+              configuredEnabled: false,
+              runtimeState: "disabled",
+              runtimeBackend: null,
+              detail: "快捷键未启用。"
+            }]
+          },
+          systemHotkeyNotice: null
+        };
+      }
       return backendSnapshot;
     });
     const client = createHotkeyClient({ invokeFunction });
@@ -65,6 +81,25 @@ describe("hotkeyClient", () => {
       snapshot,
       systemHotkeyNotice: { binding: "Win+V", letter: "V", restartRequired: true }
     });
+    await expect(
+      client.updateEnabled({
+        actionId: "capture",
+        expectedRevision: 4,
+        enabled: false
+      })
+    ).resolves.toEqual({
+      snapshot: {
+        revision: 5,
+        actions: [{
+          ...snapshot.actions[0],
+          configuredEnabled: false,
+          runtimeState: "disabled",
+          runtimeBackend: null,
+          detail: "快捷键未启用。"
+        }]
+      },
+      systemHotkeyNotice: null
+    });
 
     expect(invokeFunction).toHaveBeenNthCalledWith(1, "get_hotkey_snapshot");
     expect(invokeFunction).toHaveBeenNthCalledWith(2, "classify_hotkey_binding", {
@@ -76,6 +111,13 @@ describe("hotkeyClient", () => {
         expectedRevision: 4,
         binding: "Win+V",
         forceOverrideSystem: true
+      }
+    });
+    expect(invokeFunction).toHaveBeenNthCalledWith(4, "update_hotkey_enabled", {
+      patch: {
+        actionId: "screenshot.capture",
+        expectedRevision: 4,
+        enabled: false
       }
     });
   });
@@ -119,10 +161,10 @@ describe("hotkeyClient", () => {
     );
   });
 
-  it("maps only registered runtime state to the normal badge", () => {
+  it("maps runtime state to a truthful badge state", () => {
     expect(toHotkeyBadgeState("registered")).toBe("normal");
     expect(toHotkeyBadgeState("conflict")).toBe("conflict");
-    expect(toHotkeyBadgeState("disabled")).toBe("unavailable");
+    expect(toHotkeyBadgeState("disabled")).toBe("disabled");
     expect(toHotkeyBadgeState("unavailable")).toBe("unavailable");
     expect(toHotkeyBadgeState("degraded")).toBe("unavailable");
   });

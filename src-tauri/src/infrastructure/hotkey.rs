@@ -641,6 +641,13 @@ pub struct UpdateHotkeyBinding {
     pub force_override_system: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateHotkeyEnabled {
+    pub action_id: HotkeyActionId,
+    pub expected_revision: u64,
+    pub enabled: bool,
+}
+
 #[derive(Debug)]
 pub struct HotkeyManager {
     store: Arc<dyn HotkeySettingsStore>,
@@ -751,6 +758,52 @@ impl HotkeyManager {
 
         // Persist first. With all current actions unavailable this is deliberately a
         // configuration-only operation and cannot touch the operating system.
+        persist_preferences(self.store.as_ref(), &next_preferences, revision)?;
+        for (entry, preference) in state.registrations.iter_mut().zip(next_preferences) {
+            entry.preference = preference;
+        }
+        state.revision = revision;
+        reconcile_locked(&mut state, registrar);
+        Ok(snapshot_from_state(&state))
+    }
+
+    pub fn update_enabled(
+        &self,
+        update: UpdateHotkeyEnabled,
+        registrar: &dyn HotkeyRegistrar,
+    ) -> Result<HotkeySnapshot, HotkeyError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| HotkeyError::StateLockPoisoned)?;
+        if state.revision != update.expected_revision {
+            return Err(HotkeyError::RevisionConflict {
+                expected: update.expected_revision,
+                actual: state.revision,
+            });
+        }
+        let index = state
+            .registrations
+            .iter()
+            .position(|entry| entry.preference.action_id == update.action_id)
+            .ok_or_else(|| HotkeyValidationError::UnknownAction(update.action_id.to_string()))?;
+        if state.registrations[index].preference.configured_enabled == update.enabled {
+            return Ok(snapshot_from_state(&state));
+        }
+
+        let revision = state
+            .revision
+            .checked_add(1)
+            .ok_or(HotkeyError::RevisionOverflow)?;
+        let mut next_preferences = state
+            .registrations
+            .iter()
+            .map(|entry| entry.preference.clone())
+            .collect::<Vec<_>>();
+        next_preferences[index].configured_enabled = update.enabled;
+
+        // Persist before touching OS registrations. A failed write therefore leaves
+        // both the saved preference and the active shortcut intact.
         persist_preferences(self.store.as_ref(), &next_preferences, revision)?;
         for (entry, preference) in state.registrations.iter_mut().zip(next_preferences) {
             entry.preference = preference;
@@ -1632,6 +1685,129 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some("0")
+        );
+    }
+
+    #[test]
+    fn enabled_toggle_unregisters_persists_and_can_register_again() {
+        let temp = tempdir().unwrap();
+        let data_root = temp.path().join("data");
+        let storage = Arc::new(StorageService::initialize(&data_root).unwrap());
+        let manager = HotkeyManager::initialize(Arc::clone(&storage)).unwrap();
+        let registrar = ForcedRegistrar::default();
+        manager.reconcile(&registrar).unwrap();
+
+        let disabled = manager
+            .update_enabled(
+                UpdateHotkeyEnabled {
+                    action_id: HotkeyActionId::LauncherOpen,
+                    expected_revision: 0,
+                    enabled: false,
+                },
+                &registrar,
+            )
+            .unwrap();
+        let disabled_launcher = disabled
+            .actions
+            .iter()
+            .find(|entry| entry.action_id == HotkeyActionId::LauncherOpen)
+            .unwrap();
+        assert_eq!(disabled.revision, 1);
+        assert!(!disabled_launcher.configured_enabled);
+        assert_eq!(disabled_launcher.binding, "Ctrl+Shift+Space");
+        assert_eq!(
+            disabled_launcher.runtime_state,
+            HotkeyRuntimeState::Disabled
+        );
+        assert_eq!(disabled_launcher.runtime_backend, None);
+        assert_eq!(registrar.unregistrations.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            manager.registered_action_for_shortcut(&shortcut("Ctrl+Shift+Space")),
+            None
+        );
+
+        drop(manager);
+        drop(storage);
+        let reopened_storage = Arc::new(StorageService::initialize(&data_root).unwrap());
+        let reopened = HotkeyManager::initialize(reopened_storage).unwrap();
+        let reopened_registrar = ForcedRegistrar::default();
+        let restored = reopened.reconcile(&reopened_registrar).unwrap();
+        let restored_launcher = restored
+            .actions
+            .iter()
+            .find(|entry| entry.action_id == HotkeyActionId::LauncherOpen)
+            .unwrap();
+        assert!(!restored_launcher.configured_enabled);
+        assert_eq!(
+            restored_launcher.runtime_state,
+            HotkeyRuntimeState::Disabled
+        );
+        assert_eq!(
+            reopened_registrar.registrations.load(Ordering::SeqCst),
+            1,
+            "only the QR shortcut should register while the launcher is disabled"
+        );
+
+        let enabled = reopened
+            .update_enabled(
+                UpdateHotkeyEnabled {
+                    action_id: HotkeyActionId::LauncherOpen,
+                    expected_revision: 1,
+                    enabled: true,
+                },
+                &reopened_registrar,
+            )
+            .unwrap();
+        let enabled_launcher = enabled
+            .actions
+            .iter()
+            .find(|entry| entry.action_id == HotkeyActionId::LauncherOpen)
+            .unwrap();
+        assert_eq!(enabled.revision, 2);
+        assert!(enabled_launcher.configured_enabled);
+        assert_eq!(
+            enabled_launcher.runtime_state,
+            HotkeyRuntimeState::Registered
+        );
+        assert_eq!(
+            enabled_launcher.runtime_backend,
+            Some(HotkeyRuntimeBackend::Standard)
+        );
+        assert_eq!(
+            reopened.registered_action_for_shortcut(&shortcut("Ctrl+Shift+Space")),
+            Some((HotkeyActionId::LauncherOpen, 2))
+        );
+    }
+
+    #[test]
+    fn failed_enabled_persistence_keeps_the_active_registration_unchanged() {
+        let store = Arc::new(FailingStore::default());
+        let manager = HotkeyManager::initialize_with_store(store.clone()).unwrap();
+        let registrar = ForcedRegistrar::default();
+        let snapshot_before = manager.reconcile(&registrar).unwrap();
+        let values_before = store.values.lock().unwrap().clone();
+        let writes_before = store.write_count.load(Ordering::SeqCst);
+        store.fail_writes.store(true, Ordering::SeqCst);
+
+        let error = manager
+            .update_enabled(
+                UpdateHotkeyEnabled {
+                    action_id: HotkeyActionId::LauncherOpen,
+                    expected_revision: 0,
+                    enabled: false,
+                },
+                &registrar,
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, HotkeyError::Storage(_)));
+        assert_eq!(manager.snapshot().unwrap(), snapshot_before);
+        assert_eq!(*store.values.lock().unwrap(), values_before);
+        assert_eq!(store.write_count.load(Ordering::SeqCst), writes_before + 1);
+        assert_eq!(registrar.unregistrations.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            manager.registered_action_for_shortcut(&shortcut("Ctrl+Shift+Space")),
+            Some((HotkeyActionId::LauncherOpen, 0))
         );
     }
 

@@ -173,18 +173,44 @@
   font-size: 22px;
 }
 
-.qrActionFooter {
+.featureActionFooter {
   display: flex;
   gap: 12px;
   align-items: center;
   justify-content: space-between;
-  margin-top: 14px;
+  margin-top: auto;
+  padding-top: 2px;
   color: var(--text-secondary);
   font-size: var(--font-size-secondary);
 }
 
-.qrActionFooter > span {
+.featureActionFooter > span {
   min-width: 0;
+}
+
+.featureActionFooter > button {
+  flex: 0 0 auto;
+}
+
+.featureSummary {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 132px;
+  padding: 14px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-card-subtle);
+  color: var(--text-secondary);
+  font-size: var(--font-size-secondary);
+  line-height: var(--line-height-body);
+}
+
+.featureSummary strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
 }
 
 .swatches {

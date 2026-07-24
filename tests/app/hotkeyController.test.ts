@@ -77,6 +77,12 @@ function client(overrides: Partial<HotkeyClient> = {}): HotkeyClient {
     getSnapshot: async () => snapshot(),
     classify: async () => classified("ordinary"),
     update: async () => updateResult(snapshot(2)),
+    updateEnabled: async ({ enabled }) => updateResult(snapshot(2, {
+      configuredEnabled: enabled,
+      runtimeState: enabled ? "registered" : "disabled",
+      runtimeBackend: enabled ? "standard" : null,
+      detail: enabled ? null : "快捷键未启用。"
+    })),
     ...overrides
   };
 }
@@ -119,6 +125,105 @@ describe("HotkeyController", () => {
       status: "unavailable",
       snapshot: null,
       error: { code: "hotkey_unavailable", message: "不可用" }
+    });
+  });
+
+  it("keeps the visible switch unchanged until disable is confirmed by the backend", async () => {
+    const pending = deferred<HotkeyUpdateResult>();
+    const updateEnabled = vi.fn<HotkeyClient["updateEnabled"]>(() => pending.promise);
+    const controller = new HotkeyController(client({ updateEnabled }));
+    controller.start();
+    await flush();
+
+    const changing = controller.setEnabled("capture", false);
+    expect(controller.getSnapshot()).toMatchObject({
+      snapshot: { actions: [{ configuredEnabled: true }] },
+      pendingEnabledActionId: "capture",
+      error: null
+    });
+
+    pending.resolve(updateResult(snapshot(2, {
+      configuredEnabled: false,
+      runtimeState: "disabled",
+      runtimeBackend: null,
+      detail: "快捷键未启用。"
+    })));
+    await changing;
+
+    expect(updateEnabled).toHaveBeenCalledWith({
+      actionId: "capture",
+      expectedRevision: 1,
+      enabled: false
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      snapshot: {
+        revision: 2,
+        actions: [{ binding: "F1", configuredEnabled: false, runtimeState: "disabled" }]
+      },
+      pendingEnabledActionId: null,
+      error: null
+    });
+  });
+
+  it("shows a saved-but-not-active error when enabling cannot register", async () => {
+    const controller = new HotkeyController(client({
+      getSnapshot: async () => snapshot(1, {
+        configuredEnabled: false,
+        runtimeState: "disabled",
+        runtimeBackend: null
+      }),
+      updateEnabled: async () => updateResult(snapshot(2, {
+        configuredEnabled: true,
+        runtimeState: "conflict",
+        runtimeBackend: null,
+        detail: "系统拒绝注册。"
+      }))
+    }));
+    controller.start();
+    await flush();
+
+    await controller.setEnabled("capture", true);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      snapshot: {
+        revision: 2,
+        actions: [{ configuredEnabled: true, runtimeState: "conflict" }]
+      },
+      pendingEnabledActionId: null,
+      error: {
+        code: "hotkey_enabled_not_active",
+        message: "快捷键已设为启用，但当前未生效：系统拒绝注册。"
+      }
+    });
+  });
+
+  it("refreshes backend truth when an enable toggle races another revision", async () => {
+    const getSnapshot = vi
+      .fn<HotkeyClient["getSnapshot"]>()
+      .mockResolvedValueOnce(snapshot(1))
+      .mockResolvedValueOnce(snapshot(8, {
+        configuredEnabled: false,
+        runtimeState: "disabled",
+        runtimeBackend: null
+      }));
+    const controller = new HotkeyController(client({
+      getSnapshot,
+      updateEnabled: async () =>
+        Promise.reject({ code: "hotkey_revision_conflict", message: "配置已变化" })
+    }));
+    controller.start();
+    await flush();
+
+    await controller.setEnabled("capture", false);
+
+    expect(getSnapshot).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot()).toMatchObject({
+      snapshot: {
+        revision: 8,
+        actions: [{ configuredEnabled: false, runtimeState: "disabled" }]
+      },
+      pendingEnabledActionId: null,
+      error: { code: "hotkey_revision_conflict" }
     });
   });
 

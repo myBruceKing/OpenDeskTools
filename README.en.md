@@ -30,7 +30,7 @@ Clipboard history, application launching, region capture, image pinning, and QR 
 | F1 region capture | Planned | In-house multi-monitor capture pipeline, region selection, clipboard output, and file output |
 | F3 image pinning | Planned | Borderless always-on-top image windows with drag, resize, and multiple instances |
 
-See the [development plan](./docs/development-plan.md) and the focused [image skin, capture, and pinning plan](./docs/skin-and-capture-development-plan.md) for detailed acceptance gates, remaining real-device validation, and implementation order.
+See the [development plan](./docs/development-plan.md) and the focused [image skin, capture, and pinning plan](./docs/skin-and-capture-development-plan.md) for detailed acceptance gates, remaining real-device validation, and implementation order. The implementation architecture for capture and pinned images is documented in the [screenshot and pinning development plan](./docs/screenshot-and-pinning-development-plan.md).
 
 ## Product structure
 

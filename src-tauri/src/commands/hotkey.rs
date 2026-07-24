@@ -6,6 +6,7 @@ use crate::infrastructure::disabled_hotkeys::{self, DisabledHotkeysOutcome};
 use crate::infrastructure::hotkey::{
     classify_binding, HotkeyActionId, HotkeyBinding, HotkeyBindingClassification, HotkeyError,
     HotkeySnapshot, HotkeyValidationError, TauriHotkeyRegistrar, UpdateHotkeyBinding,
+    UpdateHotkeyEnabled,
 };
 use crate::infrastructure::hotkey_capture::{
     HotkeyCaptureError, HotkeyCaptureSession, HotkeyCaptureStopResult,
@@ -20,6 +21,14 @@ pub struct UpdateHotkeyBindingPatch {
     expected_revision: u64,
     binding: String,
     force_override_system: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateHotkeyEnabledPatch {
+    action_id: String,
+    expected_revision: u64,
+    enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -150,6 +159,37 @@ pub fn update_hotkey_binding<R: Runtime>(
                 expected_revision: patch.expected_revision,
                 binding: patch.binding,
                 force_override_system: patch.force_override_system,
+            },
+            &registrar,
+        )
+        .map_err(map_error)?;
+    runtime.ordinary_hotkey_latch().clear_action(action_id);
+    let outcome = runtime.sync_system_hotkey_disable(&updated);
+    let system_hotkey_notice = build_system_hotkey_notice(action_id, &updated, outcome.as_ref());
+    Ok(UpdateHotkeyBindingResponse {
+        snapshot: updated,
+        system_hotkey_notice,
+    })
+}
+
+#[tauri::command]
+pub fn update_hotkey_enabled<R: Runtime>(
+    app: AppHandle<R>,
+    runtime: State<'_, ApplicationRuntime>,
+    patch: UpdateHotkeyEnabledPatch,
+) -> Result<UpdateHotkeyBindingResponse, HotkeyCommandError> {
+    let event_app = app.clone();
+    let registrar = TauriHotkeyRegistrar::new(&app, runtime.keyboard_hook(), move |event| {
+        crate::queue_forced_hotkey_event(&event_app, event)
+    });
+    let action_id = HotkeyActionId::parse(&patch.action_id).map_err(map_validation_error)?;
+    let updated = runtime
+        .hotkeys()
+        .update_enabled(
+            UpdateHotkeyEnabled {
+                action_id,
+                expected_revision: patch.expected_revision,
+                enabled: patch.enabled,
             },
             &registrar,
         )

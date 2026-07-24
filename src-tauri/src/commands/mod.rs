@@ -1,3 +1,4 @@
+pub mod capture;
 pub mod clipboard;
 pub mod general;
 pub mod hotkey;

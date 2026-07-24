@@ -14,6 +14,7 @@ export function ShortcutBadge({ value }: { value: string | null }) {
 const statusCopy: Record<HotkeyState, string> = {
   normal: "正常",
   conflict: "冲突",
+  disabled: "已停用",
   unavailable: "不可用",
   unknown: "未知"
 };

@@ -31,6 +31,13 @@ const HOTKEY_ACTION_EVENT: &str = "hotkey://action";
 const CLIPBOARD_HISTORY_CHANGED_EVENT: &str = "clipboard://history-changed";
 const USAGE_STATISTICS_CHANGED_EVENT: &str = "usage://statistics-changed";
 
+#[cfg(debug_assertions)]
+pub fn write_debug_screenshot_probe_report() -> Result<std::path::PathBuf, String> {
+    let report =
+        infrastructure::screenshot::probe::run_gdi_probe().map_err(|error| error.to_string())?;
+    infrastructure::screenshot::probe::write_report(&report).map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum HotkeyActionPhase {
@@ -148,6 +155,28 @@ pub fn run() {
                 };
             let forced_app = app.handle().clone();
             let runtime_state = app.state::<ApplicationRuntime>();
+            let screenshot_ready = match runtime_state.screenshot().probe() {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("screenshot service unavailable: {error}");
+                    false
+                }
+            };
+            let pin_image_ready = match runtime_state.pin_image().probe() {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("pin image service unavailable: {error}");
+                    false
+                }
+            };
+            runtime_state.hotkeys().set_initial_action_available(
+                HotkeyActionId::ScreenshotCapture,
+                screenshot_ready,
+            )?;
+            runtime_state.hotkeys().set_initial_action_available(
+                HotkeyActionId::ClipboardPinImage,
+                pin_image_ready,
+            )?;
             runtime_state.hotkeys().set_initial_action_available(
                 HotkeyActionId::ClipboardOpenPanel,
                 clipboard_surface_ready,
@@ -216,6 +245,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::capture::capture_screenshot,
+            commands::capture::pin_latest_image,
             commands::clipboard::get_clipboard_history,
             commands::clipboard::set_clipboard_monitoring,
             commands::clipboard::update_clipboard_settings,
@@ -238,6 +269,7 @@ pub fn run() {
             commands::hotkey::get_hotkey_snapshot,
             commands::hotkey::classify_hotkey_binding,
             commands::hotkey::update_hotkey_binding,
+            commands::hotkey::update_hotkey_enabled,
             commands::overview::get_overview_view_model,
             commands::qr::convert_latest_clipboard_qr,
             commands::quick_launch::get_quick_launch_snapshot,
@@ -523,6 +555,14 @@ fn handle_global_shortcut<R: Runtime>(
     {
         trigger_qr_conversion(app, &runtime);
     }
+    if action_id == HotkeyActionId::ScreenshotCapture && matches!(phase, HotkeyActionPhase::Pressed)
+    {
+        trigger_screenshot_capture(app);
+    }
+    if action_id == HotkeyActionId::ClipboardPinImage && matches!(phase, HotkeyActionPhase::Pressed)
+    {
+        trigger_pin_latest_image(app);
+    }
     if action_id == HotkeyActionId::LauncherOpen {
         let result = match phase {
             HotkeyActionPhase::Pressed => show_tool_menu_surface(app, &runtime),
@@ -592,6 +632,14 @@ pub(crate) fn handle_forced_hotkey_event<R: Runtime>(
     {
         trigger_qr_conversion(app, &runtime);
     }
+    if action_id == HotkeyActionId::ScreenshotCapture && matches!(phase, HotkeyActionPhase::Pressed)
+    {
+        trigger_screenshot_capture(app);
+    }
+    if action_id == HotkeyActionId::ClipboardPinImage && matches!(phase, HotkeyActionPhase::Pressed)
+    {
+        trigger_pin_latest_image(app);
+    }
     if action_id == HotkeyActionId::LauncherOpen {
         let result = match phase {
             HotkeyActionPhase::Pressed => show_tool_menu_surface(app, &runtime),
@@ -656,6 +704,71 @@ fn trigger_qr_conversion<R: Runtime>(app: &AppHandle<R>, _runtime: &ApplicationR
             eprintln!("failed to dispatch QR conversion feedback: {error}");
         }
     });
+}
+
+fn trigger_screenshot_capture<R: Runtime>(app: &AppHandle<R>) {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(runtime) = worker_app.try_state::<ApplicationRuntime>() else {
+            return;
+        };
+        match commands::capture::capture_and_notify(&worker_app, &runtime) {
+            Ok(result) if result.status == "cancelled" => {}
+            Ok(result) => {
+                eprintln!(
+                    "screenshot copied width={} height={}",
+                    result.width.unwrap_or_default(),
+                    result.height.unwrap_or_default()
+                );
+            }
+            Err(error) => eprintln!(
+                "screenshot capture failed code={} message={}",
+                error.code, error.message
+            ),
+        }
+    });
+}
+
+fn trigger_pin_latest_image<R: Runtime>(app: &AppHandle<R>) {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(runtime) = worker_app.try_state::<ApplicationRuntime>() else {
+            return;
+        };
+        match commands::capture::pin_latest_and_record(&worker_app, &runtime) {
+            Ok(outcome) => {
+                eprintln!(
+                    "image pinned pin_id={} width={} height={}",
+                    outcome.pin_id, outcome.width, outcome.height
+                );
+            }
+            Err(error) => {
+                show_pin_image_error(&worker_app, error.code, error.message);
+                eprintln!(
+                    "pin image failed code={} message={}",
+                    error.code, error.message
+                );
+            }
+        }
+    });
+}
+
+fn show_pin_image_error<R: Runtime>(app: &AppHandle<R>, code: &'static str, message: &'static str) {
+    let payload = serde_json::json!({
+        "success": false,
+        "kind": null,
+        "systemClipboardSynced": false,
+        "message": message,
+        "code": code,
+    });
+    let toast_app = app.clone();
+    if let Err(dispatch_error) = app.run_on_main_thread(move || {
+        if let Err(show_error) = qr_toast_surface_window::show(&toast_app, &payload) {
+            eprintln!("failed to show pin image feedback: {show_error}");
+        }
+    }) {
+        eprintln!("failed to dispatch pin image feedback: {dispatch_error}");
+    }
 }
 
 pub(crate) fn record_usage_success<R: Runtime>(
@@ -736,42 +849,58 @@ fn disable_forced_hotkey_after_route_failure<R: Runtime>(
 
 #[cfg(debug_assertions)]
 fn schedule_debug_qa<R: Runtime>(app: &AppHandle<R>, options: DebugQaOptions) {
-    let Some(delay) = options.open_clipboard_surface_after else {
-        return;
-    };
-    debug_qa::trace(format!(
-        "scheduled deterministic open delay_ms={} trace_path={}",
-        delay.as_millis(),
-        debug_qa::trace_path().display()
-    ));
-    let qa_app = app.clone();
-    let spawn_result = std::thread::Builder::new()
-        .name("clipboard-surface-qa-delay".to_owned())
-        .spawn(move || {
-            std::thread::sleep(delay);
-            let request_app = qa_app.clone();
-            if let Err(error) = qa_app.run_on_main_thread(move || {
-                debug_qa::trace("deterministic open timer fired");
-                let Some(runtime) = request_app.try_state::<ApplicationRuntime>() else {
-                    debug_qa::trace("deterministic open failed: runtime state unavailable");
-                    return;
-                };
-                if let Err(error) =
-                    clipboard_surface_controller::open_from_foreground(&request_app, &runtime)
-                {
-                    debug_qa::trace(format!("deterministic open failed: {error}"));
+    if let Some(delay) = options.open_clipboard_surface_after {
+        debug_qa::trace(format!(
+            "scheduled deterministic open delay_ms={} trace_path={}",
+            delay.as_millis(),
+            debug_qa::trace_path().display()
+        ));
+        let qa_app = app.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name("clipboard-surface-qa-delay".to_owned())
+            .spawn(move || {
+                std::thread::sleep(delay);
+                let request_app = qa_app.clone();
+                if let Err(error) = qa_app.run_on_main_thread(move || {
+                    debug_qa::trace("deterministic open timer fired");
+                    let Some(runtime) = request_app.try_state::<ApplicationRuntime>() else {
+                        debug_qa::trace("deterministic open failed: runtime state unavailable");
+                        return;
+                    };
+                    if let Err(error) =
+                        clipboard_surface_controller::open_from_foreground(&request_app, &runtime)
+                    {
+                        debug_qa::trace(format!("deterministic open failed: {error}"));
+                    }
+                }) {
+                    debug_qa::trace(format!("deterministic open dispatch failed: {error}"));
                 }
-            }) {
-                debug_qa::trace(format!("deterministic open dispatch failed: {error}"));
-            }
-        });
-    if let Err(error) = spawn_result {
-        debug_qa::trace(format!("deterministic open timer thread failed: {error}"));
+            });
+        if let Err(error) = spawn_result {
+            debug_qa::trace(format!("deterministic open timer thread failed: {error}"));
+        }
+    }
+
+    if options.screenshot_probe {
+        let spawn_result = std::thread::Builder::new()
+            .name("screenshot-qa-probe".to_owned())
+            .spawn(|| match write_debug_screenshot_probe_report() {
+                Ok(path) => eprintln!("[screenshot-probe] report={}", path.display()),
+                Err(error) => eprintln!("[screenshot-probe] failed: {error}"),
+            });
+        if let Err(error) = spawn_result {
+            eprintln!("[screenshot-probe] failed to start: {error}");
+        }
     }
 }
 
 fn should_broadcast_hotkey_action(action_id: HotkeyActionId) -> bool {
-    action_id != HotkeyActionId::ClipboardOpenPanel
+    !matches!(
+        action_id,
+        HotkeyActionId::ClipboardOpenPanel
+            | HotkeyActionId::ScreenshotCapture
+            | HotkeyActionId::ClipboardPinImage
+    )
 }
 
 #[cfg(test)]
@@ -828,9 +957,13 @@ mod tests {
         assert!(!should_broadcast_hotkey_action(
             HotkeyActionId::ClipboardOpenPanel
         ));
+        assert!(!should_broadcast_hotkey_action(
+            HotkeyActionId::ScreenshotCapture
+        ));
+        assert!(!should_broadcast_hotkey_action(
+            HotkeyActionId::ClipboardPinImage
+        ));
         for action in [
-            HotkeyActionId::ScreenshotCapture,
-            HotkeyActionId::ClipboardPinImage,
             HotkeyActionId::ClipboardQrConvert,
             HotkeyActionId::LauncherOpen,
         ] {

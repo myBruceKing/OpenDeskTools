@@ -874,6 +874,30 @@ impl ClipboardService {
         self.content_for_write(item.id)
     }
 
+    /// Returns the newest text or image record that can be rendered as a pin.
+    /// File records are deliberately skipped because they have no stable
+    /// first-version screen representation.
+    pub fn latest_pinnable_content_for_write(
+        &self,
+    ) -> Result<ClipboardWriteContent, ClipboardError> {
+        let page = self.history(ClipboardHistoryQuery {
+            favorites_only: false,
+            search: None,
+            limit: CLIPBOARD_HISTORY_CAPACITY,
+        })?;
+        let item = page
+            .items
+            .into_iter()
+            .find(|item| {
+                matches!(
+                    item.kind,
+                    ClipboardContentKind::Text | ClipboardContentKind::Image
+                )
+            })
+            .ok_or(ClipboardError::NoLatestItem)?;
+        self.content_for_write(item.id)
+    }
+
     fn reconcile_images(&self) -> Result<(), ClipboardError> {
         let _lifecycle = self.lock_image_lifecycle()?;
         let references = self.storage.read(|connection| {
@@ -1791,6 +1815,27 @@ mod tests {
             .image_bytes(item.id)
             .unwrap()
             .starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn latest_pinnable_content_prefers_newer_text_and_skips_files() {
+        let (temp, _storage, service) = service();
+        service
+            .record_image(1, 1, vec![10, 20, 30, 255], metadata(10))
+            .unwrap();
+        service
+            .record_text("newer text".to_owned(), metadata(20))
+            .unwrap();
+        let file = temp.path().join("newest.txt");
+        fs::write(&file, b"file").unwrap();
+        service
+            .record_files(vec![path_to_utf16(&file)], metadata(30))
+            .unwrap();
+
+        assert_eq!(
+            service.latest_pinnable_content_for_write().unwrap(),
+            ClipboardWriteContent::Text("newer text".to_owned())
+        );
     }
 
     #[test]

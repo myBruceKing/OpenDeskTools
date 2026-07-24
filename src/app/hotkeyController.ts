@@ -11,6 +11,7 @@ const INITIAL_STATE: HotkeyControllerState = {
   status: "loading",
   snapshot: null,
   editor: null,
+  pendingEnabledActionId: null,
   error: null,
   systemHotkeyNotice: null
 };
@@ -111,6 +112,43 @@ function confirmSavedHotkey(
   return null;
 }
 
+function confirmEnabledChange(
+  snapshot: HotkeySnapshot,
+  actionId: GlobalHotkeyId,
+  enabled: boolean
+) {
+  const action = snapshot.actions.find((candidate) => candidate.actionId === actionId);
+  if (!action || action.configuredEnabled !== enabled) {
+    return {
+      code: "hotkey_enabled_update_not_applied",
+      message: `快捷键${enabled ? "启用" : "停用"}未生效；快捷键服务没有确认本次设置，请重试。`,
+      actualRevision: snapshot.revision
+    };
+  }
+
+  if (enabled && action.actionAvailable && action.runtimeState !== "registered") {
+    return {
+      code: "hotkey_enabled_not_active",
+      message: `快捷键已设为启用，但当前未生效${action.detail ? `：${action.detail}` : "。"}`,
+      actualRevision: snapshot.revision
+    };
+  }
+
+  if (
+    !enabled
+    && action.actionAvailable
+    && (action.runtimeState !== "disabled" || action.runtimeBackend !== null)
+  ) {
+    return {
+      code: "hotkey_disabled_not_inactive",
+      message: `快捷键设置已保存，但运行时未完全停用${action.detail ? `：${action.detail}` : "；请重启应用后检查。"}`,
+      actualRevision: snapshot.revision
+    };
+  }
+
+  return null;
+}
+
 export class HotkeyController {
   private state: HotkeyControllerState = INITIAL_STATE;
   private listeners = new Set<() => void>();
@@ -143,6 +181,7 @@ export class HotkeyController {
           status: "ready",
           snapshot,
           editor: null,
+          pendingEnabledActionId: null,
           error: null,
           systemHotkeyNotice: this.state.systemHotkeyNotice
         });
@@ -155,6 +194,7 @@ export class HotkeyController {
           status: "unavailable",
           snapshot: null,
           editor: null,
+          pendingEnabledActionId: null,
           error: normalizeHotkeyCommandError(error),
           systemHotkeyNotice: null
         });
@@ -168,7 +208,12 @@ export class HotkeyController {
   }
 
   openEditor(actionId: GlobalHotkeyId) {
-    if (!this.active || this.state.status !== "ready" || this.state.snapshot === null) {
+    if (
+      !this.active
+      || this.state.status !== "ready"
+      || this.state.snapshot === null
+      || this.state.pendingEnabledActionId !== null
+    ) {
       return;
     }
     const action = this.state.snapshot.actions.find((candidate) => candidate.actionId === actionId);
@@ -245,8 +290,83 @@ export class HotkeyController {
     });
   }
 
+  async setEnabled(actionId: GlobalHotkeyId, enabled: boolean) {
+    if (
+      !this.active
+      || this.state.status !== "ready"
+      || this.state.snapshot === null
+      || this.state.pendingEnabledActionId !== null
+      || this.state.editor !== null
+    ) {
+      return;
+    }
+    const current = this.state.snapshot.actions.find(
+      (candidate) => candidate.actionId === actionId
+    );
+    if (!current || current.configuredEnabled === enabled) {
+      return;
+    }
+
+    const session = this.session;
+    const expectedRevision = this.state.snapshot.revision;
+    this.setState({
+      ...this.state,
+      pendingEnabledActionId: actionId,
+      error: null
+    });
+
+    try {
+      const { snapshot, systemHotkeyNotice } = await this.client.updateEnabled({
+        actionId,
+        expectedRevision,
+        enabled
+      });
+      if (!this.active || session !== this.session) {
+        return;
+      }
+      const confirmationIssue = confirmEnabledChange(snapshot, actionId, enabled);
+      this.setState({
+        ...this.state,
+        snapshot,
+        pendingEnabledActionId: null,
+        error: confirmationIssue,
+        systemHotkeyNotice:
+          confirmationIssue === null && enabled && systemHotkeyNotice?.restartRequired
+            ? systemHotkeyNotice
+            : this.state.systemHotkeyNotice
+      });
+    } catch (error: unknown) {
+      if (!this.active || session !== this.session) {
+        return;
+      }
+      let issue = normalizeHotkeyCommandError(error);
+      let confirmedSnapshot = this.state.snapshot;
+      if (issue.code === "hotkey_revision_conflict") {
+        try {
+          confirmedSnapshot = await this.client.getSnapshot();
+        } catch (refreshError: unknown) {
+          issue = normalizeHotkeyCommandError(refreshError);
+        }
+        if (!this.active || session !== this.session) {
+          return;
+        }
+      }
+      this.setState({
+        ...this.state,
+        snapshot: confirmedSnapshot,
+        pendingEnabledActionId: null,
+        error: issue
+      });
+    }
+  }
+
   async save() {
-    if (!this.active || !canSaveHotkeyEditor(this.state) || this.state.snapshot === null) {
+    if (
+      !this.active
+      || !canSaveHotkeyEditor(this.state)
+      || this.state.snapshot === null
+      || this.state.pendingEnabledActionId !== null
+    ) {
       return;
     }
     const session = this.session;

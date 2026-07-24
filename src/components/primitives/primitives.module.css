@@ -116,6 +116,7 @@
 }
 
 .unknown,
+.disabled,
 .unavailable {
   color: var(--text-muted);
 }

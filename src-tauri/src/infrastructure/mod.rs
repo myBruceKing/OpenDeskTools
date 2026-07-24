@@ -17,11 +17,15 @@ pub mod general_settings;
 pub mod hotkey;
 pub mod hotkey_capture;
 pub mod image;
+pub mod image_output;
 pub mod keyboard_hook;
+pub mod pin_image;
 pub mod popup_geometry;
 pub mod qr;
 pub mod qr_toast_surface_window;
 pub mod quick_launch;
+#[allow(dead_code)]
+pub mod screenshot;
 pub mod source_icon;
 #[allow(dead_code)]
 pub mod storage;

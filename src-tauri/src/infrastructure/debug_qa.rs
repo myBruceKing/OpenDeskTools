@@ -4,21 +4,25 @@ use std::time::Duration;
 use thiserror::Error;
 
 const OPEN_CLIPBOARD_SURFACE_AFTER_MS: &str = "--qa-open-clipboard-surface-after-ms";
+const SCREENSHOT_PROBE: &str = "--qa-screenshot-probe";
 const MAX_QA_DELAY_MS: u64 = 300_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DebugQaOptions {
     pub open_clipboard_surface_after: Option<Duration>,
+    pub screenshot_probe: bool,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DebugQaArgumentError {
-    #[error("{OPEN_CLIPBOARD_SURFACE_AFTER_MS} is available only in debug builds")]
+    #[error("QA arguments are available only in debug builds")]
     UnavailableInRelease,
     #[error("{OPEN_CLIPBOARD_SURFACE_AFTER_MS} requires a millisecond value")]
     MissingDelay,
     #[error("{OPEN_CLIPBOARD_SURFACE_AFTER_MS} may only be provided once")]
     DuplicateDelay,
+    #[error("{SCREENSHOT_PROBE} may only be provided once")]
+    DuplicateScreenshotProbe,
     #[error(
         "{OPEN_CLIPBOARD_SURFACE_AFTER_MS} must be an integer from 0 through {MAX_QA_DELAY_MS}"
     )]
@@ -38,7 +42,18 @@ fn parse_with_build_mode(
     let mut arguments = arguments.into_iter();
     let _executable = arguments.next();
     let mut delay = None;
+    let mut screenshot_probe = false;
     while let Some(argument) = arguments.next() {
+        if argument == SCREENSHOT_PROBE {
+            if !debug_enabled {
+                return Err(DebugQaArgumentError::UnavailableInRelease);
+            }
+            if screenshot_probe {
+                return Err(DebugQaArgumentError::DuplicateScreenshotProbe);
+            }
+            screenshot_probe = true;
+            continue;
+        }
         let value = if argument == OPEN_CLIPBOARD_SURFACE_AFTER_MS {
             Some(arguments.next().ok_or(DebugQaArgumentError::MissingDelay)?)
         } else {
@@ -67,6 +82,7 @@ fn parse_with_build_mode(
     }
     Ok(DebugQaOptions {
         open_clipboard_surface_after: delay,
+        screenshot_probe,
     })
 }
 
@@ -130,6 +146,23 @@ mod tests {
                 .unwrap()
                 .open_clipboard_surface_after,
             Some(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn screenshot_probe_is_explicit_debug_only_and_unique() {
+        assert!(
+            parse_with_build_mode(args(&[SCREENSHOT_PROBE]), true)
+                .unwrap()
+                .screenshot_probe
+        );
+        assert_eq!(
+            parse_with_build_mode(args(&[SCREENSHOT_PROBE]), false),
+            Err(DebugQaArgumentError::UnavailableInRelease)
+        );
+        assert_eq!(
+            parse_with_build_mode(args(&[SCREENSHOT_PROBE, SCREENSHOT_PROBE]), true),
+            Err(DebugQaArgumentError::DuplicateScreenshotProbe)
         );
     }
 

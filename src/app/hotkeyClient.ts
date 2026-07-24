@@ -5,6 +5,7 @@ import {
   parseHotkeyUpdateResult,
   toStableHotkeyActionId,
   type HotkeyClassification,
+  type HotkeyEnabledPatch,
   type HotkeySnapshot,
   type HotkeyUpdatePatch,
   type HotkeyUpdateResult
@@ -16,6 +17,7 @@ export type HotkeyClient = {
   getSnapshot: () => Promise<HotkeySnapshot>;
   classify: (binding: string) => Promise<HotkeyClassification>;
   update: (patch: HotkeyUpdatePatch) => Promise<HotkeyUpdateResult>;
+  updateEnabled: (patch: HotkeyEnabledPatch) => Promise<HotkeyUpdateResult>;
 };
 
 export function createHotkeyClient({
@@ -37,6 +39,14 @@ export function createHotkeyClient({
     async update(patch) {
       return parseHotkeyUpdateResult(
         await invokeFunction("update_hotkey_binding", {
+          patch: { ...patch, actionId: toStableHotkeyActionId(patch.actionId) }
+        })
+      );
+    },
+
+    async updateEnabled(patch) {
+      return parseHotkeyUpdateResult(
+        await invokeFunction("update_hotkey_enabled", {
           patch: { ...patch, actionId: toStableHotkeyActionId(patch.actionId) }
         })
       );

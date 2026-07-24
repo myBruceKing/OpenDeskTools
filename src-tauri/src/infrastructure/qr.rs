@@ -120,7 +120,7 @@ impl QrService {
         })
     }
 
-    fn decode_image<F>(
+    pub fn decode_image<F>(
         &self,
         width: u32,
         height: u32,

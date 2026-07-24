@@ -155,7 +155,9 @@ export function HotkeysPage({ onSnapshotChanged }: { onSnapshotChanged: () => Pr
             <HotkeyList
               hotkeys={listItems}
               density="full"
-              toggleDisabled
+              toggleDisabled={state.pendingEnabledActionId !== null}
+              editDisabled={state.pendingEnabledActionId !== null}
+              onEnabledChange={hotkeys.setEnabled}
               onEdit={hotkeys.openEditor}
             />
           ) : (

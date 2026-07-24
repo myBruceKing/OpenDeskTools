@@ -58,6 +58,17 @@ pub struct ClipboardListenerManager {
     control: Mutex<()>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ClipboardSequenceSuppressor {
+    suppressed_sequences: Arc<Mutex<VecDeque<u32>>>,
+}
+
+impl ClipboardSequenceSuppressor {
+    pub fn suppress_sequence(&self, sequence: u32) {
+        suppress_sequence(&self.suppressed_sequences, sequence);
+    }
+}
+
 impl fmt::Debug for ClipboardListenerManager {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -82,17 +93,12 @@ impl Default for ClipboardListenerManager {
 
 impl ClipboardListenerManager {
     pub fn suppress_sequence(&self, sequence: u32) {
-        if sequence == 0 {
-            return;
-        }
-        if let Ok(mut sequences) = self.suppressed_sequences.lock() {
-            if sequences.contains(&sequence) {
-                return;
-            }
-            while sequences.len() >= MAX_SUPPRESSED_SEQUENCES {
-                sequences.pop_front();
-            }
-            sequences.push_back(sequence);
+        suppress_sequence(&self.suppressed_sequences, sequence);
+    }
+
+    pub fn sequence_suppressor(&self) -> ClipboardSequenceSuppressor {
+        ClipboardSequenceSuppressor {
+            suppressed_sequences: Arc::clone(&self.suppressed_sequences),
         }
     }
     pub fn status(&self) -> ClipboardListenerStatus {
@@ -134,6 +140,21 @@ impl ClipboardListenerManager {
             self.status.store(STATUS_STOPPED, Ordering::Release);
             Ok(())
         }
+    }
+}
+
+fn suppress_sequence(sequences: &Mutex<VecDeque<u32>>, sequence: u32) {
+    if sequence == 0 {
+        return;
+    }
+    if let Ok(mut sequences) = sequences.lock() {
+        if sequences.contains(&sequence) {
+            return;
+        }
+        while sequences.len() >= MAX_SUPPRESSED_SEQUENCES {
+            sequences.pop_front();
+        }
+        sequences.push_back(sequence);
     }
 }
 

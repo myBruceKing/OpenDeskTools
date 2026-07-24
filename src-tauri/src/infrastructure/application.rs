@@ -26,8 +26,10 @@ use super::general_settings;
 use super::hotkey::{HotkeyError, HotkeyManager, HotkeySnapshot, OrdinaryHotkeyLatch};
 use super::hotkey_capture::HotkeyCaptureManager;
 use super::keyboard_hook::KeyboardHookBroker;
+use super::pin_image::PinImageService;
 use super::qr::QrService;
 use super::quick_launch::{QuickLaunchError, QuickLaunchService};
+use super::screenshot::service::ScreenshotService;
 use super::storage::{StorageError, StorageService};
 use super::surface::SurfaceManager;
 use super::theme::{ThemeError, ThemeService};
@@ -46,6 +48,8 @@ pub struct ApplicationRuntime {
     clipboard: Arc<ClipboardService>,
     clipboard_listener: ClipboardListenerManager,
     clipboard_input: ClipboardInputCoordinator,
+    screenshot: Arc<ScreenshotService>,
+    pin_image: Arc<PinImageService>,
     qr: QrService,
     quick_launch: Arc<QuickLaunchService>,
     surface: Arc<SurfaceManager>,
@@ -157,6 +161,14 @@ impl ApplicationRuntime {
 
     pub(crate) fn clipboard_input(&self) -> &ClipboardInputCoordinator {
         &self.clipboard_input
+    }
+
+    pub(crate) fn screenshot(&self) -> Arc<ScreenshotService> {
+        Arc::clone(&self.screenshot)
+    }
+
+    pub(crate) fn pin_image(&self) -> Arc<PinImageService> {
+        Arc::clone(&self.pin_image)
     }
 
     pub(crate) fn qr(&self) -> &QrService {
@@ -316,8 +328,15 @@ impl ApplicationRuntime {
         let hotkeys = HotkeyManager::initialize(Arc::clone(&storage))?;
         let keyboard_hook = Arc::new(KeyboardHookBroker::default());
         let surface = Arc::new(SurfaceManager::default());
+        let clipboard_listener = ClipboardListenerManager::default();
         let clipboard_input =
             ClipboardInputCoordinator::new(Arc::clone(&clipboard), Arc::clone(&surface));
+        let screenshot = Arc::new(ScreenshotService::new(Arc::clone(&clipboard)));
+        let pin_image = Arc::new(PinImageService::new(
+            Arc::clone(&clipboard),
+            Arc::clone(&keyboard_hook),
+            clipboard_listener.sequence_suppressor(),
+        ));
         let qr = QrService::new(Arc::clone(&clipboard));
         let quick_launch = Arc::new(QuickLaunchService::initialize(Arc::clone(&storage))?);
         let usage_statistics = UsageStatisticsService::new(Arc::clone(&storage));
@@ -327,8 +346,10 @@ impl ApplicationRuntime {
         Ok(Self {
             storage,
             clipboard,
-            clipboard_listener: ClipboardListenerManager::default(),
+            clipboard_listener,
             clipboard_input,
+            screenshot,
+            pin_image,
             qr,
             quick_launch,
             surface,

@@ -87,9 +87,8 @@ fn build_view_model(
                 match hotkey.runtime_state {
                     HotkeyRuntimeState::Registered => "normal",
                     HotkeyRuntimeState::Conflict => "conflict",
-                    HotkeyRuntimeState::Disabled
-                    | HotkeyRuntimeState::Unavailable
-                    | HotkeyRuntimeState::Degraded => "unavailable",
+                    HotkeyRuntimeState::Disabled => "disabled",
+                    HotkeyRuntimeState::Unavailable | HotkeyRuntimeState::Degraded => "unavailable",
                 }
                 .to_owned(),
             ),

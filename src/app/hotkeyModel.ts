@@ -1,4 +1,4 @@
-export type HotkeyState = "normal" | "conflict" | "unavailable" | "unknown";
+export type HotkeyState = "normal" | "conflict" | "disabled" | "unavailable" | "unknown";
 
 export type GlobalHotkeyId =
   | "capture"
@@ -123,6 +123,12 @@ export type HotkeyUpdatePatch = {
   forceOverrideSystem: boolean;
 };
 
+export type HotkeyEnabledPatch = {
+  actionId: GlobalHotkeyId;
+  expectedRevision: number;
+  enabled: boolean;
+};
+
 export type HotkeyCommandError = {
   code: string;
   message: string;
@@ -145,6 +151,7 @@ export type HotkeyControllerState = {
   status: "loading" | "ready" | "unavailable";
   snapshot: HotkeySnapshot | null;
   editor: HotkeyEditorState | null;
+  pendingEnabledActionId: GlobalHotkeyId | null;
   error: HotkeyCommandError | null;
   systemHotkeyNotice: SystemHotkeyNotice | null;
 };
@@ -246,6 +253,9 @@ export function toHotkeyBadgeState(runtimeState: HotkeyRuntimeState): HotkeyStat
   }
   if (runtimeState === "conflict") {
     return "conflict";
+  }
+  if (runtimeState === "disabled") {
+    return "disabled";
   }
   return "unavailable";
 }

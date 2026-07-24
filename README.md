@@ -30,7 +30,7 @@
 | F1 区域截图 | 规划中 | 自研多显示器截图内核、区域选择、剪贴板与文件输出 |
 | F3 屏幕贴图 | 规划中 | 无边框置顶贴图、拖动、缩放和多实例 |
 
-更细的完成条件、实机验收缺口和阶段顺序见 [开发计划](./docs/development-plan.md) 与 [图片皮肤、截图和贴图计划](./docs/skin-and-capture-development-plan.md)。
+更细的完成条件、实机验收缺口和阶段顺序见 [开发计划](./docs/development-plan.md)、[图片皮肤、截图和贴图计划](./docs/skin-and-capture-development-plan.md)，截图内核与屏幕贴图的技术落地见 [截图与屏幕贴图开发方案](./docs/screenshot-and-pinning-development-plan.md)。
 
 ## 产品结构
 

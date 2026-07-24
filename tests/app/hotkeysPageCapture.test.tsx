@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   setBinding: vi.fn(),
   appendBindingToken: vi.fn(),
   setForceOverrideSystem: vi.fn(),
+  setEnabled: vi.fn(),
   openEditor: vi.fn(),
   dismissSystemHotkeyNotice: vi.fn(),
   controllerState: null as HotkeyControllerState | null
@@ -35,6 +36,7 @@ vi.mock("../../src/app/useHotkeyController", () => ({
     setBinding: mocks.setBinding,
     appendBindingToken: mocks.appendBindingToken,
     setForceOverrideSystem: mocks.setForceOverrideSystem,
+    setEnabled: mocks.setEnabled,
     save: mocks.saveEditor,
     dismissSystemHotkeyNotice: mocks.dismissSystemHotkeyNotice
   })
@@ -93,6 +95,38 @@ describe("HotkeysPage native capture lifecycle", () => {
         ? mocks.saveEditor.mock.invocationCallOrder[0]
         : mocks.closeEditor.mock.invocationCallOrder[0]
     );
+  });
+
+  it("routes the per-action switch to the confirmed enable controller path", async () => {
+    mocks.controllerState = {
+      ...readyEditorState(),
+      editor: null
+    };
+    await act(async () => {
+      root.render(<HotkeysPage onSnapshotChanged={async () => undefined} />);
+    });
+
+    const toggle = document.querySelector<HTMLButtonElement>("[role='switch']");
+    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => toggle?.click());
+
+    expect(mocks.setEnabled).toHaveBeenCalledWith("capture", false);
+  });
+
+  it("blocks all enable and edit actions while an enable update is pending", async () => {
+    mocks.controllerState = {
+      ...readyEditorState(),
+      editor: null,
+      pendingEnabledActionId: "capture"
+    };
+    await act(async () => {
+      root.render(<HotkeysPage onSnapshotChanged={async () => undefined} />);
+    });
+
+    expect(document.querySelector<HTMLButtonElement>("[role='switch']")?.disabled).toBe(true);
+    expect(getButton("编辑").disabled).toBe(true);
   });
 
   it.each(["取消", "保存"])("keeps the editor action blocked when stop fails for %s", async (action) => {
@@ -266,6 +300,7 @@ function readyEditorState({
       saving: false,
       error: null
     },
+    pendingEnabledActionId: null,
     systemHotkeyNotice: null
   };
 }
