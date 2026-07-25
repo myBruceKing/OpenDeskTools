@@ -94,6 +94,7 @@ impl ScreenshotService {
 
     pub fn copy_image<F>(
         &self,
+        owner_window: usize,
         image: &CapturedImage,
         mut suppress: F,
     ) -> Result<(), ScreenshotServiceError>
@@ -105,7 +106,8 @@ impl ScreenshotService {
             height: image.height,
             rgba: image.rgba.clone(),
         };
-        self.writer.replace_current(0, &content, &mut suppress)?;
+        self.writer
+            .replace_current(owner_window, &content, &mut suppress)?;
         Ok(())
     }
 

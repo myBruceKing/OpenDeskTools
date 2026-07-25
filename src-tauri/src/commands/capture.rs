@@ -15,6 +15,8 @@ use crate::infrastructure::screenshot::ScreenshotError;
 use crate::infrastructure::usage_statistics::UsageAction;
 use crate::{clipboard_history_event_sink, record_usage_success};
 
+use super::main_window_handle;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenshotCaptureDto {
@@ -80,11 +82,12 @@ pub(crate) fn capture_and_notify<R: Runtime>(
                     message: "已取消截图。",
                 });
             }
+            let clipboard_owner = main_window_handle(app).unwrap_or_default();
             let (status, message) = match action {
                 CaptureAction::Copy | CaptureAction::Finish => {
                     runtime
                         .screenshot()
-                        .copy_image(&image, |sequence| {
+                        .copy_image(clipboard_owner, &image, |sequence| {
                             runtime.clipboard_listener().suppress_sequence(sequence)
                         })
                         .map_err(map_screenshot_error)?;
@@ -127,9 +130,13 @@ pub(crate) fn capture_and_notify<R: Runtime>(
                 CaptureAction::DecodeQr => {
                     runtime
                         .qr()
-                        .decode_image(image.width, image.height, image.rgba.clone(), |sequence| {
-                            runtime.clipboard_listener().suppress_sequence(sequence)
-                        })
+                        .decode_image(
+                            clipboard_owner,
+                            image.width,
+                            image.height,
+                            image.rgba.clone(),
+                            |sequence| runtime.clipboard_listener().suppress_sequence(sequence),
+                        )
                         .map_err(map_capture_qr_error)?;
                     ("qrDecoded", "已识别截图中的二维码并复制结果。")
                 }

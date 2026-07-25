@@ -71,7 +71,11 @@ impl QrService {
         }
     }
 
-    pub fn convert_latest<F>(&self, suppress: F) -> Result<QrConversionResult, QrError>
+    pub fn convert_latest<F>(
+        &self,
+        owner_window: usize,
+        suppress: F,
+    ) -> Result<QrConversionResult, QrError>
     where
         F: FnMut(u32),
     {
@@ -83,17 +87,22 @@ impl QrService {
                 other => QrError::Clipboard(other),
             })?;
         match input {
-            ClipboardWriteContent::Text(text) => self.encode_text(text, suppress),
+            ClipboardWriteContent::Text(text) => self.encode_text(owner_window, text, suppress),
             ClipboardWriteContent::Image {
                 width,
                 height,
                 rgba,
-            } => self.decode_image(width, height, rgba, suppress),
+            } => self.decode_image(owner_window, width, height, rgba, suppress),
             ClipboardWriteContent::Files { .. } => Err(QrError::UnsupportedContent),
         }
     }
 
-    fn encode_text<F>(&self, text: String, suppress: F) -> Result<QrConversionResult, QrError>
+    fn encode_text<F>(
+        &self,
+        owner_window: usize,
+        text: String,
+        suppress: F,
+    ) -> Result<QrConversionResult, QrError>
     where
         F: FnMut(u32),
     {
@@ -105,6 +114,7 @@ impl QrService {
         self.clipboard
             .record_application_image(width, height, rgba.clone())?;
         let system_clipboard_synced = self.sync_system_clipboard(
+            owner_window,
             &ClipboardWriteContent::Image {
                 width,
                 height,
@@ -120,6 +130,7 @@ impl QrService {
 
     pub fn decode_image<F>(
         &self,
+        owner_window: usize,
         width: u32,
         height: u32,
         rgba: Vec<u8>,
@@ -131,7 +142,7 @@ impl QrService {
         let text = decode_qr_text(width, height, &rgba)?;
         self.clipboard.record_application_text(text.clone())?;
         let system_clipboard_synced =
-            self.sync_system_clipboard(&ClipboardWriteContent::Text(text), suppress);
+            self.sync_system_clipboard(owner_window, &ClipboardWriteContent::Text(text), suppress);
         Ok(QrConversionResult {
             kind: QrConversionKind::ImageToText,
             system_clipboard_synced,
@@ -139,15 +150,27 @@ impl QrService {
     }
 
     #[cfg(not(test))]
-    fn sync_system_clipboard<F>(&self, content: &ClipboardWriteContent, suppress: F) -> bool
+    fn sync_system_clipboard<F>(
+        &self,
+        owner_window: usize,
+        content: &ClipboardWriteContent,
+        suppress: F,
+    ) -> bool
     where
         F: FnMut(u32),
     {
-        self.writer.replace_current(0, content, suppress).is_ok()
+        self.writer
+            .replace_current(owner_window, content, suppress)
+            .is_ok()
     }
 
     #[cfg(test)]
-    fn sync_system_clipboard<F>(&self, _content: &ClipboardWriteContent, _suppress: F) -> bool
+    fn sync_system_clipboard<F>(
+        &self,
+        _owner_window: usize,
+        _content: &ClipboardWriteContent,
+        _suppress: F,
+    ) -> bool
     where
         F: FnMut(u32),
     {
@@ -276,7 +299,7 @@ mod tests {
             .unwrap();
         let service = QrService::new(Arc::clone(&clipboard));
 
-        let encoded = service.convert_latest(|_| {}).unwrap();
+        let encoded = service.convert_latest(1, |_| {}).unwrap();
         assert_eq!(encoded.kind, QrConversionKind::TextToImage);
         assert!(!encoded.system_clipboard_synced);
         let latest = clipboard
@@ -291,7 +314,7 @@ mod tests {
             .unwrap();
         assert_eq!(latest.kind, ClipboardContentKind::Image);
 
-        let decoded = service.convert_latest(|_| {}).unwrap();
+        let decoded = service.convert_latest(1, |_| {}).unwrap();
         assert_eq!(decoded.kind, QrConversionKind::ImageToText);
         let latest = clipboard
             .history(ClipboardHistoryQuery {

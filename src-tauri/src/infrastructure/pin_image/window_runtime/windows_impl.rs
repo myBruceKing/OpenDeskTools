@@ -1070,6 +1070,7 @@ fn apply_context_menu_command(window: HWND, context: &mut PinWindowContext, comm
     match command {
         MENU_COPY_IMAGE => {
             dispatch_clipboard_write(
+                window,
                 Arc::clone(&context.clipboard_writer),
                 context.suppressor.clone(),
                 ClipboardWriteContent::Image {
@@ -1082,6 +1083,7 @@ fn apply_context_menu_command(window: HWND, context: &mut PinWindowContext, comm
         MENU_COPY_TEXT => {
             if let Some(text) = context.image.source_text.clone() {
                 dispatch_clipboard_write(
+                    window,
                     Arc::clone(&context.clipboard_writer),
                     context.suppressor.clone(),
                     ClipboardWriteContent::Text(text),
@@ -1140,14 +1142,16 @@ fn apply_context_menu_command(window: HWND, context: &mut PinWindowContext, comm
 }
 
 fn dispatch_clipboard_write(
+    owner_window: HWND,
     writer: Arc<ClipboardWriter>,
     suppressor: ClipboardSequenceSuppressor,
     content: ClipboardWriteContent,
 ) {
+    let owner_window = owner_window as usize;
     let _ = thread::Builder::new()
         .name("pin-surface-copy".to_owned())
         .spawn(move || {
-            let _ = writer.replace_current(0, &content, |sequence| {
+            let _ = writer.replace_current(owner_window, &content, |sequence| {
                 suppressor.suppress_sequence(sequence)
             });
         });

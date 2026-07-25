@@ -26,6 +26,8 @@ pub enum ClipboardWriterError {
     TooLarge,
     #[error("clipboard content is invalid")]
     InvalidContent,
+    #[error("clipboard owner window is unavailable")]
+    InvalidOwnerWindow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +68,10 @@ impl ClipboardWriter {
         E: From<ClipboardWriterError>,
         F: FnOnce(&mut ClipboardWriterTransaction<'_>) -> Result<T, E>,
     {
+        #[cfg(windows)]
+        if owner_window == 0 {
+            return Err(E::from(ClipboardWriterError::InvalidOwnerWindow));
+        }
         let guard = self
             .operation_lock
             .lock()
@@ -461,6 +467,17 @@ impl GlobalMemoryApi for SystemGlobalMemory {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+
+    #[cfg(windows)]
+    #[test]
+    fn system_writer_rejects_a_missing_owner_before_touching_the_clipboard() {
+        assert_eq!(
+            ClipboardWriter::default()
+                .replace_current(0, &ClipboardWriteContent::Text("test".to_owned()), |_| {})
+                .unwrap_err(),
+            ClipboardWriterError::InvalidOwnerWindow
+        );
+    }
 
     #[derive(Default)]
     struct FakeMemory {
