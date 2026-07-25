@@ -8,9 +8,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use super::clipboard::{
-    ClipboardCaptureMetadata, ClipboardError, ClipboardService, ClipboardWriteContent,
-};
+use super::clipboard::{ClipboardError, ClipboardService, ClipboardWriteContent};
 use super::clipboard_writer::ClipboardWriter;
 
 const QR_RENDER_SIZE: u32 = 300;
@@ -105,7 +103,7 @@ impl QrService {
         }
         let (width, height, rgba) = render_qr_rgba(text)?;
         self.clipboard
-            .record_image(width, height, rgba.clone(), generated_metadata())?;
+            .record_application_image(width, height, rgba.clone())?;
         let system_clipboard_synced = self.sync_system_clipboard(
             &ClipboardWriteContent::Image {
                 width,
@@ -131,8 +129,7 @@ impl QrService {
         F: FnMut(u32),
     {
         let text = decode_qr_text(width, height, &rgba)?;
-        self.clipboard
-            .record_text(text.clone(), generated_metadata())?;
+        self.clipboard.record_application_text(text.clone())?;
         let system_clipboard_synced =
             self.sync_system_clipboard(&ClipboardWriteContent::Text(text), suppress);
         Ok(QrConversionResult {
@@ -156,19 +153,6 @@ impl QrService {
     {
         let _ = &self.writer;
         false
-    }
-}
-
-fn generated_metadata() -> ClipboardCaptureMetadata {
-    let captured_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-        });
-    ClipboardCaptureMetadata {
-        captured_at_ms,
-        source_application: Some("OpenDeskTools".to_owned()),
-        source_process: Some("open-desk-tools.exe".to_owned()),
     }
 }
 
@@ -248,7 +232,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::infrastructure::clipboard::{ClipboardContentKind, ClipboardHistoryQuery};
+    use crate::infrastructure::clipboard::{
+        ClipboardCaptureMetadata, ClipboardContentKind, ClipboardHistoryQuery,
+    };
     use crate::infrastructure::storage::StorageService;
 
     #[test]

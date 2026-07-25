@@ -1,8 +1,7 @@
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
@@ -24,6 +23,8 @@ pub const MAX_SEARCH_CHARS: usize = 256;
 pub const MAX_CLIPBOARD_FILES: usize = 128;
 pub const MAX_CLIPBOARD_FILE_PATH_UNITS: usize = 32_767;
 pub const MAX_CLIPBOARD_FILE_PATHS_JSON_BYTES: usize = 1024 * 1024;
+const APPLICATION_SOURCE_NAME: &str = "OpenDeskTools";
+const APPLICATION_SOURCE_PROCESS_FALLBACK: &str = "OpenDeskTools.exe";
 
 #[cfg(test)]
 type AfterImageStoreHook = Arc<dyn Fn(&ClipboardCaptureMetadata) + Send + Sync + 'static>;
@@ -76,6 +77,12 @@ pub struct ClipboardCaptureMetadata {
     pub captured_at_ms: u64,
     pub source_application: Option<String>,
     pub source_process: Option<String>,
+}
+
+#[derive(Debug)]
+struct ApplicationClipboardSource {
+    metadata: ClipboardCaptureMetadata,
+    executable_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,6 +232,47 @@ impl ClipboardService {
             .lock()
             .map_err(|_| ClipboardError::SettingsLockPoisoned)? = settings;
         self.apply_settings_retention_and_capacity()
+    }
+
+    /// Records text produced by OpenDeskTools itself while retaining the actual
+    /// executable name and, when available, its icon. Internal producers write
+    /// directly because their Windows clipboard notification is suppressed.
+    pub(crate) fn record_application_text(
+        &self,
+        text: String,
+    ) -> Result<ClipboardRecordResult, ClipboardError> {
+        let source =
+            application_clipboard_source(current_timestamp_ms(), std::env::current_exe().ok());
+        let result = self.record_text(text, source.metadata)?;
+        self.attach_application_source_icon(&result, source.executable_path.as_deref());
+        Ok(result)
+    }
+
+    /// Records an image produced by OpenDeskTools itself without relying on the
+    /// suppressed Windows clipboard notification to rediscover its source.
+    pub(crate) fn record_application_image(
+        &self,
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    ) -> Result<ClipboardRecordResult, ClipboardError> {
+        let source =
+            application_clipboard_source(current_timestamp_ms(), std::env::current_exe().ok());
+        let result = self.record_image(width, height, rgba, source.metadata)?;
+        self.attach_application_source_icon(&result, source.executable_path.as_deref());
+        Ok(result)
+    }
+
+    fn attach_application_source_icon(
+        &self,
+        result: &ClipboardRecordResult,
+        executable_path: Option<&Path>,
+    ) {
+        let Some(item) = result.item.as_ref() else {
+            return;
+        };
+        let source_icon = executable_path.and_then(|path| self.cache_source_icon(path));
+        let _ = self.attach_source_icon(item.id, source_icon.as_deref());
     }
 
     /// Runs the persisted retention and capacity policy for an existing data
@@ -1267,6 +1315,39 @@ fn validate_id(id: i64) -> Result<(), ClipboardError> {
     }
 }
 
+fn current_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
+}
+
+fn application_clipboard_source(
+    captured_at_ms: u64,
+    executable_path: Option<PathBuf>,
+) -> ApplicationClipboardSource {
+    let source_process = executable_path
+        .as_deref()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .filter(|name| {
+            !name.is_empty()
+                && name.chars().count() <= MAX_SOURCE_PROCESS_CHARS
+                && !name.chars().any(char::is_control)
+        })
+        .unwrap_or(APPLICATION_SOURCE_PROCESS_FALLBACK)
+        .to_owned();
+    ApplicationClipboardSource {
+        metadata: ClipboardCaptureMetadata {
+            captured_at_ms,
+            source_application: Some(APPLICATION_SOURCE_NAME.to_owned()),
+            source_process: Some(source_process),
+        },
+        executable_path,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rusqlite::params;
@@ -1290,6 +1371,49 @@ mod tests {
             source_application: None,
             source_process: None,
         }
+    }
+
+    #[test]
+    fn application_source_uses_the_deployed_executable_name() {
+        let executable = PathBuf::from(r"D:\Tools\OpenDeskTools\OpenDeskTools.exe");
+        let source = application_clipboard_source(42, Some(executable.clone()));
+
+        assert_eq!(source.metadata.captured_at_ms, 42);
+        assert_eq!(
+            source.metadata.source_application.as_deref(),
+            Some("OpenDeskTools")
+        );
+        assert_eq!(
+            source.metadata.source_process.as_deref(),
+            Some("OpenDeskTools.exe")
+        );
+        assert_eq!(
+            source.executable_path.as_deref(),
+            Some(executable.as_path())
+        );
+    }
+
+    #[test]
+    fn application_generated_image_records_its_actual_process_source() {
+        let (_temp, _storage, service) = service();
+        let expected_process = std::env::current_exe()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let result = service
+            .record_application_image(1, 1, vec![16, 32, 48, 255])
+            .unwrap();
+        let item = result.item.unwrap();
+
+        assert!(result.retained);
+        assert_eq!(item.source_application.as_deref(), Some("OpenDeskTools"));
+        assert_eq!(
+            item.source_process.as_deref(),
+            Some(expected_process.as_str())
+        );
     }
 
     fn all(limit: u32) -> ClipboardHistoryQuery {

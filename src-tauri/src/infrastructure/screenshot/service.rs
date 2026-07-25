@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use thiserror::Error;
 
@@ -12,9 +11,7 @@ use super::model::CapturedImage;
 use super::monitor::MonitorTopology;
 use super::overlay::{self, CaptureAction};
 use super::ScreenshotError;
-use crate::infrastructure::clipboard::{
-    ClipboardCaptureMetadata, ClipboardError, ClipboardService, ClipboardWriteContent,
-};
+use crate::infrastructure::clipboard::{ClipboardError, ClipboardService, ClipboardWriteContent};
 use crate::infrastructure::clipboard_writer::{ClipboardWriter, ClipboardWriterError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,16 +84,10 @@ impl ScreenshotService {
     }
 
     pub fn record_image(&self, image: &CapturedImage) -> Result<bool, ScreenshotServiceError> {
-        let captured_at_ms = now_ms();
-        let record = self.clipboard.record_image(
+        let record = self.clipboard.record_application_image(
             image.width,
             image.height,
             image.rgba.clone(),
-            ClipboardCaptureMetadata {
-                captured_at_ms,
-                source_application: Some("OpenDeskTools".to_owned()),
-                source_process: Some("open-desk-tools.exe".to_owned()),
-            },
         )?;
         Ok(record.retained)
     }
@@ -141,12 +132,6 @@ impl Drop for SessionGuard<'_> {
     fn drop(&mut self) {
         self.active.store(false, Ordering::Release);
     }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as u64)
 }
 
 #[cfg(test)]
