@@ -8,10 +8,12 @@ use super::storage::{StorageError, StorageService};
 
 const START_MINIMIZED_KEY: &str = "general.start_minimized";
 const CLOSE_TO_TRAY_KEY: &str = "general.close_to_tray";
+const TRAY_ICON_VISIBLE_KEY: &str = "general.tray_icon_visible";
 const CRASH_DIAGNOSTICS_ENABLED_KEY: &str = "general.crash_diagnostics_enabled";
 
 const START_MINIMIZED_DEFAULT: bool = false;
 const CLOSE_TO_TRAY_DEFAULT: bool = true;
+const TRAY_ICON_VISIBLE_DEFAULT: bool = true;
 const CRASH_DIAGNOSTICS_ENABLED_DEFAULT: bool = false;
 
 /// Whether a normal (non-autostart) launch should stay hidden in the tray.
@@ -31,6 +33,16 @@ pub fn close_to_tray(storage: &StorageService) -> Result<bool, StorageError> {
 
 pub fn set_close_to_tray(storage: &StorageService, enabled: bool) -> Result<(), StorageError> {
     write_bool(storage, CLOSE_TO_TRAY_KEY, enabled)
+}
+
+/// Whether the notification-area icon is visible. Background shortcuts and
+/// services remain active when the icon is hidden.
+pub fn tray_icon_visible(storage: &StorageService) -> Result<bool, StorageError> {
+    read_bool(storage, TRAY_ICON_VISIBLE_KEY, TRAY_ICON_VISIBLE_DEFAULT)
+}
+
+pub fn set_tray_icon_visible(storage: &StorageService, enabled: bool) -> Result<(), StorageError> {
+    write_bool(storage, TRAY_ICON_VISIBLE_KEY, enabled)
 }
 
 /// Whether a Rust panic may create a local diagnostic report. This is opt-in
@@ -77,6 +89,7 @@ mod tests {
         let (_temp, storage) = storage();
         assert!(!start_minimized(&storage).unwrap());
         assert!(close_to_tray(&storage).unwrap());
+        assert!(tray_icon_visible(&storage).unwrap());
         assert!(!crash_diagnostics_enabled(&storage).unwrap());
     }
 
@@ -86,16 +99,20 @@ mod tests {
 
         set_start_minimized(&storage, true).unwrap();
         set_close_to_tray(&storage, false).unwrap();
+        set_tray_icon_visible(&storage, false).unwrap();
         set_crash_diagnostics_enabled(&storage, true).unwrap();
 
         assert!(start_minimized(&storage).unwrap());
         assert!(!close_to_tray(&storage).unwrap());
+        assert!(!tray_icon_visible(&storage).unwrap());
         assert!(crash_diagnostics_enabled(&storage).unwrap());
 
         set_start_minimized(&storage, false).unwrap();
         set_close_to_tray(&storage, true).unwrap();
+        set_tray_icon_visible(&storage, true).unwrap();
 
         assert!(!start_minimized(&storage).unwrap());
         assert!(close_to_tray(&storage).unwrap());
+        assert!(tray_icon_visible(&storage).unwrap());
     }
 }

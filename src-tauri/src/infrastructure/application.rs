@@ -264,6 +264,14 @@ impl ApplicationRuntime {
         general_settings::set_close_to_tray(&self.storage, enabled)
     }
 
+    pub(crate) fn tray_icon_visible(&self) -> bool {
+        general_settings::tray_icon_visible(&self.storage).unwrap_or(true)
+    }
+
+    pub(crate) fn set_tray_icon_visible(&self, enabled: bool) -> Result<(), StorageError> {
+        general_settings::set_tray_icon_visible(&self.storage, enabled)
+    }
+
     pub(crate) fn crash_diagnostics_enabled(&self) -> bool {
         general_settings::crash_diagnostics_enabled(&self.storage).unwrap_or(false)
     }
@@ -544,6 +552,7 @@ mod tests {
         // because it reads the real per-user registry.
         assert!(!runtime.start_minimized());
         assert!(runtime.close_to_tray());
+        assert!(runtime.tray_icon_visible());
         assert_eq!(
             runtime.clipboard_listener().status(),
             super::super::clipboard_listener::ClipboardListenerStatus::Stopped

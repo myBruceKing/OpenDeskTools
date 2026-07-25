@@ -11,7 +11,7 @@ export type GeneralSettingsState = {
   viewModel: GeneralViewModel;
   loaded: boolean;
   /** The toggle currently being persisted, or `null` when idle. */
-  pending: GeneralToggleKind | "dataDirectory" | null;
+  pending: GeneralToggleKind | "dataDirectory" | "administratorRestart" | null;
   error: string | null;
   dataDirectoryMigration: { dataDirectory: string; restartRequired: boolean } | null;
 };
@@ -92,5 +92,24 @@ export function useGeneralSettings() {
     }
   }, []);
 
-  return { state, setToggle, selectAndMigrateDataDirectory, refresh };
+  const restartAsAdministrator = useCallback(async () => {
+    setState((previous) => ({ ...previous, pending: "administratorRestart", error: null }));
+    try {
+      await generalClient.restartAsAdministrator();
+    } catch (error: unknown) {
+      setState((previous) => ({
+        ...previous,
+        pending: null,
+        error: parseGeneralCommandError(error)
+      }));
+    }
+  }, []);
+
+  return {
+    state,
+    setToggle,
+    selectAndMigrateDataDirectory,
+    restartAsAdministrator,
+    refresh
+  };
 }

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use infrastructure::application::ApplicationRuntime;
 use infrastructure::clipboard_surface_controller;
 use infrastructure::clipboard_surface_foreground;
-use infrastructure::clipboard_surface_pointer;
 use infrastructure::clipboard_surface_window::{
     self, ClipboardPreviewCloseReason, ClipboardSurfaceCloseReason,
     CLIPBOARD_PREVIEW_SURFACE_LABEL, CLIPBOARD_SURFACE_LABEL,
@@ -17,6 +16,7 @@ use infrastructure::debug_qa::DebugQaOptions;
 use infrastructure::hotkey::{HotkeyActionId, OrdinaryHotkeyTransition, TauriHotkeyRegistrar};
 use infrastructure::keyboard_hook::{RuntimeHotkeyEvent, RuntimeHotkeyPhase};
 use infrastructure::qr_toast_surface_window;
+use infrastructure::surface_pointer_monitor::{self, PointerMonitorOwner};
 use infrastructure::tool_menu_surface_window::{self, TOOL_MENU_SURFACE_LABEL};
 use infrastructure::tray::{
     route_window_lifecycle, TrayLifecycle, WindowLifecycleInput, WindowLifecycleRoute,
@@ -85,6 +85,10 @@ pub(crate) fn clipboard_history_event_sink<R: Runtime>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = infrastructure::elevation::wait_for_restart_parent() {
+        eprintln!("administrator restart handshake failed: {error}");
+        return;
+    }
     let builder = tauri::Builder::default();
     // The official plugin contract requires single-instance to be registered
     // first because Tauri plugins currently execute in builder order. This
@@ -219,7 +223,7 @@ pub fn run() {
                 }
             }
             app.manage(TrayLifecycle::default());
-            infrastructure::tray::install(app.handle())?;
+            infrastructure::tray::install(app.handle(), runtime_state.tray_icon_visible())?;
             #[cfg(debug_assertions)]
             schedule_debug_qa(app.handle(), qa_options);
             #[cfg(not(debug_assertions))]
@@ -288,6 +292,8 @@ pub fn run() {
             commands::general::set_autostart_enabled,
             commands::general::set_start_minimized,
             commands::general::set_close_to_tray,
+            commands::general::set_tray_icon_visible,
+            commands::general::restart_as_administrator,
             commands::general::set_crash_diagnostics_enabled,
             commands::general::select_and_migrate_data_directory,
             commands::theme::get_theme_preferences,
@@ -362,6 +368,7 @@ fn handle_tool_menu_surface_window_event<R: Runtime>(
                 eprintln!("failed to hide tool menu after confirmed foreground change: {error}");
             }
         }
+        tauri::WindowEvent::Destroyed => tool_menu_surface_window::forget_destroyed(),
         _ => {}
     }
 }
@@ -485,13 +492,13 @@ fn handle_clipboard_surface_window_event<R: Runtime>(
             }
         }
         tauri::WindowEvent::Destroyed => {
-            if let Err(error) = runtime.keyboard_hook().stop_surface_escape() {
+            if let Err(error) = clipboard_surface_window::stop_escape_monitor(&runtime) {
                 eprintln!("failed to stop destroyed clipboard Escape capture: {error}");
             }
             if let Err(error) = clipboard_surface_foreground::stop() {
                 eprintln!("failed to stop destroyed clipboard surface monitor: {error}");
             }
-            if let Err(error) = clipboard_surface_pointer::stop() {
+            if let Err(error) = surface_pointer_monitor::stop(PointerMonitorOwner::Clipboard) {
                 eprintln!("failed to stop destroyed clipboard outside-pointer monitor: {error}");
             }
             if let Err(error) = clipboard_surface_window::close_preview(
@@ -529,6 +536,24 @@ fn handle_global_shortcut<R: Runtime>(
         ShortcutState::Pressed => HotkeyActionPhase::Pressed,
         ShortcutState::Released => HotkeyActionPhase::Released,
     };
+    dispatch_ordinary_hotkey(
+        app,
+        &runtime,
+        action_id,
+        registration_revision,
+        binding,
+        phase,
+    );
+}
+
+fn dispatch_ordinary_hotkey<R: Runtime>(
+    app: &AppHandle<R>,
+    runtime: &ApplicationRuntime,
+    action_id: HotkeyActionId,
+    registration_revision: u64,
+    binding: String,
+    phase: HotkeyActionPhase,
+) {
     let transition = match phase {
         HotkeyActionPhase::Pressed => OrdinaryHotkeyTransition::Pressed,
         HotkeyActionPhase::Released => OrdinaryHotkeyTransition::Released,
@@ -540,11 +565,15 @@ fn handle_global_shortcut<R: Runtime>(
     {
         return;
     }
+    debug_qa::trace(format!(
+        "hotkey dispatch backend=standard action={} phase={phase:?} binding={binding}",
+        action_id.as_str(),
+    ));
     if action_id == HotkeyActionId::ClipboardOpenPanel
         && matches!(phase, HotkeyActionPhase::Pressed)
     {
-        match clipboard_surface_controller::toggle_from_foreground(app, &runtime) {
-            Ok(()) => record_usage_success(app, &runtime, UsageAction::ClipboardPanel),
+        match clipboard_surface_controller::toggle_from_foreground(app, runtime) {
+            Ok(()) => record_usage_success(app, runtime, UsageAction::ClipboardPanel),
             Err(error) => {
                 eprintln!("failed to process clipboard surface hotkey request: {error}");
             }
@@ -553,7 +582,7 @@ fn handle_global_shortcut<R: Runtime>(
     if action_id == HotkeyActionId::ClipboardQrConvert
         && matches!(phase, HotkeyActionPhase::Pressed)
     {
-        trigger_qr_conversion(app, &runtime);
+        trigger_qr_conversion(app, runtime);
     }
     if action_id == HotkeyActionId::ScreenshotCapture && matches!(phase, HotkeyActionPhase::Pressed)
     {
@@ -565,12 +594,12 @@ fn handle_global_shortcut<R: Runtime>(
     }
     if action_id == HotkeyActionId::LauncherOpen {
         let result = match phase {
-            HotkeyActionPhase::Pressed => show_tool_menu_surface(app, &runtime),
-            HotkeyActionPhase::Released => release_tool_menu_surface(app, &runtime),
+            HotkeyActionPhase::Pressed => show_tool_menu_surface(app, runtime),
+            HotkeyActionPhase::Released => release_tool_menu_surface(app, runtime),
         };
         match result {
             Ok(()) if matches!(phase, HotkeyActionPhase::Pressed) => {
-                record_usage_success(app, &runtime, UsageAction::ToolMenu);
+                record_usage_success(app, runtime, UsageAction::ToolMenu);
             }
             Ok(()) => {}
             Err(error) => {
@@ -612,6 +641,12 @@ pub(crate) fn handle_forced_hotkey_event<R: Runtime>(
         RuntimeHotkeyPhase::Pressed => HotkeyActionPhase::Pressed,
         RuntimeHotkeyPhase::Released => HotkeyActionPhase::Released,
     };
+    debug_qa::trace(format!(
+        "hotkey dispatch backend=forced action={} phase={phase:?} foreground_hwnd={:?} foreground_pid={:?}",
+        action_id.as_str(),
+        event.foreground_window,
+        event.foreground_process_id
+    ));
     if action_id == HotkeyActionId::ClipboardOpenPanel
         && matches!(phase, HotkeyActionPhase::Pressed)
     {
@@ -721,10 +756,13 @@ fn trigger_screenshot_capture<R: Runtime>(app: &AppHandle<R>) {
                     result.height.unwrap_or_default()
                 );
             }
-            Err(error) => eprintln!(
-                "screenshot capture failed code={} message={}",
-                error.code, error.message
-            ),
+            Err(error) => {
+                show_capture_error(&worker_app, error.code, error.message);
+                eprintln!(
+                    "screenshot capture failed code={} message={}",
+                    error.code, error.message
+                );
+            }
         }
     });
 }
@@ -743,7 +781,7 @@ fn trigger_pin_latest_image<R: Runtime>(app: &AppHandle<R>) {
                 );
             }
             Err(error) => {
-                show_pin_image_error(&worker_app, error.code, error.message);
+                show_capture_error(&worker_app, error.code, error.message);
                 eprintln!(
                     "pin image failed code={} message={}",
                     error.code, error.message
@@ -753,7 +791,7 @@ fn trigger_pin_latest_image<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
-fn show_pin_image_error<R: Runtime>(app: &AppHandle<R>, code: &'static str, message: &'static str) {
+fn show_capture_error<R: Runtime>(app: &AppHandle<R>, code: &'static str, message: &'static str) {
     let payload = serde_json::json!({
         "success": false,
         "kind": null,

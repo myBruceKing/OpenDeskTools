@@ -7,14 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
   setToggle: vi.fn(),
-  selectAndMigrateDataDirectory: vi.fn()
+  selectAndMigrateDataDirectory: vi.fn(),
+  restartAsAdministrator: vi.fn()
 }));
 
 vi.mock("../../src/app/generalClient", () => ({
   generalClient: {
     load: mocks.load,
     setToggle: mocks.setToggle,
-    selectAndMigrateDataDirectory: mocks.selectAndMigrateDataDirectory
+    selectAndMigrateDataDirectory: mocks.selectAndMigrateDataDirectory,
+    restartAsAdministrator: mocks.restartAsAdministrator
   }
 }));
 
@@ -25,6 +27,8 @@ const snapshot = (overrides: Record<string, unknown> = {}) => ({
   autostartEnabled: false,
   startMinimized: false,
   closeToTray: true,
+  trayIconVisible: true,
+  administratorMode: false,
   crashDiagnosticsEnabled: false,
   dataDirectory: "C:\\Users\\me\\AppData\\Roaming\\com.opendesktools.app",
   ...overrides
@@ -58,6 +62,7 @@ beforeEach(() => {
   mocks.load.mockReset();
   mocks.setToggle.mockReset();
   mocks.selectAndMigrateDataDirectory.mockReset();
+  mocks.restartAsAdministrator.mockReset();
 });
 
 afterEach(() => {
@@ -120,6 +125,47 @@ describe("GeneralPage autostart", () => {
         .querySelector<HTMLButtonElement>('[aria-label="关闭按钮最小化到托盘"]')
         ?.getAttribute("aria-checked")
     ).toBe("false");
+  });
+
+  it("immediately updates tray visibility", async () => {
+    mocks.load.mockResolvedValue(snapshot());
+    mocks.setToggle.mockResolvedValueOnce(snapshot({ trayIconVisible: false }));
+
+    await renderPage();
+
+    const trayToggle = container.querySelector<HTMLButtonElement>('[aria-label="显示托盘图标"]');
+    if (!trayToggle) throw new Error("tray visibility toggle should render");
+
+    await act(async () => trayToggle.click());
+    await act(async () => Promise.resolve());
+    expect(mocks.setToggle).toHaveBeenNthCalledWith(1, "trayIconVisible", false);
+    expect(trayToggle.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("shows the real privilege state and requests an explicit administrator restart", async () => {
+    mocks.load.mockResolvedValue(snapshot({ administratorMode: false }));
+    mocks.restartAsAdministrator.mockResolvedValue(undefined);
+
+    await renderPage();
+
+    const restartButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "以管理员身份重新启动"
+    );
+    if (!restartButton) throw new Error("administrator restart button should render");
+    expect(container.textContent).toContain("普通权限是默认模式");
+
+    await act(async () => restartButton.click());
+
+    expect(mocks.restartAsAdministrator).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports administrator mode without rendering a redundant restart action", async () => {
+    mocks.load.mockResolvedValue(snapshot({ administratorMode: true }));
+
+    await renderPage();
+
+    expect(container.textContent).toContain("当前以管理员身份运行");
+    expect(container.textContent).not.toContain("以管理员身份重新启动");
   });
 
   it("opens native path selection then reports the scheduled safe restart", async () => {

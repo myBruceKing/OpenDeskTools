@@ -9,11 +9,12 @@ mod platform {
     use thiserror::Error;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent};
+    use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, GetAncestor, GetMessageW, PeekMessageW, PostQuitMessage,
-        PostThreadMessageW, TranslateMessage, EVENT_SYSTEM_FOREGROUND, GA_ROOT, MSG, PM_NOREMOVE,
-        WINEVENT_OUTOFCONTEXT, WM_QUIT,
+        PostThreadMessageW, TranslateMessage, EVENT_OBJECT_FOCUS, EVENT_OBJECT_INVOKED,
+        EVENT_OBJECT_SELECTIONWITHIN, EVENT_SYSTEM_CAPTURESTART, EVENT_SYSTEM_FOREGROUND, GA_ROOT,
+        MSG, PM_NOREMOVE, WINEVENT_OUTOFCONTEXT, WM_QUIT,
     };
 
     #[derive(Debug, Error)]
@@ -42,6 +43,12 @@ mod platform {
         KeepTarget,
         KeepInternalSurface,
         CloseDifferentRoot,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SurfaceEventDecision {
+        Keep,
+        Close,
     }
 
     impl ForegroundDecision {
@@ -105,27 +112,15 @@ mod platform {
                         callback: Some(Box::new(callback)),
                     });
                 });
-                let hook = unsafe {
-                    SetWinEventHook(
-                        EVENT_SYSTEM_FOREGROUND,
-                        EVENT_SYSTEM_FOREGROUND,
-                        std::ptr::null_mut(),
-                        Some(foreground_event_callback),
-                        0,
-                        0,
-                        foreground_hook_flags(),
-                    )
-                };
-                if hook.is_null() {
+                let hooks = unsafe { install_event_hooks() };
+                let Ok(hooks) = hooks else {
                     HOOK_CONTEXT.with(|context| *context.borrow_mut() = None);
                     let _ = started_tx.send(Err(ForegroundMonitorError::InstallHook));
                     worker_finished.store(true, Ordering::Release);
                     return;
-                }
+                };
                 if started_tx.send(Ok(thread_id)).is_err() {
-                    unsafe {
-                        UnhookWinEvent(hook);
-                    }
+                    unsafe { unhook_all(&hooks) };
                     HOOK_CONTEXT.with(|context| *context.borrow_mut() = None);
                     worker_finished.store(true, Ordering::Release);
                     return;
@@ -141,9 +136,7 @@ mod platform {
                         DispatchMessageW(&message);
                     }
                 }
-                unsafe {
-                    UnhookWinEvent(hook);
-                }
+                unsafe { unhook_all(&hooks) };
                 HOOK_CONTEXT.with(|context| *context.borrow_mut() = None);
                 worker_finished.store(true, Ordering::Release);
             })
@@ -191,7 +184,40 @@ mod platform {
             .map_err(|_| ForegroundMonitorError::WorkerPanicked)
     }
 
-    unsafe extern "system" fn foreground_event_callback(
+    unsafe fn install_event_hooks() -> Result<Vec<HWINEVENTHOOK>, ForegroundMonitorError> {
+        let ranges = [
+            (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+            (EVENT_SYSTEM_CAPTURESTART, EVENT_SYSTEM_CAPTURESTART),
+            (EVENT_OBJECT_FOCUS, EVENT_OBJECT_SELECTIONWITHIN),
+            (EVENT_OBJECT_INVOKED, EVENT_OBJECT_INVOKED),
+        ];
+        let mut hooks = Vec::with_capacity(ranges.len());
+        for (event_min, event_max) in ranges {
+            let hook = SetWinEventHook(
+                event_min,
+                event_max,
+                std::ptr::null_mut(),
+                Some(surface_event_callback),
+                0,
+                0,
+                foreground_hook_flags(),
+            );
+            if hook.is_null() {
+                unhook_all(&hooks);
+                return Err(ForegroundMonitorError::InstallHook);
+            }
+            hooks.push(hook);
+        }
+        Ok(hooks)
+    }
+
+    unsafe fn unhook_all(hooks: &[HWINEVENTHOOK]) {
+        for hook in hooks {
+            UnhookWinEvent(*hook);
+        }
+    }
+
+    unsafe extern "system" fn surface_event_callback(
         _hook: *mut core::ffi::c_void,
         event: u32,
         window: HWND,
@@ -200,7 +226,7 @@ mod platform {
         _event_thread: u32,
         _event_time: u32,
     ) {
-        if event != EVENT_SYSTEM_FOREGROUND || window.is_null() {
+        if window.is_null() {
             return;
         }
         let top = GetAncestor(window, GA_ROOT);
@@ -211,24 +237,63 @@ mod platform {
             let mut context = context.borrow_mut();
             let context = context.as_mut()?;
             let observed_top_window = top as usize;
-            let decision = foreground_decision(
+            let (decision, detail) = surface_event_decision(
+                event,
                 context.target_top_window,
                 &context.internal_surface_roots,
                 observed_top_window,
             );
             debug_qa::trace(format!(
-                "foreground observed target_top={:#x} internal_roots={:x?} observed_top={observed_top_window:#x} decision={}",
+                "surface event observed event={event:#x} target_top={:#x} internal_roots={:x?} observed_top={observed_top_window:#x} decision={detail}",
                 context.target_top_window,
                 context.internal_surface_roots,
-                decision.as_str()
             ));
-            (decision == ForegroundDecision::CloseDifferentRoot)
+            (decision == SurfaceEventDecision::Close)
                 .then(|| context.callback.take())
                 .flatten()
         });
         if let Some(callback) = callback {
             callback();
             PostQuitMessage(0);
+        }
+    }
+
+    fn surface_event_decision(
+        event: u32,
+        target_top_window: usize,
+        internal_surface_roots: &[usize],
+        observed_top_window: usize,
+    ) -> (SurfaceEventDecision, &'static str) {
+        if event == EVENT_SYSTEM_FOREGROUND {
+            let foreground = foreground_decision(
+                target_top_window,
+                internal_surface_roots,
+                observed_top_window,
+            );
+            return match foreground {
+                ForegroundDecision::CloseDifferentRoot => {
+                    (SurfaceEventDecision::Close, foreground.as_str())
+                }
+                _ => (SurfaceEventDecision::Keep, foreground.as_str()),
+            };
+        }
+        if target_top_window == 0 || observed_top_window == 0 {
+            (SurfaceEventDecision::Keep, "ignore_invalid_interaction")
+        } else if internal_surface_roots.contains(&observed_top_window) {
+            (
+                SurfaceEventDecision::Keep,
+                "keep_internal_surface_interaction",
+            )
+        } else if observed_top_window == target_top_window {
+            (
+                SurfaceEventDecision::Close,
+                "close_target_interaction_event",
+            )
+        } else {
+            (
+                SurfaceEventDecision::Keep,
+                "ignore_background_interaction_event",
+            )
         }
     }
 
@@ -288,6 +353,31 @@ mod platform {
 
             assert_eq!(foreground_hook_flags(), WINEVENT_OUTOFCONTEXT);
             assert_eq!(foreground_hook_flags() & WINEVENT_SKIPOWNPROCESS, 0);
+        }
+
+        #[test]
+        fn target_focus_selection_and_invocation_events_close_the_surface() {
+            use windows_sys::Win32::UI::WindowsAndMessaging::EVENT_OBJECT_SELECTION;
+
+            for event in [
+                EVENT_SYSTEM_CAPTURESTART,
+                EVENT_OBJECT_FOCUS,
+                EVENT_OBJECT_SELECTION,
+                EVENT_OBJECT_INVOKED,
+            ] {
+                assert_eq!(
+                    surface_event_decision(event, 42, &[90, 91], 42).0,
+                    SurfaceEventDecision::Close
+                );
+                assert_eq!(
+                    surface_event_decision(event, 42, &[90, 91], 90).0,
+                    SurfaceEventDecision::Keep
+                );
+                assert_eq!(
+                    surface_event_decision(event, 42, &[90, 91], 77).0,
+                    SurfaceEventDecision::Keep
+                );
+            }
         }
 
         #[test]

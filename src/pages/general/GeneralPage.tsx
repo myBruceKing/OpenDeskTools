@@ -10,7 +10,12 @@ import { FieldRow, SwitchRow } from "../static/SettingsRows";
 import styles from "../static/SettingsPages.module.css";
 
 export function GeneralPage() {
-  const { state, setToggle, selectAndMigrateDataDirectory } = useGeneralSettings();
+  const {
+    state,
+    setToggle,
+    selectAndMigrateDataDirectory,
+    restartAsAdministrator
+  } = useGeneralSettings();
   const { viewModel, pending, error, dataDirectoryMigration } = state;
   const unavailableValue = "—";
   const busy = pending !== null;
@@ -26,7 +31,7 @@ export function GeneralPage() {
           {error ? <InlineNotice variant="error">{error}</InlineNotice> : null}
           <SwitchRow
             title="开机自启动"
-            description="登录 Windows 后自动在后台启动（无感知，仅驻留托盘）"
+            description="登录 Windows 后以普通权限在后台启动（无感知，仅驻留托盘）"
             checked={viewModel.autostartEnabled}
             disabled={busy || viewModel.autostartEnabled === null}
             onChange={(checked) => void setToggle("autostart", checked)}
@@ -45,6 +50,28 @@ export function GeneralPage() {
             disabled={busy || viewModel.closeToTray === null}
             onChange={(checked) => void setToggle("closeToTray", checked)}
           />
+          <SwitchRow
+            title="显示托盘图标"
+            description="关闭后仍保留后台服务；隐藏图标后可再次双击 OpenDeskTools 打开主窗口"
+            checked={viewModel.trayIconVisible}
+            disabled={busy || viewModel.trayIconVisible === null}
+            onChange={(checked) => void setToggle("trayIconVisible", checked)}
+          />
+          <InlineNotice
+            variant={viewModel.administratorMode ? "success" : "info"}
+          >
+            {viewModel.administratorMode
+              ? "当前以管理员身份运行，F1、F3 和其他快捷键可以在管理员窗口前台响应。"
+              : "普通权限是默认模式；需要在管理员窗口前使用裸键快捷键时，可临时以管理员身份重新启动。"}
+          </InlineNotice>
+          {viewModel.administratorMode === false ? (
+            <Button
+              onClick={() => void restartAsAdministrator()}
+              disabled={busy}
+            >
+              以管理员身份重新启动
+            </Button>
+          ) : null}
         </SettingsCard>
         <SettingsCard fill>
           <SectionTitle>数据与隐私</SectionTitle>

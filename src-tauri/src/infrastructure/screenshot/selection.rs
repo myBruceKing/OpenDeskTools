@@ -131,7 +131,7 @@ impl SelectionState {
                 pointer,
                 original,
                 handle,
-            } => resize_rect(original, pointer, point, handle, self.bounds),
+            } => resize_rect_with_handle(original, pointer, point, handle, self.bounds),
         };
     }
 
@@ -242,7 +242,7 @@ fn move_rect(
     }
 }
 
-fn resize_rect(
+pub(super) fn resize_rect_with_handle(
     original: PhysicalRect,
     pointer: PhysicalPoint,
     current: PhysicalPoint,

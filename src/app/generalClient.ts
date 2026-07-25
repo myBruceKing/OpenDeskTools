@@ -8,11 +8,13 @@ import {
 
 const GET_GENERAL_SETTINGS_COMMAND = "get_general_settings";
 const SELECT_AND_MIGRATE_DATA_DIRECTORY_COMMAND = "select_and_migrate_data_directory";
+const RESTART_AS_ADMINISTRATOR_COMMAND = "restart_as_administrator";
 
 const TOGGLE_COMMANDS: Record<GeneralToggleKind, string> = {
   autostart: "set_autostart_enabled",
   startMinimized: "set_start_minimized",
   closeToTray: "set_close_to_tray",
+  trayIconVisible: "set_tray_icon_visible",
   crashDiagnostics: "set_crash_diagnostics_enabled"
 };
 
@@ -32,5 +34,8 @@ export const generalClient = {
   },
   async selectAndMigrateDataDirectory(): Promise<DataDirectoryMigrationResult | null> {
     return invoke<DataDirectoryMigrationResult | null>(SELECT_AND_MIGRATE_DATA_DIRECTORY_COMMAND);
+  },
+  async restartAsAdministrator(): Promise<void> {
+    return invoke<void>(RESTART_AS_ADMINISTRATOR_COMMAND);
   }
 };

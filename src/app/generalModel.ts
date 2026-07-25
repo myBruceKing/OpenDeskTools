@@ -3,6 +3,8 @@ export type GeneralBackendSnapshot = {
   autostartEnabled: boolean;
   startMinimized: boolean;
   closeToTray: boolean;
+  trayIconVisible: boolean;
+  administratorMode: boolean;
   crashDiagnosticsEnabled: boolean;
   dataDirectory: string;
 };
@@ -12,6 +14,8 @@ export type GeneralViewModel = {
   autostartEnabled: boolean | null;
   startMinimized: boolean | null;
   closeToTray: boolean | null;
+  trayIconVisible: boolean | null;
+  administratorMode: boolean | null;
   crashDiagnosticsEnabled: boolean | null;
   dataDirectory: string | null;
 };
@@ -24,13 +28,20 @@ export function createGeneralViewModel(
     autostartEnabled: snapshot?.autostartEnabled ?? null,
     startMinimized: snapshot?.startMinimized ?? null,
     closeToTray: snapshot?.closeToTray ?? null,
+    trayIconVisible: snapshot?.trayIconVisible ?? null,
+    administratorMode: snapshot?.administratorMode ?? null,
     crashDiagnosticsEnabled: snapshot?.crashDiagnosticsEnabled ?? null,
     dataDirectory: snapshot?.dataDirectory ?? null
   };
 }
 
 /** Behaviour toggles the general page can persist to the backend. */
-export type GeneralToggleKind = "autostart" | "startMinimized" | "closeToTray" | "crashDiagnostics";
+export type GeneralToggleKind =
+  | "autostart"
+  | "startMinimized"
+  | "closeToTray"
+  | "trayIconVisible"
+  | "crashDiagnostics";
 
 export const EMPTY_GENERAL_VIEW_MODEL = createGeneralViewModel(null);
 

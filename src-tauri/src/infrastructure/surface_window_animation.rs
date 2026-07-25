@@ -153,6 +153,7 @@ fn system_reduces_motion() -> bool {
     false
 }
 
+#[cfg(debug_assertions)]
 const fn hide_mode_name(mode: FinalHideMode) -> &'static str {
     match mode {
         FinalHideMode::Framework => "framework",
@@ -167,6 +168,7 @@ fn hide_now<R: Runtime>(window: &WebviewWindow<R>, mode: FinalHideMode) -> bool 
     }
 }
 
+#[cfg(debug_assertions)]
 fn is_visible_now<R: Runtime>(
     window: &WebviewWindow<R>,
     mode: FinalHideMode,
@@ -195,7 +197,7 @@ fn native_hide<R: Runtime>(window: &WebviewWindow<R>) -> bool {
     window.hide().is_ok()
 }
 
-#[cfg(windows)]
+#[cfg(all(debug_assertions, windows))]
 fn native_is_visible<R: Runtime>(window: &WebviewWindow<R>) -> Result<bool, tauri::Error> {
     use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 
@@ -204,7 +206,7 @@ fn native_is_visible<R: Runtime>(window: &WebviewWindow<R>) -> Result<bool, taur
         .map(|hwnd| unsafe { IsWindowVisible(hwnd.0) != 0 })
 }
 
-#[cfg(not(windows))]
+#[cfg(all(debug_assertions, not(windows)))]
 fn native_is_visible<R: Runtime>(window: &WebviewWindow<R>) -> Result<bool, tauri::Error> {
     window.is_visible()
 }

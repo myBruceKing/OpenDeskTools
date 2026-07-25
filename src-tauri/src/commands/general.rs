@@ -10,6 +10,8 @@ pub struct GeneralViewModel {
     autostart_enabled: bool,
     start_minimized: bool,
     close_to_tray: bool,
+    tray_icon_visible: bool,
+    administrator_mode: bool,
     crash_diagnostics_enabled: bool,
     data_directory: String,
 }
@@ -83,6 +85,53 @@ pub fn set_close_to_tray<R: Runtime>(
 }
 
 #[tauri::command]
+pub fn set_tray_icon_visible<R: Runtime>(
+    app: AppHandle<R>,
+    runtime: State<'_, ApplicationRuntime>,
+    enabled: bool,
+) -> Result<GeneralViewModel, GeneralCommandError> {
+    let previous = runtime.tray_icon_visible();
+    runtime
+        .set_tray_icon_visible(enabled)
+        .map_err(|error| GeneralCommandError {
+            code: "tray_icon_update_failed",
+            message: format!("托盘图标设置未保存：{error}"),
+        })?;
+    if let Err(error) = crate::infrastructure::tray::set_visible(&app, enabled) {
+        let _ = runtime.set_tray_icon_visible(previous);
+        return Err(GeneralCommandError {
+            code: "tray_icon_update_failed",
+            message: format!("托盘图标设置未生效：{error}"),
+        });
+    }
+    Ok(current_view_model(&app, &runtime))
+}
+
+#[tauri::command]
+pub fn restart_as_administrator<R: Runtime>(app: AppHandle<R>) -> Result<(), GeneralCommandError> {
+    if crate::infrastructure::elevation::is_elevated() {
+        return Ok(());
+    }
+    crate::infrastructure::elevation::launch_current_as_administrator().map_err(|error| {
+        GeneralCommandError {
+            code: "administrator_restart_failed",
+            message: format!("未能以管理员身份重新启动：{error}"),
+        }
+    })?;
+    std::thread::Builder::new()
+        .name("administrator-restart-exit".to_owned())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            app.exit(0);
+        })
+        .map_err(|error| GeneralCommandError {
+            code: "administrator_restart_failed",
+            message: format!("管理员版本已启动，但当前进程未能退出：{error}"),
+        })?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_crash_diagnostics_enabled<R: Runtime>(
     app: AppHandle<R>,
     runtime: State<'_, ApplicationRuntime>,
@@ -148,28 +197,41 @@ fn current_view_model<R: Runtime>(
 ) -> GeneralViewModel {
     build_view_model(
         app.package_info().version.to_string(),
-        runtime.autostart().is_enabled().unwrap_or(false),
-        runtime.start_minimized(),
-        runtime.close_to_tray(),
-        runtime.crash_diagnostics_enabled(),
+        GeneralBehavior {
+            autostart_enabled: runtime.autostart().is_enabled().unwrap_or(false),
+            start_minimized: runtime.start_minimized(),
+            close_to_tray: runtime.close_to_tray(),
+            tray_icon_visible: runtime.tray_icon_visible(),
+            administrator_mode: crate::infrastructure::elevation::is_elevated(),
+            crash_diagnostics_enabled: runtime.crash_diagnostics_enabled(),
+        },
         display_data_directory(runtime.storage().data_root()),
     )
 }
 
-fn build_view_model(
-    version: String,
+#[derive(Debug, Clone, Copy)]
+struct GeneralBehavior {
     autostart_enabled: bool,
     start_minimized: bool,
     close_to_tray: bool,
+    tray_icon_visible: bool,
+    administrator_mode: bool,
     crash_diagnostics_enabled: bool,
+}
+
+fn build_view_model(
+    version: String,
+    behavior: GeneralBehavior,
     data_directory: String,
 ) -> GeneralViewModel {
     GeneralViewModel {
         version,
-        autostart_enabled,
-        start_minimized,
-        close_to_tray,
-        crash_diagnostics_enabled,
+        autostart_enabled: behavior.autostart_enabled,
+        start_minimized: behavior.start_minimized,
+        close_to_tray: behavior.close_to_tray,
+        tray_icon_visible: behavior.tray_icon_visible,
+        administrator_mode: behavior.administrator_mode,
+        crash_diagnostics_enabled: behavior.crash_diagnostics_enabled,
         data_directory,
     }
 }
@@ -192,10 +254,14 @@ mod tests {
     fn view_model_carries_every_general_preference() {
         let view_model = build_view_model(
             "1.2.3".to_owned(),
-            true,
-            true,
-            false,
-            true,
+            GeneralBehavior {
+                autostart_enabled: true,
+                start_minimized: true,
+                close_to_tray: false,
+                tray_icon_visible: true,
+                administrator_mode: true,
+                crash_diagnostics_enabled: true,
+            },
             r"C:\OpenDeskToolsTestData\com.opendesktools.app".to_owned(),
         );
 
@@ -203,6 +269,8 @@ mod tests {
         assert!(view_model.autostart_enabled);
         assert!(view_model.start_minimized);
         assert!(!view_model.close_to_tray);
+        assert!(view_model.tray_icon_visible);
+        assert!(view_model.administrator_mode);
         assert!(view_model.crash_diagnostics_enabled);
         assert_eq!(
             view_model.data_directory,

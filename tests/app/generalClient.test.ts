@@ -17,6 +17,8 @@ const backendSnapshot = {
   autostartEnabled: true,
   startMinimized: false,
   closeToTray: true,
+  trayIconVisible: true,
+  administratorMode: false,
   crashDiagnosticsEnabled: false,
   dataDirectory: "C:\\Users\\me\\AppData\\Roaming\\com.opendesktools.app"
 };
@@ -28,6 +30,8 @@ describe("generalModel", () => {
       autostartEnabled: true,
       startMinimized: false,
       closeToTray: true,
+      trayIconVisible: true,
+      administratorMode: false,
       crashDiagnosticsEnabled: false,
       dataDirectory: "C:\\Users\\me\\AppData\\Roaming\\com.opendesktools.app"
     });
@@ -36,6 +40,8 @@ describe("generalModel", () => {
       autostartEnabled: null,
       startMinimized: null,
       closeToTray: null,
+      trayIconVisible: null,
+      administratorMode: null,
       crashDiagnosticsEnabled: null,
       dataDirectory: null
     });
@@ -76,6 +82,9 @@ describe("generalClient", () => {
     await generalClient.setToggle("closeToTray", false);
     expect(mocks.invoke).toHaveBeenLastCalledWith("set_close_to_tray", { enabled: false });
 
+    await generalClient.setToggle("trayIconVisible", false);
+    expect(mocks.invoke).toHaveBeenLastCalledWith("set_tray_icon_visible", { enabled: false });
+
     await generalClient.setToggle("crashDiagnostics", true);
     expect(mocks.invoke).toHaveBeenLastCalledWith("set_crash_diagnostics_enabled", { enabled: true });
   });
@@ -88,5 +97,13 @@ describe("generalClient", () => {
       restartRequired: true
     });
     expect(mocks.invoke).toHaveBeenCalledWith("select_and_migrate_data_directory");
+  });
+
+  it("requests an explicit administrator restart through the frozen command", async () => {
+    mocks.invoke.mockResolvedValueOnce(undefined);
+
+    await generalClient.restartAsAdministrator();
+
+    expect(mocks.invoke).toHaveBeenCalledWith("restart_as_administrator");
   });
 });

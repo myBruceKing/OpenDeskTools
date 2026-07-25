@@ -25,21 +25,22 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetCursorPos, GetMessageW, GetWindowLongPtrW, IsWindow, LoadCursorW,
-    PeekMessageW, PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW,
+    PeekMessageW, PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW, SetCursor,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TrackPopupMenu, TranslateMessage,
     UnregisterClassW, UpdateLayeredWindow, CREATESTRUCTW, CS_DBLCLKS, GWLP_USERDATA, HTCLIENT,
-    HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW, MA_NOACTIVATE, MF_SEPARATOR, MF_STRING, MSG,
-    PM_NOREMOVE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SW_SHOWNOACTIVATE, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE,
-    WM_NCDESTROY, WM_NCHITTEST, WM_RBUTTONUP, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
+    MA_NOACTIVATE, MF_SEPARATOR, MF_STRING, MSG, PM_NOREMOVE, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
+    SWP_NOSIZE, SW_SHOWNOACTIVATE, TPM_RETURNCMD, TPM_RIGHTBUTTON, ULW_ALPHA, WM_APP,
+    WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NCHITTEST,
+    WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::infrastructure::clipboard::ClipboardWriteContent;
 use crate::infrastructure::clipboard_listener::ClipboardSequenceSuppressor;
 use crate::infrastructure::clipboard_writer::ClipboardWriter;
-use crate::infrastructure::image_output::save_rgba_with_dialog;
+use crate::infrastructure::image_output::{local_timestamped_png_name, save_rgba_with_dialog};
 use crate::infrastructure::keyboard_hook::KeyboardHookBroker;
 
 const CLASS_NAME: &[u16] = &[
@@ -72,16 +73,18 @@ const COMMAND_CAPACITY: usize = 32;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_PIN_MEMORY_BYTES: usize = 256 * 1024 * 1024;
-const TEXT_CARD_WIDTH: i32 = 480;
+const TEXT_CARD_MAX_WIDTH: i32 = 480;
+const TEXT_CARD_MIN_WIDTH: i32 = 96;
 const TEXT_CARD_MAX_HEIGHT: i32 = 640;
-const TEXT_CARD_MIN_HEIGHT: i32 = 120;
+const TEXT_CARD_MIN_HEIGHT: i32 = 64;
 const TEXT_CARD_PADDING: i32 = 24;
 const TEXT_CARD_CORNER_RADIUS: i32 = 14;
 const TEXT_CARD_BACKGROUND: u32 = 0x00F8_F8F8;
 const TEXT_CARD_FOREGROUND: u32 = 0x0024_2424;
 const MIN_VISIBLE_PIXELS: i32 = 32;
 const MIN_SHORT_EDGE: f64 = 64.0;
-const MAX_WORK_AREA_RATIO: f64 = 0.9;
+const MAX_MONITOR_RATIO: f64 = 1.0;
+const RESIZE_HIT_MARGIN: i32 = 8;
 const MENU_COPY_IMAGE: usize = 1;
 const MENU_COPY_TEXT: usize = 2;
 const MENU_SAVE: usize = 3;
@@ -169,10 +172,29 @@ pub fn render_text_card(text: &str) -> Result<PinImageData, NativeSurfaceError> 
         return Err(NativeSurfaceError::WindowsApi("CreateFontW"));
     }
     let previous_font = unsafe { SelectObject(memory_dc, font as HGDIOBJ) };
+    let mut natural = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    unsafe {
+        let _ = DrawTextW(
+            memory_dc,
+            wide.as_ptr(),
+            wide.len() as i32,
+            &mut natural,
+            DT_CALCRECT | DT_EDITCONTROL | DT_NOPREFIX,
+        );
+    }
+    let width = natural
+        .right
+        .saturating_add(TEXT_CARD_PADDING * 2)
+        .clamp(TEXT_CARD_MIN_WIDTH, TEXT_CARD_MAX_WIDTH);
     let mut measured = RECT {
         left: 0,
         top: 0,
-        right: TEXT_CARD_WIDTH - TEXT_CARD_PADDING * 2,
+        right: width - TEXT_CARD_PADDING * 2,
         bottom: 0,
     };
     unsafe {
@@ -187,7 +209,7 @@ pub fn render_text_card(text: &str) -> Result<PinImageData, NativeSurfaceError> 
     let height =
         (measured.bottom + TEXT_CARD_PADDING * 2).clamp(TEXT_CARD_MIN_HEIGHT, TEXT_CARD_MAX_HEIGHT);
     let mut bits = null_mut();
-    let info = bitmap_info(TEXT_CARD_WIDTH, height);
+    let info = bitmap_info(width, height);
     let bitmap =
         unsafe { CreateDIBSection(memory_dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0) };
     if bitmap.is_null() || bits.is_null() {
@@ -203,7 +225,7 @@ pub fn render_text_card(text: &str) -> Result<PinImageData, NativeSurfaceError> 
     let card = RECT {
         left: 0,
         top: 0,
-        right: TEXT_CARD_WIDTH,
+        right: width,
         bottom: height,
     };
     let background = unsafe { CreateSolidBrush(TEXT_CARD_BACKGROUND) };
@@ -216,7 +238,7 @@ pub fn render_text_card(text: &str) -> Result<PinImageData, NativeSurfaceError> 
     let mut text_rect = RECT {
         left: TEXT_CARD_PADDING,
         top: TEXT_CARD_PADDING,
-        right: TEXT_CARD_WIDTH - TEXT_CARD_PADDING,
+        right: width - TEXT_CARD_PADDING,
         bottom: height - TEXT_CARD_PADDING,
     };
     unsafe {
@@ -230,7 +252,7 @@ pub fn render_text_card(text: &str) -> Result<PinImageData, NativeSurfaceError> 
             DT_WORDBREAK | DT_EDITCONTROL | DT_END_ELLIPSIS | DT_NOPREFIX,
         );
     }
-    let byte_count = usize::try_from(TEXT_CARD_WIDTH)
+    let byte_count = usize::try_from(width)
         .ok()
         .and_then(|width| width.checked_mul(usize::try_from(height).ok()?))
         .and_then(|pixels| pixels.checked_mul(4))
@@ -246,7 +268,7 @@ pub fn render_text_card(text: &str) -> Result<PinImageData, NativeSurfaceError> 
     }
     apply_rounded_alpha(
         &mut rgba,
-        TEXT_CARD_WIDTH as u32,
+        width as u32,
         height as u32,
         TEXT_CARD_CORNER_RADIUS,
     );
@@ -259,7 +281,7 @@ pub fn render_text_card(text: &str) -> Result<PinImageData, NativeSurfaceError> 
         let _ = windows_sys::Win32::Graphics::Gdi::ReleaseDC(null_mut(), screen_dc);
     }
     let image = PinImageData {
-        width: TEXT_CARD_WIDTH as u32,
+        width: width as u32,
         height: height as u32,
         rgba,
         source_text: Some(source_text),
@@ -448,8 +470,8 @@ impl RuntimeState {
             return Err(NativeSurfaceError::MemoryBudgetExceeded);
         }
         let cursor = cursor_position().unwrap_or(POINT { x: 0, y: 0 });
-        let work_area = monitor_work_area(cursor)?;
-        let geometry = PinGeometry::initial(image.width, image.height, work_area, cursor)?;
+        let monitor_bounds = monitor_bounds(cursor)?;
+        let geometry = PinGeometry::initial(image.width, image.height, monitor_bounds, cursor)?;
         let pin_id = self.next_pin_id;
         self.next_pin_id = self.next_pin_id.wrapping_add(1).max(1);
         let mut context = Box::new(PinWindowContext {
@@ -457,7 +479,7 @@ impl RuntimeState {
             image,
             geometry,
             opacity: 255,
-            drag_offset: None,
+            interaction: None,
             menu_anchor: None,
             keyboard_hook: std::sync::Arc::clone(&self.keyboard_hook),
             escape_generation: None,
@@ -492,6 +514,13 @@ impl RuntimeState {
         unsafe {
             ShowWindow(window, SW_SHOWNOACTIVATE);
         }
+        if let Err(error) = position_layered(window, geometry) {
+            unsafe {
+                DestroyWindow(window);
+            }
+            return Err(error);
+        }
+        arm_escape_close(window, &mut context);
         self.image_memory_bytes = next_memory;
         self.windows.insert(window as isize, context);
         Ok(pin_id)
@@ -532,12 +561,37 @@ struct PinWindowContext {
     image: PinImageData,
     geometry: PinGeometry,
     opacity: u8,
-    drag_offset: Option<(i32, i32)>,
+    interaction: Option<PinInteraction>,
     menu_anchor: Option<POINT>,
     keyboard_hook: std::sync::Arc<KeyboardHookBroker>,
     escape_generation: Option<u64>,
     clipboard_writer: Arc<ClipboardWriter>,
     suppressor: ClipboardSequenceSuppressor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResizeEdge {
+    Left,
+    Top,
+    Right,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomRight,
+    BottomLeft,
+}
+
+#[derive(Clone, Copy)]
+enum PinInteraction {
+    Move {
+        offset_x: i32,
+        offset_y: i32,
+    },
+    Resize {
+        edge: ResizeEdge,
+        pointer: POINT,
+        original: PinGeometry,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -596,6 +650,78 @@ impl PinGeometry {
             scale,
         }
         .at_least_partly_visible(work))
+    }
+
+    fn resize_from_edge(
+        self,
+        image_width: u32,
+        image_height: u32,
+        edge: ResizeEdge,
+        pointer: POINT,
+        current: POINT,
+        bounds: RECT,
+    ) -> Result<Self, NativeSurfaceError> {
+        let delta_x = current.x.saturating_sub(pointer.x);
+        let delta_y = current.y.saturating_sub(pointer.y);
+        let width_factor = match edge {
+            ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft => {
+                1.0 - f64::from(delta_x) / f64::from(self.width.max(1))
+            }
+            ResizeEdge::Right | ResizeEdge::TopRight | ResizeEdge::BottomRight => {
+                1.0 + f64::from(delta_x) / f64::from(self.width.max(1))
+            }
+            ResizeEdge::Top | ResizeEdge::Bottom => 1.0,
+        };
+        let height_factor = match edge {
+            ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight => {
+                1.0 - f64::from(delta_y) / f64::from(self.height.max(1))
+            }
+            ResizeEdge::Bottom | ResizeEdge::BottomLeft | ResizeEdge::BottomRight => {
+                1.0 + f64::from(delta_y) / f64::from(self.height.max(1))
+            }
+            ResizeEdge::Left | ResizeEdge::Right => 1.0,
+        };
+        let factor = match edge {
+            ResizeEdge::Left | ResizeEdge::Right => width_factor,
+            ResizeEdge::Top | ResizeEdge::Bottom => height_factor,
+            _ if (width_factor - 1.0).abs() >= (height_factor - 1.0).abs() => width_factor,
+            _ => height_factor,
+        };
+        let anchor = match edge {
+            ResizeEdge::Left => POINT {
+                x: self.x + self.width,
+                y: self.y + self.height / 2,
+            },
+            ResizeEdge::Top => POINT {
+                x: self.x + self.width / 2,
+                y: self.y + self.height,
+            },
+            ResizeEdge::Right => POINT {
+                x: self.x,
+                y: self.y + self.height / 2,
+            },
+            ResizeEdge::Bottom => POINT {
+                x: self.x + self.width / 2,
+                y: self.y,
+            },
+            ResizeEdge::TopLeft => POINT {
+                x: self.x + self.width,
+                y: self.y + self.height,
+            },
+            ResizeEdge::TopRight => POINT {
+                x: self.x,
+                y: self.y + self.height,
+            },
+            ResizeEdge::BottomRight => POINT {
+                x: self.x,
+                y: self.y,
+            },
+            ResizeEdge::BottomLeft => POINT {
+                x: self.x + self.width,
+                y: self.y,
+            },
+        };
+        self.resize_around(image_width, image_height, factor, anchor, bounds)
     }
 
     fn fully_inside(mut self, work: RECT) -> Self {
@@ -737,35 +863,76 @@ unsafe extern "system" fn window_proc(
     match message {
         WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
         WM_NCHITTEST => hit_test(context, point_from_lparam(lparam)),
+        WM_SETCURSOR => {
+            if let Some(cursor) = cursor_position() {
+                set_resize_cursor(resize_edge_at(context.geometry, cursor));
+                return 1;
+            }
+            DefWindowProcW(window, message, wparam, lparam)
+        }
         WM_LBUTTONDOWN => {
             arm_escape_close(window, context);
             if let Some(cursor) = cursor_position() {
                 let _ = SetCapture(window);
-                context.drag_offset =
-                    Some((cursor.x - context.geometry.x, cursor.y - context.geometry.y));
+                context.interaction = resize_edge_at(context.geometry, cursor).map_or_else(
+                    || {
+                        Some(PinInteraction::Move {
+                            offset_x: cursor.x - context.geometry.x,
+                            offset_y: cursor.y - context.geometry.y,
+                        })
+                    },
+                    |edge| {
+                        Some(PinInteraction::Resize {
+                            edge,
+                            pointer: cursor,
+                            original: context.geometry,
+                        })
+                    },
+                );
             }
             0
         }
         WM_MOUSEMOVE => {
-            if let (Some(cursor), Some((offset_x, offset_y))) =
-                (cursor_position(), context.drag_offset)
-            {
-                context.geometry.x = cursor.x - offset_x;
-                context.geometry.y = cursor.y - offset_y;
-                if let Ok(work) = monitor_work_area(cursor) {
-                    context.geometry = context.geometry.at_least_partly_visible(work);
+            if let (Some(cursor), Some(interaction)) = (cursor_position(), context.interaction) {
+                match interaction {
+                    PinInteraction::Move { offset_x, offset_y } => {
+                        context.geometry.x = cursor.x - offset_x;
+                        context.geometry.y = cursor.y - offset_y;
+                        if let Ok(bounds) = monitor_bounds(cursor) {
+                            context.geometry = context.geometry.at_least_partly_visible(bounds);
+                        }
+                        let _ = position_layered(window, context.geometry);
+                    }
+                    PinInteraction::Resize {
+                        edge,
+                        pointer,
+                        original,
+                    } => {
+                        if let Ok(bounds) = monitor_bounds(cursor) {
+                            if let Ok(geometry) = original.resize_from_edge(
+                                context.image.width,
+                                context.image.height,
+                                edge,
+                                pointer,
+                                cursor,
+                                bounds,
+                            ) {
+                                context.geometry = geometry;
+                                let _ = render_layered(window, context);
+                            }
+                        }
+                    }
                 }
-                let _ = position_layered(window, context.geometry);
             }
             0
         }
         WM_LBUTTONUP => {
-            context.drag_offset = None;
+            context.interaction = None;
             let _ = ReleaseCapture();
             0
         }
         WM_CAPTURECHANGED => {
-            context.drag_offset = None;
+            context.interaction = None;
             0
         }
         WM_MOUSEWHEEL => {
@@ -791,8 +958,8 @@ unsafe extern "system" fn window_proc(
                 x: context.geometry.x + context.geometry.width / 2,
                 y: context.geometry.y + context.geometry.height / 2,
             };
-            if let Ok(work) = monitor_work_area(center) {
-                context.geometry = context.geometry.at_least_partly_visible(work);
+            if let Ok(bounds) = monitor_bounds(center) {
+                context.geometry = context.geometry.at_least_partly_visible(bounds);
                 let _ = position_layered(window, context.geometry);
             }
             0
@@ -835,14 +1002,14 @@ fn handle_wheel(window: HWND, context: &mut PinWindowContext, wparam: WPARAM, cu
     if unsafe { GetKeyState(VK_CONTROL as i32) } < 0 {
         let opacity = i32::from(context.opacity) + (steps.signum() as i32 * 26);
         context.opacity = opacity.clamp(26, 255) as u8;
-    } else if let Ok(work) = monitor_work_area(cursor) {
+    } else if let Ok(bounds) = monitor_bounds(cursor) {
         let factor = 1.1_f64.powf(steps);
         if let Ok(geometry) = context.geometry.resize_around(
             context.image.width,
             context.image.height,
             factor,
             cursor,
-            work,
+            bounds,
         ) {
             context.geometry = geometry;
         }
@@ -926,8 +1093,9 @@ fn apply_context_menu_command(window: HWND, context: &mut PinWindowContext, comm
             let _ = thread::Builder::new()
                 .name("pin-image-save".to_owned())
                 .spawn(move || {
+                    let suggested_name = local_timestamped_png_name("OpenDeskTools-贴图");
                     let _ = save_rgba_with_dialog(
-                        "OpenDeskTools-贴图.png",
+                        &suggested_name,
                         image.width,
                         image.height,
                         &image.rgba,
@@ -935,8 +1103,9 @@ fn apply_context_menu_command(window: HWND, context: &mut PinWindowContext, comm
                 });
         }
         MENU_ORIGINAL_SIZE => {
-            if let Ok(work) = monitor_work_area(cursor) {
-                let max = max_scale(context.image.width, context.image.height, work).unwrap_or(1.0);
+            if let Ok(bounds) = monitor_bounds(cursor) {
+                let max =
+                    max_scale(context.image.width, context.image.height, bounds).unwrap_or(1.0);
                 let target = 1.0_f64.min(max);
                 let factor = target / context.geometry.scale.max(f64::EPSILON);
                 if let Ok(geometry) = context.geometry.resize_around(
@@ -944,7 +1113,7 @@ fn apply_context_menu_command(window: HWND, context: &mut PinWindowContext, comm
                     context.image.height,
                     factor,
                     cursor,
-                    work,
+                    bounds,
                 ) {
                     context.geometry = geometry;
                     let _ = render_layered(window, context);
@@ -991,6 +1160,44 @@ fn append_menu(menu: HWND, id: usize, label: &str) {
     }
 }
 
+fn resize_edge_at(geometry: PinGeometry, point: POINT) -> Option<ResizeEdge> {
+    let local_x = point.x - geometry.x;
+    let local_y = point.y - geometry.y;
+    if local_x < 0 || local_y < 0 || local_x >= geometry.width || local_y >= geometry.height {
+        return None;
+    }
+    let margin_x = RESIZE_HIT_MARGIN.min((geometry.width / 2).max(1));
+    let margin_y = RESIZE_HIT_MARGIN.min((geometry.height / 2).max(1));
+    let left = local_x < margin_x;
+    let right = local_x >= geometry.width - margin_x;
+    let top = local_y < margin_y;
+    let bottom = local_y >= geometry.height - margin_y;
+    match (left, top, right, bottom) {
+        (true, true, _, _) => Some(ResizeEdge::TopLeft),
+        (_, true, true, _) => Some(ResizeEdge::TopRight),
+        (_, _, true, true) => Some(ResizeEdge::BottomRight),
+        (true, _, _, true) => Some(ResizeEdge::BottomLeft),
+        (true, _, _, _) => Some(ResizeEdge::Left),
+        (_, true, _, _) => Some(ResizeEdge::Top),
+        (_, _, true, _) => Some(ResizeEdge::Right),
+        (_, _, _, true) => Some(ResizeEdge::Bottom),
+        _ => None,
+    }
+}
+
+fn set_resize_cursor(edge: Option<ResizeEdge>) {
+    let cursor_id = match edge {
+        Some(ResizeEdge::Left | ResizeEdge::Right) => IDC_SIZEWE,
+        Some(ResizeEdge::Top | ResizeEdge::Bottom) => IDC_SIZENS,
+        Some(ResizeEdge::TopLeft | ResizeEdge::BottomRight) => IDC_SIZENWSE,
+        Some(ResizeEdge::TopRight | ResizeEdge::BottomLeft) => IDC_SIZENESW,
+        None => IDC_ARROW,
+    };
+    unsafe {
+        let _ = SetCursor(LoadCursorW(null_mut(), cursor_id));
+    }
+}
+
 fn hit_test(context: &PinWindowContext, point: POINT) -> LRESULT {
     let local_x = point.x - context.geometry.x;
     let local_y = point.y - context.geometry.y;
@@ -1000,6 +1207,9 @@ fn hit_test(context: &PinWindowContext, point: POINT) -> LRESULT {
         || local_y >= context.geometry.height
     {
         return HTTRANSPARENT as LRESULT;
+    }
+    if resize_edge_at(context.geometry, point).is_some() {
+        return HTCLIENT as LRESULT;
     }
     let source_x =
         (local_x as u64 * u64::from(context.image.width) / context.geometry.width as u64) as u32;
@@ -1169,7 +1379,7 @@ fn cursor_position() -> Option<POINT> {
     (unsafe { GetCursorPos(&mut point) } != 0).then_some(point)
 }
 
-fn monitor_work_area(point: POINT) -> Result<RECT, NativeSurfaceError> {
+fn monitor_bounds(point: POINT) -> Result<RECT, NativeSurfaceError> {
     let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) };
     if monitor.is_null() {
         return Err(NativeSurfaceError::WindowsApi("MonitorFromPoint"));
@@ -1179,7 +1389,7 @@ fn monitor_work_area(point: POINT) -> Result<RECT, NativeSurfaceError> {
     if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
         return Err(NativeSurfaceError::WindowsApi("GetMonitorInfoW"));
     }
-    Ok(info.rcWork)
+    Ok(info.rcMonitor)
 }
 
 fn max_scale(image_width: u32, image_height: u32, work: RECT) -> Result<f64, NativeSurfaceError> {
@@ -1189,8 +1399,8 @@ fn max_scale(image_width: u32, image_height: u32, work: RECT) -> Result<f64, Nat
         return Err(NativeSurfaceError::InvalidImage);
     }
     Ok(
-        ((f64::from(work_width) * MAX_WORK_AREA_RATIO) / f64::from(image_width))
-            .min((f64::from(work_height) * MAX_WORK_AREA_RATIO) / f64::from(image_height)),
+        ((f64::from(work_width) * MAX_MONITOR_RATIO) / f64::from(image_width))
+            .min((f64::from(work_height) * MAX_MONITOR_RATIO) / f64::from(image_height)),
     )
 }
 
@@ -1244,6 +1454,14 @@ mod tests {
     }
 
     #[test]
+    fn full_monitor_image_keeps_its_original_pixel_size() {
+        let geometry =
+            PinGeometry::initial(1920, 1080, work_area(), POINT { x: -960, y: 540 }).unwrap();
+        assert_eq!((geometry.width, geometry.height), (1920, 1080));
+        assert_eq!((geometry.x, geometry.y), (-1920, 0));
+    }
+
+    #[test]
     fn resize_uses_cursor_anchor_and_enforces_work_area_limit() {
         let initial =
             PinGeometry::initial(800, 400, work_area(), POINT { x: -960, y: 540 }).unwrap();
@@ -1251,8 +1469,61 @@ mod tests {
             .resize_around(800, 400, 20.0, POINT { x: -960, y: 540 }, work_area())
             .unwrap();
         assert_eq!(resized.width * 400, resized.height * 800);
-        assert!(resized.width <= 1728);
-        assert!(resized.height <= 972);
+        assert!(resized.width <= 1920);
+        assert!(resized.height <= 1080);
+    }
+
+    #[test]
+    fn edge_resize_preserves_aspect_and_opposite_anchor() {
+        let original =
+            PinGeometry::initial(800, 400, work_area(), POINT { x: -960, y: 540 }).unwrap();
+        let pointer = POINT {
+            x: original.x,
+            y: original.y + original.height / 2,
+        };
+        let resized = original
+            .resize_from_edge(
+                800,
+                400,
+                ResizeEdge::Left,
+                pointer,
+                POINT {
+                    x: pointer.x - 200,
+                    y: pointer.y,
+                },
+                work_area(),
+            )
+            .unwrap();
+        assert_eq!(resized.width * 400, resized.height * 800);
+        assert_eq!(resized.x + resized.width, original.x + original.width);
+        assert_eq!(
+            resized.y + resized.height / 2,
+            original.y + original.height / 2
+        );
+    }
+
+    #[test]
+    fn every_edge_and_corner_has_a_resize_hit_target() {
+        let geometry = PinGeometry {
+            x: 100,
+            y: 200,
+            width: 300,
+            height: 180,
+            scale: 1.0,
+        };
+        for (point, edge) in [
+            (POINT { x: 100, y: 290 }, ResizeEdge::Left),
+            (POINT { x: 250, y: 200 }, ResizeEdge::Top),
+            (POINT { x: 399, y: 290 }, ResizeEdge::Right),
+            (POINT { x: 250, y: 379 }, ResizeEdge::Bottom),
+            (POINT { x: 100, y: 200 }, ResizeEdge::TopLeft),
+            (POINT { x: 399, y: 200 }, ResizeEdge::TopRight),
+            (POINT { x: 399, y: 379 }, ResizeEdge::BottomRight),
+            (POINT { x: 100, y: 379 }, ResizeEdge::BottomLeft),
+        ] {
+            assert_eq!(resize_edge_at(geometry, point), Some(edge));
+        }
+        assert_eq!(resize_edge_at(geometry, POINT { x: 250, y: 290 }), None);
     }
 
     #[test]
@@ -1275,5 +1546,15 @@ mod tests {
         assert_eq!(rgba[3], 0);
         let center = ((15 * 40 + 20) * 4 + 3) as usize;
         assert_eq!(rgba[center], 255);
+    }
+
+    #[test]
+    fn short_text_card_measures_content_without_fixed_blank_canvas() {
+        let card = render_text_card("晚安啦").unwrap();
+        assert!(card.width >= TEXT_CARD_MIN_WIDTH as u32);
+        assert!(card.width < 200);
+        assert!(card.height >= TEXT_CARD_MIN_HEIGHT as u32);
+        assert!(card.height < 100);
+        assert_eq!(card.source_text.as_deref(), Some("晚安啦"));
     }
 }

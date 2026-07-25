@@ -8,7 +8,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 use super::application::ApplicationRuntime;
 use super::clipboard_surface_foreground;
-use super::clipboard_surface_pointer;
+use super::surface_pointer_monitor;
 
 const TRAY_ID: &str = "open-desk-tools";
 const OPEN_MENU_ID: &str = "tray.open-main";
@@ -137,7 +137,7 @@ pub fn route_window_lifecycle(
     }
 }
 
-pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+pub fn install<R: Runtime>(app: &AppHandle<R>, visible: bool) -> tauri::Result<()> {
     let open_item = MenuItem::with_id(app, OPEN_MENU_ID, "打开 OpenDeskTools", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let exit_item = MenuItem::with_id(app, EXIT_MENU_ID, "退出 OpenDeskTools", true, None::<&str>)?;
@@ -149,7 +149,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         )
     })?;
 
-    TrayIconBuilder::with_id(TRAY_ID)
+    let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip(TRAY_TOOLTIP)
         .menu(&menu)
@@ -173,8 +173,20 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             }
         })
         .build(app)?;
+    tray.set_visible(visible)?;
 
     Ok(())
+}
+
+pub fn set_visible<R: Runtime>(app: &AppHandle<R>, visible: bool) -> tauri::Result<()> {
+    app.tray_by_id(TRAY_ID)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "the system tray icon is unavailable",
+            )
+        })?
+        .set_visible(visible)
 }
 
 fn execute_action<R: Runtime>(app: &AppHandle<R>, action: TrayAction) {
@@ -257,9 +269,9 @@ pub(crate) fn exit_application<R: Runtime>(app: &AppHandle<R>) {
                 if let Err(error) = clipboard_surface_foreground::stop() {
                     eprintln!("failed to stop clipboard foreground monitor during exit: {error}");
                 }
-                if let Err(error) = clipboard_surface_pointer::stop() {
+                if let Err(error) = surface_pointer_monitor::stop_all() {
                     eprintln!(
-                        "failed to stop clipboard outside-pointer monitor during exit: {error}"
+                        "failed to stop surface outside-pointer monitor during exit: {error}"
                     );
                 }
             }

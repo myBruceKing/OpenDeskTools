@@ -7,6 +7,59 @@ use thiserror::Error;
 
 static SAVE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(windows)]
+pub fn local_timestamped_png_name(prefix: &str) -> String {
+    use std::mem::zeroed;
+
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+
+    let mut local_time: SYSTEMTIME = unsafe { zeroed() };
+    unsafe {
+        GetLocalTime(&mut local_time);
+    }
+    timestamped_png_name(
+        prefix,
+        local_time.wYear,
+        local_time.wMonth,
+        local_time.wDay,
+        local_time.wHour,
+        local_time.wMinute,
+        local_time.wSecond,
+        local_time.wMilliseconds,
+    )
+}
+
+#[cfg(not(windows))]
+pub fn local_timestamped_png_name(prefix: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!(
+        "{prefix}-{}-{:03}.png",
+        elapsed.as_secs(),
+        elapsed.subsec_millis()
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn timestamped_png_name(
+    prefix: &str,
+    year: u16,
+    month: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    milliseconds: u16,
+) -> String {
+    format!(
+        "{prefix}-{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}-{milliseconds:03}.png"
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageSaveOutcome {
     Cancelled,
@@ -157,6 +210,14 @@ mod tests {
         assert!(encode_png(1, 1, &[12, 34, 56, 255])
             .unwrap()
             .starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn timestamped_name_uses_readable_local_components_and_milliseconds() {
+        assert_eq!(
+            timestamped_png_name("OpenDeskTools-截图", 2026, 7, 24, 9, 8, 7, 6),
+            "OpenDeskTools-截图-20260724-090807-006.png"
+        );
     }
 
     #[test]

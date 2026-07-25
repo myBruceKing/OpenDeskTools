@@ -2,7 +2,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::infrastructure::application::ApplicationRuntime;
-use crate::infrastructure::image_output::{save_rgba_with_dialog, ImageSaveOutcome};
+use crate::infrastructure::image_output::{
+    local_timestamped_png_name, save_rgba_with_dialog, ImageSaveOutcome,
+};
 use crate::infrastructure::pin_image::PinImageError;
 use crate::infrastructure::qr::QrError;
 use crate::infrastructure::screenshot::overlay::CaptureAction;
@@ -89,8 +91,9 @@ pub(crate) fn capture_and_notify<R: Runtime>(
                     ("copied", "截图已保存到内置历史并复制到系统剪贴板。")
                 }
                 CaptureAction::Save => {
+                    let suggested_name = local_timestamped_png_name("OpenDeskTools-截图");
                     match save_rgba_with_dialog(
-                        "OpenDeskTools-截图.png",
+                        &suggested_name,
                         image.width,
                         image.height,
                         &image.rgba,
@@ -186,6 +189,13 @@ fn map_screenshot_error(error: ScreenshotServiceError) -> CaptureCommandErrorDto
                 code: "capture_busy",
                 message: "已有截图选区正在进行。",
                 retryable: false,
+            }
+        }
+        ScreenshotServiceError::Screenshot(ScreenshotError::OverlayActivationDenied) => {
+            CaptureCommandErrorDto {
+                code: "capture_activation_denied",
+                message: "当前前台窗口权限较高，截图遮罩未能获得交互焦点。",
+                retryable: true,
             }
         }
         ScreenshotServiceError::Writer(_) => CaptureCommandErrorDto {

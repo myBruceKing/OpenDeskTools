@@ -13,6 +13,7 @@ use super::{
         squared_distance_to_rect,
     },
     quick_launch::{QuickLaunchSnapshot, ToolMenuLayout},
+    surface_pointer_monitor::{self, PointerMonitorError, PointerMonitorOwner},
     surface_window_animation,
 };
 
@@ -49,6 +50,12 @@ pub enum ToolMenuSurfaceError {
     #[cfg(windows)]
     #[error("Windows could not configure the tool menu as a borderless popup")]
     ConfigurePopupStyle,
+    #[cfg(windows)]
+    #[error("tool menu outside-pointer monitoring failed: {0}")]
+    PointerMonitor(#[from] PointerMonitorError),
+    #[cfg(windows)]
+    #[error("Windows denied activation of the tool menu")]
+    ActivationDenied,
 }
 
 /// Construct the launcher WebView during setup. Hotkey callbacks only reveal
@@ -103,8 +110,18 @@ pub fn show<R: Runtime>(
     configure_popup_style(&window)?;
     window.show()?;
     TOOL_MENU_VISIBLE.store(true, Ordering::SeqCst);
-    window.set_focus()?;
-    window.emit(TOOL_MENU_SURFACE_SHOWN_EVENT, ())?;
+    if let Err(error) = start_outside_pointer_monitor(app, &window) {
+        rollback_failed_show(&window);
+        return Err(error);
+    }
+    if !activate_tool_menu(&window) {
+        rollback_failed_show(&window);
+        return Err(ToolMenuSurfaceError::ActivationDenied);
+    }
+    if let Err(error) = window.emit(TOOL_MENU_SURFACE_SHOWN_EVENT, ()) {
+        rollback_failed_show(&window);
+        return Err(error.into());
+    }
     debug_qa::trace(format!(
         "tool-menu show result=visible layout={:?} visible_items={} size={}x{}",
         snapshot.tool_menu.layout,
@@ -258,6 +275,11 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> 
             return Err(error);
         }
     };
+    #[cfg(windows)]
+    if let Err(error) = surface_pointer_monitor::stop(PointerMonitorOwner::ToolMenu) {
+        restore_visible_after_failed_hide(&TOOL_MENU_VISIBLE);
+        return Err(error.into());
+    }
     let animated = surface_window_animation::fade_hide(&window);
     debug_qa::trace(format!(
         "tool-menu fade-hide result={} duration_ms={}",
@@ -272,6 +294,128 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> 
     }
     debug_qa::trace("tool-menu hide result=transition_started");
     Ok(())
+}
+
+fn rollback_failed_show<R: Runtime>(window: &WebviewWindow<R>) {
+    TOOL_MENU_VISIBLE.store(false, Ordering::SeqCst);
+    #[cfg(windows)]
+    if let Err(error) = surface_pointer_monitor::stop(PointerMonitorOwner::ToolMenu) {
+        eprintln!("failed to stop tool menu outside-pointer monitor during rollback: {error}");
+    }
+    if let Err(error) = window.hide() {
+        eprintln!("failed to hide tool menu after incomplete show: {error}");
+    }
+}
+
+#[cfg(windows)]
+fn start_outside_pointer_monitor<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+) -> Result<(), ToolMenuSurfaceError> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor, GA_ROOT};
+
+    let hwnd = window.hwnd()?.0;
+    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    if root.is_null() {
+        return Err(ToolMenuSurfaceError::ConfigurePopupStyle);
+    }
+    let dispatch_app = app.clone();
+    surface_pointer_monitor::start(
+        PointerMonitorOwner::ToolMenu,
+        vec![root as usize],
+        move |observation| {
+            debug_qa::trace(format!(
+                "tool-menu outside pointer press backend={} message={} point=({}, {}) observed_root={:#x}",
+                observation.backend,
+                observation.message,
+                observation.point_x,
+                observation.point_y,
+                observation.observed_root
+            ));
+            let main_app = dispatch_app.clone();
+            if let Err(error) = dispatch_app.run_on_main_thread(move || {
+                if let Err(error) = request_hide(&main_app) {
+                    eprintln!("failed to hide tool menu after outside pointer press: {error}");
+                }
+            }) {
+                eprintln!("failed to dispatch tool menu outside-pointer close: {error}");
+            }
+        },
+    )?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn activate_tool_menu<R: Runtime>(window: &WebviewWindow<R>) -> bool {
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+        SetWindowPos, GA_ROOT, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    };
+
+    let Ok(hwnd) = window.hwnd().map(|handle| handle.0) else {
+        return false;
+    };
+    let _ = window.set_focus();
+    unsafe {
+        if foreground_root_is(hwnd) {
+            return true;
+        }
+        let _ = SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
+        if SetForegroundWindow(hwnd) != 0 && foreground_root_is(hwnd) {
+            let _ = SetFocus(hwnd);
+            return true;
+        }
+        let foreground = GetForegroundWindow();
+        if foreground.is_null() {
+            return false;
+        }
+        let foreground_thread = GetWindowThreadProcessId(foreground, std::ptr::null_mut());
+        let current_thread = GetCurrentThreadId();
+        if foreground_thread == 0 || foreground_thread == current_thread {
+            return false;
+        }
+        let attached = AttachThreadInput(current_thread, foreground_thread, 1) != 0;
+        if !attached {
+            return false;
+        }
+        let activated = SetForegroundWindow(hwnd) != 0;
+        let _ = SetFocus(hwnd);
+        let _ = AttachThreadInput(current_thread, foreground_thread, 0);
+        return activated && foreground_root_is(hwnd);
+    }
+
+    unsafe fn foreground_root_is(window: windows_sys::Win32::Foundation::HWND) -> bool {
+        let foreground = GetForegroundWindow();
+        if foreground.is_null() {
+            return false;
+        }
+        let foreground_root = GetAncestor(foreground, GA_ROOT);
+        let window_root = GetAncestor(window, GA_ROOT);
+        !foreground_root.is_null() && foreground_root == window_root
+    }
+}
+
+#[cfg(not(windows))]
+fn start_outside_pointer_monitor<R: Runtime>(
+    _app: &AppHandle<R>,
+    _window: &WebviewWindow<R>,
+) -> Result<(), ToolMenuSurfaceError> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn activate_tool_menu<R: Runtime>(window: &WebviewWindow<R>) -> bool {
+    window.set_focus().is_ok()
 }
 
 /// A Tauri focus event can be emitted while focus transfers between the
@@ -310,6 +454,14 @@ pub fn lost_foreground<R: Runtime>(_window: &tauri::Window<R>) -> bool {
 /// performs the delayed final hide to keep cached visibility coherent.
 pub fn request_hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> {
     hide(app)
+}
+
+pub fn forget_destroyed() {
+    TOOL_MENU_VISIBLE.store(false, Ordering::SeqCst);
+    #[cfg(windows)]
+    if let Err(error) = surface_pointer_monitor::stop(PointerMonitorOwner::ToolMenu) {
+        eprintln!("failed to stop destroyed tool menu outside-pointer monitor: {error}");
+    }
 }
 
 #[cfg(windows)]

@@ -299,7 +299,7 @@ impl SurfaceEscapeKeyState {
 struct BrokerState {
     runtime: Option<RuntimeRegistration>,
     capture: Option<CaptureRegistration>,
-    surface_escape: Option<SurfaceEscapeRegistration>,
+    surface_escapes: Vec<SurfaceEscapeRegistration>,
     runtime_keys: RuntimeKeyState,
     capture_keys: CaptureKeyState,
     surface_escape_keys: SurfaceEscapeKeyState,
@@ -320,8 +320,12 @@ impl std::fmt::Debug for BrokerState {
             .field("runtime_keys", &self.runtime_keys)
             .field("capture_keys", &self.capture_keys)
             .field(
-                "surface_escape_generation",
-                &self.surface_escape.as_ref().map(|r| r.generation),
+                "surface_escape_generations",
+                &self
+                    .surface_escapes
+                    .iter()
+                    .map(|registration| registration.generation)
+                    .collect::<Vec<_>>(),
             )
             .field("surface_escape_keys", &self.surface_escape_keys)
             .finish()
@@ -379,7 +383,7 @@ impl KeyboardHookBroker {
             .lock()
             .map_err(|_| KeyboardHookError::LockPoisoned)?;
         state.surface_escape_keys.clear();
-        state.surface_escape = Some(SurfaceEscapeRegistration {
+        state.surface_escapes.push(SurfaceEscapeRegistration {
             generation,
             sink: Arc::new(sink),
         });
@@ -392,23 +396,19 @@ impl KeyboardHookBroker {
             .state
             .lock()
             .map_err(|_| KeyboardHookError::LockPoisoned)?;
-        if state.surface_escape.as_ref().map(|entry| entry.generation) != Some(generation) {
+        let Some(index) = state
+            .surface_escapes
+            .iter()
+            .position(|entry| entry.generation == generation)
+        else {
             return Ok(false);
+        };
+        let removed_active = index + 1 == state.surface_escapes.len();
+        state.surface_escapes.remove(index);
+        if removed_active {
+            state.surface_escape_keys.clear();
         }
-        state.surface_escape = None;
-        state.surface_escape_keys.clear();
         Ok(true)
-    }
-
-    pub fn stop_surface_escape(&self) -> Result<(), KeyboardHookError> {
-        let mut state = self
-            .inner
-            .state
-            .lock()
-            .map_err(|_| KeyboardHookError::LockPoisoned)?;
-        state.surface_escape = None;
-        state.surface_escape_keys.clear();
-        Ok(())
     }
 
     pub fn register_win_v<F>(&self, sink: F) -> Result<u64, KeyboardHookError>
@@ -504,7 +504,7 @@ impl KeyboardHookBroker {
                 .map_err(|_| KeyboardHookError::LockPoisoned)?;
             state.runtime = None;
             state.capture = None;
-            state.surface_escape = None;
+            state.surface_escapes.clear();
             state.runtime_keys.clear();
             state.capture_keys.clear();
             state.surface_escape_keys.clear();
@@ -633,9 +633,9 @@ fn dispatch_event(inner: &BrokerInner, event: BrokerEvent) {
         BrokerEvent::SurfaceEscape { generation } => {
             let sink = inner.state.lock().ok().and_then(|state| {
                 state
-                    .surface_escape
-                    .as_ref()
-                    .filter(|registration| registration.generation == generation)
+                    .surface_escapes
+                    .iter()
+                    .find(|registration| registration.generation == generation)
                     .map(|registration| Arc::clone(&registration.sink))
             });
             if let Some(sink) = sink {
@@ -905,7 +905,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
         }
         return unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) };
     }
-    if let Some(surface_escape) = state.surface_escape.clone() {
+    if let Some(surface_escape) = state.surface_escapes.last().cloned() {
         if state.surface_escape_keys.handle(
             &surface_escape,
             keyboard.vkCode,
@@ -1095,7 +1095,7 @@ mod tests {
                 target_window: 5,
                 sink: Arc::new(|_, _| {}),
             });
-            state.surface_escape = Some(surface_escape_registration(6));
+            state.surface_escapes.push(surface_escape_registration(6));
         }
         assert!(!broker.unregister_win_v(2).unwrap());
         assert!(broker.inner.state.lock().unwrap().runtime.is_some());
@@ -1105,6 +1105,25 @@ mod tests {
         assert!(broker.stop_capture(4).unwrap());
         assert!(!broker.unregister_surface_escape(5).unwrap());
         assert!(broker.unregister_surface_escape(6).unwrap());
+    }
+
+    #[test]
+    fn surface_escape_uses_a_stack_and_restores_the_previous_owner() {
+        let broker = KeyboardHookBroker::default();
+        {
+            let mut state = broker.inner.state.lock().unwrap();
+            state.surface_escapes.push(surface_escape_registration(10));
+            state.surface_escapes.push(surface_escape_registration(11));
+        }
+        assert!(broker.unregister_surface_escape(11).unwrap());
+        let state = broker.inner.state.lock().unwrap();
+        assert_eq!(
+            state
+                .surface_escapes
+                .last()
+                .map(|registration| registration.generation),
+            Some(10)
+        );
     }
 
     #[test]

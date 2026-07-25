@@ -13,10 +13,12 @@ mod native_policy;
 
 use super::application::ApplicationRuntime;
 use super::clipboard_surface_foreground::{self, ForegroundMonitorError};
-use super::clipboard_surface_pointer::{self, PointerMonitorError};
 use super::debug_qa;
 use super::keyboard_hook::KeyboardHookError;
 use super::surface::{SurfaceError, SurfaceManager};
+use super::surface_pointer_monitor::{
+    self, PointerMonitorError, PointerMonitorOwner, PointerObservation,
+};
 use super::surface_window_animation;
 use geometry::{
     convert_caret_client_to_physical_screen, monitor_geometry, preview_surface_placement,
@@ -187,9 +189,14 @@ struct ClipboardPreviewSelection {
 }
 
 static CLIPBOARD_PREVIEW_SELECTION: OnceLock<Mutex<ClipboardPreviewSelection>> = OnceLock::new();
+static CLIPBOARD_ESCAPE_GENERATION: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
 
 fn preview_selection() -> &'static Mutex<ClipboardPreviewSelection> {
     CLIPBOARD_PREVIEW_SELECTION.get_or_init(|| Mutex::new(ClipboardPreviewSelection::default()))
+}
+
+fn escape_generation_slot() -> &'static Mutex<Option<u64>> {
+    CLIPBOARD_ESCAPE_GENERATION.get_or_init(|| Mutex::new(None))
 }
 
 trait NativeVisibilityApi {
@@ -216,6 +223,8 @@ pub enum ClipboardSurfaceWindowError {
     SurfaceGroupNotPrepared,
     #[error("clipboard preview surface state lock is poisoned")]
     PreviewStatePoisoned,
+    #[error("clipboard Escape registration state lock is poisoned")]
+    EscapeStatePoisoned,
     #[error("clipboard preview surface remained hidden after the native show request")]
     PreviewStillHidden,
     #[error(transparent)]
@@ -529,7 +538,7 @@ pub fn close<R: Runtime>(
         // fault must not strand an always-on-top window on screen.
         eprintln!("failed to stop clipboard foreground monitor while closing: {error}");
     }
-    if let Err(error) = clipboard_surface_pointer::stop() {
+    if let Err(error) = surface_pointer_monitor::stop(PointerMonitorOwner::Clipboard) {
         eprintln!("failed to stop clipboard outside-pointer monitor while closing: {error}");
     }
     close_preview(app, ClipboardPreviewCloseReason::MainSurfaceClosing)?;
@@ -552,7 +561,7 @@ pub fn close<R: Runtime>(
     }
     result?;
     if let Some(runtime) = app.try_state::<ApplicationRuntime>() {
-        if let Err(error) = runtime.keyboard_hook().stop_surface_escape() {
+        if let Err(error) = stop_escape_monitor(&runtime) {
             eprintln!("failed to stop clipboard Escape capture after closing: {error}");
         } else {
             debug_qa::trace("surface Escape capture stopped");
@@ -584,6 +593,7 @@ fn start_surface_monitors<R: Runtime>(
     let runtime = app
         .try_state::<ApplicationRuntime>()
         .ok_or(ClipboardSurfaceWindowError::ApplicationRuntimeUnavailable)?;
+    stop_escape_monitor(&runtime)?;
     let escape_app = app.clone();
     let escape_generation = runtime
         .keyboard_hook()
@@ -593,6 +603,9 @@ fn start_surface_monitors<R: Runtime>(
             ));
             queue_escape_surface_close(escape_app.clone());
         })?;
+    *escape_generation_slot()
+        .lock()
+        .map_err(|_| ClipboardSurfaceWindowError::EscapeStatePoisoned)? = Some(escape_generation);
     debug_qa::trace(format!(
         "surface Escape capture start generation={escape_generation}"
     ));
@@ -611,16 +624,16 @@ fn start_surface_monitors<R: Runtime>(
                 );
             },
         ) {
-            let _ = runtime
-                .keyboard_hook()
-                .unregister_surface_escape(escape_generation);
+            let _ = stop_escape_monitor(&runtime);
             return Err(error.into());
         }
     }
 
     let dispatch_app = app.clone();
-    if let Err(error) =
-        clipboard_surface_pointer::start(internal_surface_roots, move |observation| {
+    if let Err(error) = surface_pointer_monitor::start(
+        PointerMonitorOwner::Clipboard,
+        internal_surface_roots,
+        move |observation| {
             queue_external_surface_close(
                 dispatch_app,
                 ClipboardSurfaceCloseReason::PointerOutside,
@@ -628,13 +641,26 @@ fn start_surface_monitors<R: Runtime>(
                 "outside pointer press",
                 Some(observation),
             );
-        })
-    {
+        },
+    ) {
         let _ = clipboard_surface_foreground::stop();
+        let _ = stop_escape_monitor(&runtime);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+pub(crate) fn stop_escape_monitor(
+    runtime: &ApplicationRuntime,
+) -> Result<(), ClipboardSurfaceWindowError> {
+    let generation = escape_generation_slot()
+        .lock()
+        .map_err(|_| ClipboardSurfaceWindowError::EscapeStatePoisoned)?
+        .take();
+    if let Some(generation) = generation {
         let _ = runtime
             .keyboard_hook()
-            .unregister_surface_escape(escape_generation);
-        return Err(error.into());
+            .unregister_surface_escape(generation)?;
     }
     Ok(())
 }
@@ -671,7 +697,7 @@ fn queue_external_surface_close<R: Runtime>(
     main_reason: ClipboardSurfaceCloseReason,
     preview_reason: ClipboardPreviewCloseReason,
     source: &'static str,
-    pointer_observation: Option<clipboard_surface_pointer::PointerObservation>,
+    pointer_observation: Option<PointerObservation>,
 ) {
     // Hook workers only queue work. The close runs on Tauri's main loop, so
     // teardown and join can never target the calling hook worker itself.

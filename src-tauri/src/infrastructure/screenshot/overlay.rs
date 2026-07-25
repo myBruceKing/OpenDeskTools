@@ -76,32 +76,37 @@ mod windows_impl {
         SmoothingModeAntiAlias8x8, UnitPixel,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows_sys::Win32::UI::Controls::EM_SETCUEBANNER;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT,
         VK_RETURN, VK_RIGHT, VK_SHIFT, VK_UP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
-        GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
-        IsWindow, KillTimer, LoadCursorW, PostQuitMessage, RegisterClassW, SendMessageW,
-        SetForegroundWindow, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMessage,
-        UnregisterClassW, CREATESTRUCTW, CS_DBLCLKS, ES_AUTOHSCROLL, GWLP_USERDATA, IDC_CROSS, MSG,
-        SW_SHOW, WM_ACTIVATEAPP, WM_CAPTURECHANGED, WM_CLOSE, WM_CTLCOLOREDIT, WM_DISPLAYCHANGE,
-        WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-        WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_SETFONT, WM_TIMER, WNDCLASSW, WS_CHILD,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetAncestor,
+        GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW,
+        GetWindowTextW, GetWindowThreadProcessId, IsWindow, KillTimer, LoadCursorW,
+        PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow, SetTimer,
+        SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, UnregisterClassW,
+        CREATESTRUCTW, CS_DBLCLKS, ES_AUTOHSCROLL, GA_ROOT, GWLP_USERDATA, HWND_TOPMOST, IDC_CROSS,
+        MSG, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOW, WM_ACTIVATEAPP, WM_CAPTURECHANGED,
+        WM_CLOSE, WM_CTLCOLOREDIT, WM_DISPLAYCHANGE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN,
+        WM_SETFONT, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
     };
 
     use super::*;
+    use crate::infrastructure::debug_qa;
     use crate::infrastructure::screenshot::annotation::{
         Annotation, AnnotationStyle, AnnotationTool,
     };
     use crate::infrastructure::screenshot::candidate::CaptureCandidateDetector;
     use crate::infrastructure::screenshot::model::{MonitorFrame, PhysicalPoint, PhysicalRect};
     use crate::infrastructure::screenshot::selection::{
-        selection_size, SelectionHandle, SelectionOutcome, SelectionState,
+        resize_rect_with_handle, selection_size, SelectionHandle, SelectionOutcome, SelectionState,
     };
+    use crate::infrastructure::window_integrity;
 
     const CLASS_NAME: &[u16] = &[
         b'O' as u16,
@@ -187,7 +192,6 @@ mod windows_impl {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ToolbarItem {
-        Select,
         Tool(AnnotationTool),
         Undo,
         Redo,
@@ -196,7 +200,6 @@ mod windows_impl {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ToolbarIcon {
-        Select,
         Rectangle,
         Arrow,
         Pen,
@@ -217,9 +220,8 @@ mod windows_impl {
         Size(u8),
     }
 
-    const TOOLBAR_GROUP_BREAKS: [usize; 2] = [6, 8];
-    const TOOLBAR_ITEMS: [(ToolbarItem, ToolbarIcon, &str); 13] = [
-        (ToolbarItem::Select, ToolbarIcon::Select, "选择和移动标注"),
+    const TOOLBAR_GROUP_BREAKS: [usize; 2] = [5, 7];
+    const TOOLBAR_ITEMS: [(ToolbarItem, ToolbarIcon, &str); 12] = [
         (
             ToolbarItem::Tool(AnnotationTool::Rectangle),
             ToolbarIcon::Rectangle,
@@ -307,6 +309,14 @@ mod windows_impl {
         index: usize,
         pointer: PhysicalPoint,
         original_points: Vec<PhysicalPoint>,
+        original_bounds: PhysicalRect,
+        interaction: AnnotationInteraction,
+    }
+
+    #[derive(Clone, Copy)]
+    enum AnnotationInteraction {
+        Move,
+        Resize(SelectionHandle),
     }
 
     struct OverlayWindowContext {
@@ -431,7 +441,9 @@ mod windows_impl {
     ) -> Result<Option<CaptureSelection>, ScreenshotError> {
         let _class = OverlayWindowClass::register()?;
         let _gdi_plus = GdiPlusToken::start();
-        let candidate_detector = Rc::new(RefCell::new(CaptureCandidateDetector::snapshot()));
+        let candidate_detector = Rc::new(RefCell::new(CaptureCandidateDetector::snapshot(
+            snapshot.as_ref(),
+        )));
         let previous_foreground = unsafe { GetForegroundWindow() };
         let shared = Arc::new(Mutex::new(OverlayShared {
             selection: SelectionState::new(snapshot.virtual_bounds),
@@ -514,8 +526,20 @@ mod windows_impl {
             .unwrap_or(0);
         unsafe {
             let focus_window = windows[focus_index];
-            let _ = SetForegroundWindow(focus_window);
-            let _ = SetFocus(focus_window);
+            if !activate_overlay_window(focus_window) {
+                let foreground = GetForegroundWindow();
+                if foreground.is_null()
+                    || !window_integrity::window_has_higher_integrity(foreground as usize)
+                {
+                    cleanup_windows(&windows);
+                    drop(contexts);
+                    return Err(ScreenshotError::OverlayActivationDenied);
+                }
+                debug_qa::trace(format!(
+                    "screenshot overlay activation denied foreground={:#x} reason=higher_integrity continuation=topmost_mouse_first",
+                    foreground as usize
+                ));
+            }
             // UI Automation runs on a detached COM worker. Polling from a timer
             // lets a refined element result replace the top-level window even
             // after the pointer has stopped moving.
@@ -608,6 +632,52 @@ mod windows_impl {
                 DestroyWindow(*window);
             }
         }
+    }
+
+    fn activate_overlay_window(window: HWND) -> bool {
+        unsafe {
+            let _ = SetWindowPos(
+                window,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            );
+            if SetForegroundWindow(window) != 0 && foreground_root_is(window) {
+                let _ = SetFocus(window);
+                return true;
+            }
+
+            let foreground = GetForegroundWindow();
+            if foreground.is_null() {
+                return false;
+            }
+            let foreground_thread = GetWindowThreadProcessId(foreground, std::ptr::null_mut());
+            let current_thread = GetCurrentThreadId();
+            if foreground_thread == 0 || foreground_thread == current_thread {
+                return false;
+            }
+            let attached = AttachThreadInput(current_thread, foreground_thread, 1) != 0;
+            if !attached {
+                return false;
+            }
+            let activated = SetForegroundWindow(window) != 0;
+            let _ = SetFocus(window);
+            let _ = AttachThreadInput(current_thread, foreground_thread, 0);
+            activated && foreground_root_is(window)
+        }
+    }
+
+    unsafe fn foreground_root_is(window: HWND) -> bool {
+        let foreground = GetForegroundWindow();
+        if foreground.is_null() {
+            return false;
+        }
+        let foreground_root = GetAncestor(foreground, GA_ROOT);
+        let window_root = GetAncestor(window, GA_ROOT);
+        !foreground_root.is_null() && foreground_root == window_root
     }
 
     fn message_loop(shared: &Arc<Mutex<OverlayShared>>) -> Result<(), ScreenshotError> {
@@ -777,15 +847,7 @@ mod windows_impl {
         let Some(point) = cursor_position() else {
             return false;
         };
-        let text_request = context.shared.lock().ok().and_then(|shared| {
-            let selection = shared.selection.selection()?;
-            (shared.active_tool == Some(AnnotationTool::Text) && contains(selection, point))
-                .then_some((selection, shared.annotation_style))
-        });
-        if let Some((selection, style)) = text_request {
-            start_text_editor(window, context, selection, point, style);
-            return false;
-        }
+        let mut text_request = None;
         let (handles, started) = {
             let Ok(mut shared) = context.shared.lock() else {
                 unsafe { PostQuitMessage(1) };
@@ -793,21 +855,45 @@ mod windows_impl {
             };
             let selection = shared.selection.selection();
             let started = if let Some(selection) = selection {
-                if let Some(handle) = selection_handle_at(selection, point) {
+                let resize_target = shared.selected_annotation.and_then(|index| {
+                    shared.annotations.get(index).and_then(|annotation| {
+                        annotation_resize_handle_at(annotation, point).map(|handle| (index, handle))
+                    })
+                });
+                if let Some((index, handle)) = resize_target {
+                    let annotation = &shared.annotations[index];
+                    let drag = annotation_bounds(annotation).map(|bounds| AnnotationDrag {
+                        index,
+                        pointer: point,
+                        original_points: annotation.points.clone(),
+                        original_bounds: bounds,
+                        interaction: AnnotationInteraction::Resize(handle),
+                    });
+                    shared.annotation_drag = drag;
+                    shared.annotation_drag.is_some()
+                } else if let Some(handle) = selection_handle_at(selection, point) {
                     shared.selection.begin_resize(point, handle)
                 } else if contains(selection, point) {
-                    if let Some(tool) = shared.active_tool {
+                    if let Some(index) = annotation_at(&shared.annotations, point) {
+                        let annotation = &shared.annotations[index];
+                        let drag = annotation_bounds(annotation).map(|bounds| AnnotationDrag {
+                            index,
+                            pointer: point,
+                            original_points: annotation.points.clone(),
+                            original_bounds: bounds,
+                            interaction: AnnotationInteraction::Move,
+                        });
+                        shared.selected_annotation = Some(index);
+                        shared.annotation_drag = drag;
+                        shared.annotation_drag.is_some()
+                    } else if shared.active_tool == Some(AnnotationTool::Text) {
+                        text_request = Some((selection, shared.annotation_style));
+                        shared.selected_annotation = None;
+                        false
+                    } else if let Some(tool) = shared.active_tool {
                         shared.selected_annotation = None;
                         shared.draft_annotation =
                             Some(Annotation::with_style(tool, point, shared.annotation_style));
-                        true
-                    } else if let Some(index) = annotation_at(&shared.annotations, point) {
-                        shared.selected_annotation = Some(index);
-                        shared.annotation_drag = Some(AnnotationDrag {
-                            index,
-                            pointer: point,
-                            original_points: shared.annotations[index].points.clone(),
-                        });
                         true
                     } else {
                         shared.selected_annotation = None;
@@ -835,6 +921,10 @@ mod windows_impl {
             (shared.window_handles.clone(), started)
         };
         invalidate_windows(&handles);
+        if let Some((selection, style)) = text_request {
+            start_text_editor(window, context, selection, point, style);
+            return false;
+        }
         started
     }
 
@@ -872,23 +962,45 @@ mod windows_impl {
                     PointerAction::Update => {}
                 }
             } else if let Some(drag) = shared.annotation_drag.take() {
-                let (delta_x, delta_y) = clamped_annotation_delta(
-                    &drag.original_points,
-                    point.x.saturating_sub(drag.pointer.x),
-                    point.y.saturating_sub(drag.pointer.y),
-                    annotation_bounds,
-                );
-                if let Some(annotation) = shared.annotations.get_mut(drag.index) {
-                    annotation.points = drag
-                        .original_points
-                        .iter()
-                        .map(|point| {
-                            PhysicalPoint::new(
-                                point.x.saturating_add(delta_x),
-                                point.y.saturating_add(delta_y),
-                            )
-                        })
-                        .collect();
+                match drag.interaction {
+                    AnnotationInteraction::Move => {
+                        let (delta_x, delta_y) = clamped_annotation_delta(
+                            &drag.original_points,
+                            point.x.saturating_sub(drag.pointer.x),
+                            point.y.saturating_sub(drag.pointer.y),
+                            annotation_bounds,
+                        );
+                        if let Some(annotation) = shared.annotations.get_mut(drag.index) {
+                            annotation.points = drag
+                                .original_points
+                                .iter()
+                                .map(|point| {
+                                    PhysicalPoint::new(
+                                        point.x.saturating_add(delta_x),
+                                        point.y.saturating_add(delta_y),
+                                    )
+                                })
+                                .collect();
+                        }
+                    }
+                    AnnotationInteraction::Resize(handle) => {
+                        if let Some(resized) = resize_rect_with_handle(
+                            drag.original_bounds,
+                            drag.pointer,
+                            point,
+                            handle,
+                            annotation_bounds,
+                        ) {
+                            if let Some(annotation) = shared.annotations.get_mut(drag.index) {
+                                resize_annotation(
+                                    annotation,
+                                    &drag.original_points,
+                                    drag.original_bounds,
+                                    resized,
+                                );
+                            }
+                        }
+                    }
                 }
                 if matches!(action, PointerAction::Update) {
                     shared.annotation_drag = Some(drag);
@@ -899,6 +1011,7 @@ mod windows_impl {
                     let draft = shared.draft_annotation.take().unwrap();
                     if draft.is_visible() {
                         shared.annotations.push(draft);
+                        shared.selected_annotation = Some(shared.annotations.len() - 1);
                         shared.redo_annotations.clear();
                     }
                 }
@@ -1041,6 +1154,7 @@ mod windows_impl {
                     state
                         .annotations
                         .push(Annotation::text(editor.anchor, text, editor.style));
+                    state.selected_annotation = Some(state.annotations.len() - 1);
                     state.redo_annotations.clear();
                 }
             }
@@ -1235,17 +1349,6 @@ mod windows_impl {
 
     fn activate_toolbar_item(context: &OverlayWindowContext, item: ToolbarItem) {
         match item {
-            ToolbarItem::Select => {
-                let handles = context.shared.lock().ok().map(|mut shared| {
-                    shared.active_tool = None;
-                    shared.hovered_item = Some(item);
-                    shared.hovered_parameter = None;
-                    shared.window_handles.clone()
-                });
-                if let Some(handles) = handles {
-                    invalidate_windows(&handles);
-                }
-            }
             ToolbarItem::Tool(tool) => {
                 let handles = context.shared.lock().ok().map(|mut shared| {
                     shared.active_tool = (shared.active_tool != Some(tool)).then_some(tool);
@@ -1379,18 +1482,50 @@ mod windows_impl {
             .find_map(|(index, annotation)| annotation_hit(annotation, point).then_some(index))
     }
 
+    fn annotation_resize_handle_at(
+        annotation: &Annotation,
+        point: PhysicalPoint,
+    ) -> Option<SelectionHandle> {
+        (annotation.tool == AnnotationTool::Rectangle)
+            .then(|| annotation_bounds(annotation))
+            .flatten()
+            .and_then(|bounds| selection_handle_at(inflate_rect(bounds, 4), point))
+    }
+
     fn annotation_hit(annotation: &Annotation, point: PhysicalPoint) -> bool {
         let Some(bounds) = annotation_bounds(annotation) else {
             return false;
         };
         match annotation.tool {
-            AnnotationTool::Rectangle | AnnotationTool::Mosaic | AnnotationTool::Text => {
+            AnnotationTool::Rectangle => rectangle_border_hit(
+                bounds,
+                point,
+                i32::from(annotation.style.thickness).saturating_add(5),
+            ),
+            AnnotationTool::Mosaic | AnnotationTool::Text => {
                 contains(inflate_rect(bounds, 6), point)
             }
             AnnotationTool::Arrow | AnnotationTool::Pen => annotation
                 .points
                 .windows(2)
                 .any(|pair| distance_to_segment(point, pair[0], pair[1]) <= 8.0),
+        }
+    }
+
+    fn rectangle_border_hit(bounds: PhysicalRect, point: PhysicalPoint, tolerance: i32) -> bool {
+        let tolerance = tolerance.max(1);
+        if !contains(inflate_rect(bounds, tolerance), point) {
+            return false;
+        }
+        let inner = PhysicalRect::new(
+            bounds.left.saturating_add(tolerance),
+            bounds.top.saturating_add(tolerance),
+            bounds.right.saturating_sub(tolerance),
+            bounds.bottom.saturating_sub(tolerance),
+        );
+        match inner {
+            Ok(inner) => !contains(inner, point),
+            Err(_) => true,
         }
     }
 
@@ -1481,6 +1616,47 @@ mod windows_impl {
             delta_x.clamp(selection.left - min_x, selection.right - 1 - max_x),
             delta_y.clamp(selection.top - min_y, selection.bottom - 1 - max_y),
         )
+    }
+
+    fn resize_annotation(
+        annotation: &mut Annotation,
+        original_points: &[PhysicalPoint],
+        original: PhysicalRect,
+        resized: PhysicalRect,
+    ) {
+        if annotation.tool != AnnotationTool::Rectangle || original_points.len() != 2 {
+            return;
+        }
+        annotation.points = original_points
+            .iter()
+            .map(|point| {
+                PhysicalPoint::new(
+                    remap_axis(
+                        point.x,
+                        original.left,
+                        original.right - 1,
+                        resized.left,
+                        resized.right - 1,
+                    ),
+                    remap_axis(
+                        point.y,
+                        original.top,
+                        original.bottom - 1,
+                        resized.top,
+                        resized.bottom - 1,
+                    ),
+                )
+            })
+            .collect();
+    }
+
+    fn remap_axis(value: i32, from_start: i32, from_end: i32, to_start: i32, to_end: i32) -> i32 {
+        if from_start == from_end {
+            return to_start;
+        }
+        let numerator = i64::from(value - from_start) * i64::from(to_end - to_start);
+        let denominator = i64::from(from_end - from_start);
+        to_start.saturating_add(i32::try_from(numerator / denominator).unwrap_or_default())
     }
 
     fn translate_annotations(annotations: &mut [Annotation], delta_x: i32, delta_y: i32) {
@@ -1897,17 +2073,20 @@ mod windows_impl {
             return;
         };
         let monitor = frame.monitor.physical_bounds;
-        let Some(bounds) = bounds.intersection(monitor) else {
+        let display_bounds = inflate_rect(bounds, 4);
+        let Some(visible_bounds) = display_bounds.intersection(monitor) else {
             return;
         };
-        let local = to_local_rect(inflate_rect(bounds, 4), monitor);
+        let local = to_local_rect(visible_bounds, monitor);
         frame_rect(device_context, &local, ACCENT_COLOR);
-        for center in [
-            PhysicalPoint::new(local.left, local.top),
-            PhysicalPoint::new(local.right, local.top),
-            PhysicalPoint::new(local.right, local.bottom),
-            PhysicalPoint::new(local.left, local.bottom),
-        ] {
+        if annotation.tool != AnnotationTool::Rectangle {
+            return;
+        }
+        for (_, center) in selection_handles(display_bounds) {
+            if !contains(monitor, center) {
+                continue;
+            }
+            let center = PhysicalPoint::new(center.x - monitor.left, center.y - monitor.top);
             draw_ellipse(
                 device_context,
                 &RECT {
@@ -2322,7 +2501,6 @@ mod windows_impl {
             };
             let local = to_local_rect(button, monitor_bounds);
             let selected = match item {
-                ToolbarItem::Select => state.active_tool.is_none(),
                 ToolbarItem::Tool(tool) => state.active_tool == Some(*tool),
                 _ => false,
             };
@@ -2418,28 +2596,6 @@ mod windows_impl {
         }
         let previous = unsafe { SelectObject(device_context, pen) };
         match icon {
-            ToolbarIcon::Select => {
-                for (start, end) in [
-                    (
-                        PhysicalPoint::new(left + 3, top + 2),
-                        PhysicalPoint::new(left + 3, bottom - 3),
-                    ),
-                    (
-                        PhysicalPoint::new(left + 3, top + 2),
-                        PhysicalPoint::new(right - 3, center_y + 3),
-                    ),
-                    (
-                        PhysicalPoint::new(right - 3, center_y + 3),
-                        PhysicalPoint::new(center_x, center_y + 5),
-                    ),
-                    (
-                        PhysicalPoint::new(center_x, center_y + 5),
-                        PhysicalPoint::new(center_x + 5, bottom - 2),
-                    ),
-                ] {
-                    draw_gdi_line(device_context, start, end);
-                }
-            }
             ToolbarIcon::Rectangle => {
                 frame_rect(
                     device_context,
@@ -3188,7 +3344,10 @@ mod windows_impl {
 
         #[test]
         fn toolbar_buttons_keep_action_order_and_separate_semantic_groups() {
-            let bounds = PhysicalRect::new(100, 100, 564, 140).unwrap();
+            let toolbar_width = TOOLBAR_PADDING * 2
+                + TOOLBAR_BUTTON_WIDTH * i32::try_from(TOOLBAR_ITEMS.len()).unwrap()
+                + TOOLBAR_GROUP_GAP * i32::try_from(TOOLBAR_GROUP_BREAKS.len()).unwrap();
+            let bounds = PhysicalRect::new(100, 100, 100 + toolbar_width, 140).unwrap();
             for index in 0..TOOLBAR_ITEMS.len() {
                 let button = toolbar_button_rect(bounds, index).unwrap();
                 assert_eq!(button.width(), Some(TOOLBAR_BUTTON_WIDTH as u32));
@@ -3245,13 +3404,25 @@ mod windows_impl {
                 Annotation::new(AnnotationTool::Rectangle, PhysicalPoint::new(100, 100));
             rectangle.update(PhysicalPoint::new(240, 180));
             let text = Annotation::text(
-                PhysicalPoint::new(300, 200),
+                PhysicalPoint::new(120, 120),
                 "可移动文字".to_owned(),
                 AnnotationStyle::default(),
             );
-            assert!(annotation_hit(&rectangle, PhysicalPoint::new(160, 140)));
-            assert!(annotation_hit(&text, PhysicalPoint::new(320, 210)));
+            assert!(annotation_hit(&rectangle, PhysicalPoint::new(160, 102)));
+            assert!(!annotation_hit(&rectangle, PhysicalPoint::new(160, 140)));
+            assert!(annotation_hit(&text, PhysicalPoint::new(130, 125)));
             assert!(!annotation_hit(&text, PhysicalPoint::new(100, 300)));
+            assert_eq!(
+                annotation_at(
+                    &[rectangle.clone(), text.clone()],
+                    PhysicalPoint::new(130, 125)
+                ),
+                Some(1)
+            );
+            assert_eq!(
+                annotation_at(&[rectangle, text], PhysicalPoint::new(210, 160)),
+                None
+            );
         }
 
         #[test]
@@ -3261,6 +3432,59 @@ mod windows_impl {
             assert_eq!(
                 clamped_annotation_delta(&points, -100, 100, selection),
                 (-20, 29)
+            );
+        }
+
+        #[test]
+        fn selected_rectangle_exposes_resize_handles_and_preserves_drag_direction() {
+            let mut rectangle =
+                Annotation::new(AnnotationTool::Rectangle, PhysicalPoint::new(80, 70));
+            rectangle.update(PhysicalPoint::new(20, 30));
+            let original = annotation_bounds(&rectangle).unwrap();
+            assert_eq!(
+                annotation_resize_handle_at(&rectangle, PhysicalPoint::new(16, 26)),
+                Some(SelectionHandle::TopLeft)
+            );
+
+            let original_points = rectangle.points.clone();
+            let resized = PhysicalRect::new(10, 15, 101, 91).unwrap();
+            resize_annotation(&mut rectangle, &original_points, original, resized);
+            assert_eq!(
+                rectangle.points,
+                vec![PhysicalPoint::new(100, 90), PhysicalPoint::new(10, 15)]
+            );
+        }
+
+        #[test]
+        fn every_annotation_tool_can_be_hit_for_selection_and_movement() {
+            let mut arrow = Annotation::new(AnnotationTool::Arrow, PhysicalPoint::new(10, 10));
+            arrow.update(PhysicalPoint::new(80, 10));
+            let mut pen = Annotation::new(AnnotationTool::Pen, PhysicalPoint::new(10, 30));
+            pen.update(PhysicalPoint::new(80, 30));
+            let text = Annotation::text(
+                PhysicalPoint::new(10, 50),
+                "文字".to_owned(),
+                AnnotationStyle::default(),
+            );
+            let mut mosaic = Annotation::new(AnnotationTool::Mosaic, PhysicalPoint::new(10, 80));
+            mosaic.update(PhysicalPoint::new(80, 110));
+            let annotations = vec![arrow, pen, text, mosaic];
+
+            assert_eq!(
+                annotation_at(&annotations, PhysicalPoint::new(40, 10)),
+                Some(0)
+            );
+            assert_eq!(
+                annotation_at(&annotations, PhysicalPoint::new(40, 30)),
+                Some(1)
+            );
+            assert_eq!(
+                annotation_at(&annotations, PhysicalPoint::new(20, 55)),
+                Some(2)
+            );
+            assert_eq!(
+                annotation_at(&annotations, PhysicalPoint::new(40, 90)),
+                Some(3)
             );
         }
     }

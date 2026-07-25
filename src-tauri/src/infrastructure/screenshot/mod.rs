@@ -44,6 +44,8 @@ pub enum ScreenshotError {
     SessionAlreadyActive,
     #[error("screenshot overlay state is unavailable")]
     OverlayStateUnavailable,
+    #[error("Windows denied activation of the screenshot overlay")]
+    OverlayActivationDenied,
     #[error("Windows capture operation failed: {0}")]
     WindowsApi(&'static str),
     #[error("screenshot capture is unavailable on this platform")]
