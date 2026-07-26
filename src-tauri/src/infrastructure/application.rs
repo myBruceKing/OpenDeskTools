@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use thiserror::Error;
 
 use super::autostart::{AutostartError, AutostartManager};
-use super::clipboard::ClipboardService;
+use super::clipboard::{ClipboardError, ClipboardService};
 use super::clipboard_input::ClipboardInputCoordinator;
 use super::clipboard_listener::{
     ClipboardHistoryEventSink, ClipboardListenerError, ClipboardListenerManager,
@@ -96,7 +96,7 @@ pub enum ApplicationRuntimeError {
     #[error("failed to initialize hotkey manager: {0}")]
     Hotkey(#[from] HotkeyError),
     #[error("failed to initialize clipboard service: {0}")]
-    Clipboard(String),
+    Clipboard(#[from] ClipboardError),
     #[error("failed to initialize quick launch service: {0}")]
     QuickLaunch(#[from] QuickLaunchError),
 }
@@ -376,13 +376,8 @@ impl ApplicationRuntime {
     ) -> Result<Self, ApplicationRuntimeError> {
         let storage = Arc::new(StorageService::initialize(app_data_dir)?);
         diagnostics::initialize(&storage)?;
-        let clipboard = Arc::new(
-            ClipboardService::try_initialize(Arc::clone(&storage))
-                .map_err(|error| ApplicationRuntimeError::Clipboard(error.to_string()))?,
-        );
-        clipboard
-            .reconcile_retention_and_capacity()
-            .map_err(|error| ApplicationRuntimeError::Clipboard(error.to_string()))?;
+        let clipboard = Arc::new(ClipboardService::try_initialize(Arc::clone(&storage))?);
+        clipboard.reconcile_retention_and_capacity()?;
         let theme = Arc::new(ThemeService::initialize(Arc::clone(&storage))?);
         let hotkeys = HotkeyManager::initialize(Arc::clone(&storage))?;
         let keyboard_hook = Arc::new(KeyboardHookBroker::default());
@@ -496,6 +491,20 @@ mod tests {
 
     fn arguments(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn clipboard_runtime_error_preserves_typed_source_and_display_text() {
+        let error = ApplicationRuntimeError::from(ClipboardError::EmptyText);
+
+        assert_eq!(
+            error.to_string(),
+            "failed to initialize clipboard service: clipboard text must not be empty"
+        );
+        assert_eq!(
+            std::error::Error::source(&error).map(ToString::to_string),
+            Some("clipboard text must not be empty".to_string())
+        );
     }
 
     #[test]

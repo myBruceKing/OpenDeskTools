@@ -6,6 +6,7 @@ import {
   type HotkeyEditorState,
   type HotkeySnapshot
 } from "./hotkeyModel";
+import { ControllerListeners } from "./controllerListeners";
 
 const INITIAL_STATE: HotkeyControllerState = {
   status: "loading",
@@ -151,7 +152,7 @@ function confirmEnabledChange(
 
 export class HotkeyController {
   private state: HotkeyControllerState = INITIAL_STATE;
-  private listeners = new Set<() => void>();
+  private readonly listeners = new ControllerListeners();
   private active = false;
   private session = 0;
   private classificationRequest = 0;
@@ -160,10 +161,7 @@ export class HotkeyController {
 
   getSnapshot = () => this.state;
 
-  subscribe = (listener: () => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
+  subscribe = this.listeners.subscribe;
 
   start() {
     this.stop();
@@ -493,8 +491,6 @@ export class HotkeyController {
 
   private setState(state: HotkeyControllerState) {
     this.state = state;
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.notify();
   }
 }

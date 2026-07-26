@@ -12,6 +12,7 @@ import {
   type ClipboardSettings,
   toClipboardSettingsViewModel
 } from "./clipboardModel";
+import { ControllerListeners } from "./controllerListeners";
 
 function operationIssue(): ClipboardCommandError {
   return {
@@ -25,7 +26,7 @@ type SubscriptionStatus = "pending" | "active" | "failed";
 
 export class ClipboardController {
   private state = createClipboardLoadingState();
-  private listeners = new Set<() => void>();
+  private readonly listeners = new ControllerListeners();
   private active = false;
   private session = 0;
   private operationRequest = 0;
@@ -49,10 +50,7 @@ export class ClipboardController {
 
   getSnapshot = (): ClipboardControllerState => this.state;
 
-  subscribe = (listener: () => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
+  subscribe = this.listeners.subscribe;
 
   start() {
     this.stop();
@@ -782,8 +780,6 @@ export class ClipboardController {
 
   private setState(state: ClipboardControllerState) {
     this.state = state;
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.notify();
   }
 }

@@ -240,6 +240,26 @@ mod platform {
 
     use super::{patch_exported_task_xml, scheduled_action, ElevatedAutostartError, TASK_NAME};
 
+    struct TemporaryFile {
+        path: std::path::PathBuf,
+    }
+
+    impl TemporaryFile {
+        fn new(path: std::path::PathBuf) -> Self {
+            Self { path }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TemporaryFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+
     pub fn task_exists() -> Result<bool, ElevatedAutostartError> {
         let status = task_command()
             .args(["/Query", "/TN", TASK_NAME])
@@ -278,11 +298,11 @@ mod platform {
         require_output_success(&exported)?;
         let xml = decode_task_xml(&exported.stdout);
         let xml = patch_exported_task_xml(&xml)?;
-        let xml_path = std::env::temp_dir().join(format!(
+        let xml_path = TemporaryFile::new(std::env::temp_dir().join(format!(
             "OpenDeskTools-elevated-autostart-{}.xml",
             std::process::id()
-        ));
-        fs::write(&xml_path, encode_utf16le(&xml))
+        )));
+        fs::write(xml_path.path(), encode_utf16le(&xml))
             .map_err(ElevatedAutostartError::TaskDefinition)?;
         let status = task_command()
             .args([
@@ -290,12 +310,11 @@ mod platform {
                 OsString::from("/TN"),
                 OsString::from(TASK_NAME),
                 OsString::from("/XML"),
-                xml_path.as_os_str().to_owned(),
+                xml_path.path().as_os_str().to_owned(),
                 OsString::from("/F"),
             ])
             .status()
             .map_err(ElevatedAutostartError::TaskSchedulerStart)?;
-        let _ = fs::remove_file(xml_path);
         require_success(status)
     }
 
@@ -389,6 +408,44 @@ mod platform {
             Err(ElevatedAutostartError::UserIdentityUnavailable)
         } else {
             Ok(identity)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::TemporaryFile;
+
+        fn create_temporary_file_then_fail(path: std::path::PathBuf) -> Result<(), &'static str> {
+            let file = TemporaryFile::new(path);
+            std::fs::write(file.path(), b"task definition")
+                .expect("temporary task definition should be writable");
+            Err("simulated task scheduler failure")
+        }
+
+        #[test]
+        fn temporary_file_is_removed_when_scope_returns_early() {
+            let directory = tempfile::tempdir().expect("temporary directory should initialize");
+            let path = directory.path().join("elevated-autostart.xml");
+
+            let result = create_temporary_file_then_fail(path.clone());
+
+            assert_eq!(result, Err("simulated task scheduler failure"));
+            assert!(!path.exists());
+        }
+
+        #[test]
+        fn temporary_file_is_removed_after_normal_scope_completion() {
+            let directory = tempfile::tempdir().expect("temporary directory should initialize");
+            let path = directory.path().join("elevated-autostart.xml");
+
+            {
+                let file = TemporaryFile::new(path.clone());
+                std::fs::write(file.path(), b"task definition")
+                    .expect("temporary task definition should be writable");
+                assert!(path.exists());
+            }
+
+            assert!(!path.exists());
         }
     }
 }

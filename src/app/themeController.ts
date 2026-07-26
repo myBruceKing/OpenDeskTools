@@ -6,6 +6,7 @@ import {
   type ThemePatch,
   type ThemeSnapshot
 } from "./themeModel";
+import { ControllerListeners } from "./controllerListeners";
 import type { ThemeClient } from "./themeClient";
 import type { ThemeUpdateResult } from "./themeModel";
 
@@ -25,7 +26,7 @@ const INITIAL_STATE: ThemeControllerState = {
 
 export class ThemeController {
   private state: ThemeControllerState = INITIAL_STATE;
-  private listeners = new Set<() => void>();
+  private readonly listeners = new ControllerListeners();
   private pending: PendingUpdate[] = [];
   private processingSession: number | null = null;
   private active = false;
@@ -36,10 +37,7 @@ export class ThemeController {
 
   getSnapshot = (): ThemeControllerState => this.state;
 
-  subscribe = (listener: () => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
+  subscribe = this.listeners.subscribe;
 
   start() {
     this.stop();
@@ -332,8 +330,6 @@ export class ThemeController {
   }
 
   private emit() {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.notify();
   }
 }
