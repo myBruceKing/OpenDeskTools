@@ -87,7 +87,25 @@ fn parse_with_build_mode(
 }
 
 #[cfg(debug_assertions)]
-pub fn trace(message: impl AsRef<str>) {
+macro_rules! trace {
+    ($message:expr) => {
+        $crate::infrastructure::debug_qa::write_trace($message)
+    };
+}
+
+#[cfg(not(debug_assertions))]
+macro_rules! trace {
+    ($message:expr) => {{
+        if false {
+            let _ = &$message;
+        }
+    }};
+}
+
+pub(crate) use trace;
+
+#[cfg(debug_assertions)]
+pub(crate) fn write_trace(message: impl AsRef<str>) {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::sync::{Mutex, OnceLock};
@@ -111,9 +129,6 @@ pub fn trace(message: impl AsRef<str>) {
         let _ = file.flush();
     }
 }
-
-#[cfg(not(debug_assertions))]
-pub fn trace(_message: impl AsRef<str>) {}
 
 #[cfg(debug_assertions)]
 pub fn trace_path() -> std::path::PathBuf {

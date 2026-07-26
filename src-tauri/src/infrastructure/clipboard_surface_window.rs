@@ -262,12 +262,12 @@ fn get_or_create_main<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<WebviewWindow<R>, ClipboardSurfaceWindowError> {
     if let Some(window) = app.get_webview_window(CLIPBOARD_SURFACE_LABEL) {
-        debug_qa::trace("surface group main result=existing");
+        debug_qa::trace!("surface group main result=existing");
         configure_native_popup(&window)?;
         refresh_native_shape_or_log(&window);
         return Ok(window);
     }
-    debug_qa::trace("surface group main stage=build requested");
+    debug_qa::trace!("surface group main stage=build requested");
     let result = WebviewWindowBuilder::new(
         app,
         CLIPBOARD_SURFACE_LABEL,
@@ -288,13 +288,13 @@ fn get_or_create_main<R: Runtime>(
     .build()
     .map_err(ClipboardSurfaceWindowError::from)
     .and_then(|window| {
-        debug_qa::trace("surface group main result=created_hidden");
+        debug_qa::trace!("surface group main result=created_hidden");
         configure_native_popup(&window)?;
         refresh_native_shape_or_log(&window);
         Ok(window)
     });
     if let Err(error) = &result {
-        debug_qa::trace(format!("surface group main result=error error={error}"));
+        debug_qa::trace!(format!("surface group main result=error error={error}"));
     }
     result
 }
@@ -303,7 +303,7 @@ fn get_or_create_main<R: Runtime>(
 /// Runtime hover commands only reuse this prepared group and never call a
 /// WebviewWindowBuilder from an IPC handler.
 pub fn prepare_group<R: Runtime>(app: &AppHandle<R>) -> Result<(), ClipboardSurfaceWindowError> {
-    debug_qa::trace("surface group prepare requested");
+    debug_qa::trace!("surface group prepare requested");
     let result = (|| {
         let main = get_or_create_main(app)?;
         let preview = get_or_create_preview(app)?;
@@ -316,9 +316,9 @@ pub fn prepare_group<R: Runtime>(app: &AppHandle<R>) -> Result<(), ClipboardSurf
         Ok(())
     })();
     match &result {
-        Ok(()) => debug_qa::trace("surface group prepare result=ready main=hidden preview=hidden"),
+        Ok(()) => debug_qa::trace!("surface group prepare result=ready main=hidden preview=hidden"),
         Err(error) => {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "surface group prepare result=error policy=clipboard_surface_unavailable error={error}"
             ));
             destroy_prepared_surface_group_or_log(app);
@@ -375,12 +375,12 @@ where
     let mut first_error = None;
     for label in [CLIPBOARD_SURFACE_LABEL, CLIPBOARD_PREVIEW_SURFACE_LABEL] {
         match apply(label, color) {
-            Ok(()) => debug_qa::trace(format!(
+            Ok(()) => debug_qa::trace!(format!(
                 "surface group underlay label={label} color={} result=success",
                 color.as_hex()
             )),
             Err(error) => {
-                debug_qa::trace(format!(
+                debug_qa::trace!(format!(
                     "surface group underlay label={label} color={} result=error error={error}",
                     color.as_hex()
                 ));
@@ -401,7 +401,7 @@ pub fn set_group_underlay_color<R: Runtime>(
     let preview_prepared = app
         .get_webview_window(CLIPBOARD_PREVIEW_SURFACE_LABEL)
         .is_some();
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface group underlay request color={} main_prepared={main_prepared} preview_prepared={preview_prepared}",
         color.as_hex()
     ));
@@ -413,11 +413,11 @@ pub fn set_group_underlay_color<R: Runtime>(
                 .map_err(ClipboardSurfaceWindowError::from)
         });
     match &result {
-        Ok(()) => debug_qa::trace(format!(
+        Ok(()) => debug_qa::trace!(format!(
             "surface group underlay result=success color={}",
             color.as_hex()
         )),
-        Err(error) => debug_qa::trace(format!(
+        Err(error) => debug_qa::trace!(format!(
             "surface group underlay result=error color={} error={error}",
             color.as_hex()
         )),
@@ -431,11 +431,11 @@ fn destroy_prepared_surface_group_or_log<R: Runtime>(app: &AppHandle<R>) {
             continue;
         };
         if let Err(error) = window.destroy() {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "surface group cleanup label={label} result=error error={error}"
             ));
         } else {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "surface group cleanup label={label} result=destroyed"
             ));
         }
@@ -447,17 +447,17 @@ fn get_or_create_preview<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<WebviewWindow<R>, ClipboardSurfaceWindowError> {
     if let Some(window) = app.get_webview_window(CLIPBOARD_PREVIEW_SURFACE_LABEL) {
-        debug_qa::trace("preview get_or_create result=existing");
+        debug_qa::trace!("preview get_or_create result=existing");
         configure_native_popup(&window).inspect_err(|error| {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "preview native configure stage=existing result=error error={error}"
             ));
         })?;
-        debug_qa::trace("preview native configure stage=existing result=success");
+        debug_qa::trace!("preview native configure stage=existing result=success");
         refresh_native_shape_or_log(&window);
         return Ok(window);
     }
-    debug_qa::trace("preview get_or_create stage=build requested");
+    debug_qa::trace!("preview get_or_create stage=build requested");
     let result = WebviewWindowBuilder::new(
         app,
         CLIPBOARD_PREVIEW_SURFACE_LABEL,
@@ -481,18 +481,18 @@ fn get_or_create_preview<R: Runtime>(
     .build()
     .map_err(ClipboardSurfaceWindowError::from)
     .and_then(|window| {
-        debug_qa::trace("preview get_or_create result=created_hidden");
+        debug_qa::trace!("preview get_or_create result=created_hidden");
         configure_native_popup(&window).inspect_err(|error| {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "preview native configure stage=created result=error error={error}"
             ));
         })?;
-        debug_qa::trace("preview native configure stage=created result=success");
+        debug_qa::trace!("preview native configure stage=created result=success");
         refresh_native_shape_or_log(&window);
         Ok(window)
     });
     if let Err(error) = &result {
-        debug_qa::trace(format!("preview get_or_create result=error error={error}"));
+        debug_qa::trace!(format!("preview get_or_create result=error error={error}"));
     }
     result
 }
@@ -532,7 +532,7 @@ pub fn close<R: Runtime>(
     surface: &SurfaceManager,
     reason: ClipboardSurfaceCloseReason,
 ) -> Result<(), ClipboardSurfaceWindowError> {
-    debug_qa::trace(format!("close request reason={}", reason.as_str()));
+    debug_qa::trace!(format!("close request reason={}", reason.as_str()));
     if let Err(error) = clipboard_surface_foreground::stop() {
         // Closing the visible surfaces is the fail-safe. A monitor teardown
         // fault must not strand an always-on-top window on screen.
@@ -564,11 +564,11 @@ pub fn close<R: Runtime>(
         if let Err(error) = stop_escape_monitor(&runtime) {
             eprintln!("failed to stop clipboard Escape capture after closing: {error}");
         } else {
-            debug_qa::trace("surface Escape capture stopped");
+            debug_qa::trace!("surface Escape capture stopped");
         }
     }
     notify_state_or_log(app, CLIPBOARD_SURFACE_CLOSED_CHANGE);
-    debug_qa::trace(format!("close success reason={}", reason.as_str()));
+    debug_qa::trace!(format!("close success reason={}", reason.as_str()));
     Ok(())
 }
 
@@ -598,7 +598,7 @@ fn start_surface_monitors<R: Runtime>(
     let escape_generation = runtime
         .keyboard_hook()
         .register_surface_escape(move |generation| {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "surface Escape captured generation={generation} source=WH_KEYBOARD_LL"
             ));
             queue_escape_surface_close(escape_app.clone());
@@ -606,7 +606,7 @@ fn start_surface_monitors<R: Runtime>(
     *escape_generation_slot()
         .lock()
         .map_err(|_| ClipboardSurfaceWindowError::EscapeStatePoisoned)? = Some(escape_generation);
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface Escape capture start generation={escape_generation}"
     ));
     if let Some(target_top_window) = target_top_window {
@@ -704,7 +704,7 @@ fn queue_external_surface_close<R: Runtime>(
     let close_app = dispatch_app.clone();
     if let Err(error) = dispatch_app.run_on_main_thread(move || {
         if let Some(observation) = pointer_observation {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "outside pointer close backend={} message={:#x} point=({}, {}) observed_root={:#x} pass_through=true",
                 observation.backend,
                 observation.message,
@@ -771,7 +771,7 @@ pub fn open_preview<R: Runtime>(
         .record_id
         .clone();
     let main_visible = is_visible(app);
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "preview open request record_id={record_id} main_visible={main_visible} selected_before={selected_before:?}"
     ));
     let result = (|| {
@@ -782,10 +782,10 @@ pub fn open_preview<R: Runtime>(
             .get_webview_window(CLIPBOARD_SURFACE_LABEL)
             .ok_or(ClipboardSurfaceWindowError::MainSurfaceNotVisible)?;
         let preview = prepared_preview(app)?;
-        debug_qa::trace("preview get result=prepared_existing builder_invoked=false");
+        debug_qa::trace!("preview get result=prepared_existing builder_invoked=false");
         let visible_before = native_is_visible(&preview)?;
         let already_open = visible_before && selected_before.as_deref() == Some(record_id.as_str());
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "preview open state record_id={record_id} visible_before={visible_before} already_open={already_open}"
         ));
         if already_open {
@@ -793,14 +793,14 @@ pub fn open_preview<R: Runtime>(
         }
         let placement = configure_show_verify_preview(
             || {
-                debug_qa::trace(format!(
+                debug_qa::trace!(format!(
                     "preview native configure stage=open record_id={record_id} requested"
                 ));
                 configure_native_popup(&preview)
             },
             || preview_placement_for_main(&main),
             |placement| {
-                debug_qa::trace(format!(
+                debug_qa::trace!(format!(
                     "preview native show record_id={record_id} placement={placement:?} requested"
                 ));
                 surface_window_animation::prepare_show(&preview);
@@ -808,7 +808,7 @@ pub fn open_preview<R: Runtime>(
             },
             || native_is_visible(&preview),
         )?;
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "preview native show record_id={record_id} placement={placement:?} visible_after=true"
         ));
         refresh_native_shape_or_log(&preview);
@@ -838,8 +838,8 @@ pub fn open_preview<R: Runtime>(
         Ok(())
     })();
     match &result {
-        Ok(()) => debug_qa::trace(format!("preview open success record_id={record_id}")),
-        Err(error) => debug_qa::trace(format!(
+        Ok(()) => debug_qa::trace!(format!("preview open success record_id={record_id}")),
+        Err(error) => debug_qa::trace!(format!(
             "preview open failure record_id={record_id} error={error}"
         )),
     }
@@ -860,7 +860,7 @@ pub fn close_preview<R: Runtime>(
         .map_err(|_| ClipboardSurfaceWindowError::PreviewStatePoisoned)?
         .record_id
         .clone();
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "preview close request reason={} visible_before={visible_before} selected_before={selected_before:?}",
         reason.as_str()
     ));
@@ -881,7 +881,7 @@ pub fn close_preview<R: Runtime>(
     let had_selection = match lifecycle {
         Ok(had_selection) => had_selection,
         Err(error) => {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "preview close failure reason={} error={error}",
                 reason.as_str()
             ));
@@ -898,7 +898,7 @@ pub fn close_preview<R: Runtime>(
             },
         );
     }
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "preview close success reason={} had_selection={had_selection}",
         reason.as_str()
     ));
@@ -930,7 +930,7 @@ pub fn preview_state<R: Runtime>(
         record_id: selection.record_id.clone(),
         visible,
     };
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "preview state query record_id={:?} visible={}",
         state.record_id, state.visible
     ));
@@ -1044,7 +1044,7 @@ fn hide_native_verified<R: Runtime>(
     window: &WebviewWindow<R>,
 ) -> Result<(), ClipboardSurfaceWindowError> {
     let animated = surface_window_animation::fade_hide_native(window);
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "clipboard surface fade-hide result={} duration_ms={}",
         if animated {
             "transition_started"
@@ -1098,7 +1098,7 @@ fn placement_for_current_anchor<R: Runtime>(
         .ok_or(ClipboardSurfaceWindowError::InvalidDimensions)?;
     let placement =
         surface_placement(anchor, monitor).ok_or(ClipboardSurfaceWindowError::InvalidDimensions)?;
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface placement source={} anchor={anchor:?} work_area={:?} monitor_bounds={:?} scale_factor={} placement={placement:?}",
         source.as_str(),
         monitor.work_area, monitor.bounds, monitor.scale_factor
@@ -1168,7 +1168,7 @@ fn caret_anchor_for_target(target_root: usize) -> Option<PixelPoint> {
     {
         return None;
     }
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface caret anchor target_root={:#x} foreground_thread={} caret_hwnd={:#x} client_rect=({},{},{},{}) logical_screen=({},{}) physical_screen=({},{}) dpi_conversion={}",
         target_root as usize,
         foreground_thread,
@@ -1258,7 +1258,7 @@ fn preview_placement_for_main<R: Runtime>(
         .ok_or(ClipboardSurfaceWindowError::InvalidDimensions)?;
     let placement = preview_surface_placement(anchor, monitor)
         .ok_or(ClipboardSurfaceWindowError::InvalidDimensions)?;
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "preview placement anchor={anchor:?} work_area={:?} monitor_bounds={:?} scale_factor={} placement={placement:?}",
         monitor.work_area, monitor.bounds, monitor.scale_factor
     ));
@@ -1362,7 +1362,7 @@ fn configure_no_activate_children(
             &class_name,
         );
         if policy == NoActivateChildPolicy::SkipDifferentIdentity {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "child noactivate skip hwnd={:#x} class={class_name} pid={process_id} thread={thread_id} reason=different_process_or_ui_thread",
                 window as usize
             ));
@@ -1378,30 +1378,30 @@ fn configure_no_activate_children(
             )
         } != 0;
         if !subclassed {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "child noactivate degraded hwnd={:#x} class={class_name} policy={policy:?} reason=subclass_failed",
                 window as usize
             ));
         } else {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "child noactivate subclass hwnd={:#x} class={class_name} policy={policy:?} result=installed",
                 window as usize
             ));
         }
 
         let NoActivateChildPolicy::SubclassAndStyle(kind) = policy else {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "child noactivate style hwnd={:#x} class={class_name} policy={policy:?} result=skipped_safe_class_filter",
                 window as usize
             ));
             continue;
         };
         match update_child_no_activate_style(&mut SystemWindowLongApi, window as usize) {
-            ChildStyleUpdate::Applied(update) => debug_qa::trace(format!(
+            ChildStyleUpdate::Applied(update) => debug_qa::trace!(format!(
                 "child noactivate style hwnd={:#x} class={class_name} kind={kind:?} result={update:?}",
                 window as usize
             )),
-            ChildStyleUpdate::Degraded(error) => debug_qa::trace(format!(
+            ChildStyleUpdate::Degraded(error) => debug_qa::trace!(format!(
                 "child noactivate degraded hwnd={:#x} class={class_name} kind={kind:?} reason=style_failed error={error}",
                 window as usize
             )),
@@ -1419,7 +1419,7 @@ fn configure_no_activate_children(
             )
         } == 0
         {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "child noactivate degraded hwnd={:#x} class={class_name} kind={kind:?} reason=frame_refresh_failed",
                 window as usize
             ));
@@ -1634,7 +1634,7 @@ fn apply_native_rounded_region<R: Runtime>(
         unsafe { PtInRegion(region, 0, height - 1) } != 0,
         unsafe { PtInRegion(region, width - 1, height - 1) } != 0,
     ];
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface native region window_rect=({},{},{},{}) client_rect=({},{},{},{}) tauri_outer={tauri_outer:?} region_request=(0,0,{region_right},{region_bottom}) region_box_before=({},{},{},{}) edge_contains={edge_contains:?} corner_contains={corner_contains:?}",
         window_rect.left,
         window_rect.top,
@@ -1671,7 +1671,7 @@ fn apply_native_rounded_region<R: Runtime>(
     }
     let mut applied_box = empty_windows_rect();
     let applied_type = unsafe { GetWindowRgnBox(hwnd.0, &mut applied_box) };
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface native region applied_box=({},{},{},{}) applied_type={applied_type}",
         applied_box.left, applied_box.top, applied_box.right, applied_box.bottom
     ));

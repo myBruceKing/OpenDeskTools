@@ -1,0 +1,191 @@
+.searchField,
+.fieldWrap {
+  min-width: 0;
+  height: var(--control-height-compact);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 clamp(9px, 0.9115vw, 10px);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-button);
+  background: var(--surface-card-subtle);
+  color: var(--text-primary);
+}
+
+.searchField input,
+.fieldWrap input,
+.fieldWrap select {
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+.searchField input::placeholder {
+  color: var(--text-muted);
+}
+
+.searchField kbd {
+  height: clamp(22px, 2.2786vw, 25px);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-card);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-secondary);
+  line-height: var(--line-height-secondary);
+  white-space: nowrap;
+}
+
+.fieldIcon {
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 18px;
+}
+
+.fieldUnit {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+.rangeNumberField {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) 82px;
+  gap: 10px;
+  align-items: center;
+}
+
+.rangeInput {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent-primary);
+}
+
+.rangeInput:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.rangeValueField input {
+  text-align: right;
+}
+
+.textArea {
+  min-width: 0;
+  width: 100%;
+  min-height: 0;
+  padding: 8px 10px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-button);
+  outline: 0;
+  background: var(--surface-card-subtle);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  resize: none;
+}
+
+.searchField:has(input:disabled),
+.fieldWrap:has(input:disabled),
+.fieldWrap:has(select:disabled),
+.textArea:disabled {
+  color: var(--text-disabled);
+  background: var(--surface-disabled);
+}
+
+.searchField:has(input:disabled) input,
+.fieldWrap:has(input:disabled) input,
+.fieldWrap:has(select:disabled) select,
+.textArea:disabled {
+  color: var(--text-disabled);
+  opacity: 1;
+}
+
+.textArea:disabled {
+  opacity: 1;
+}
+
+.shortcutCapture {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  cursor: default;
+}
+
+.shortcutCapture:focus-visible {
+  outline: 0;
+}
+
+.shortcutCaptureTokens {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shortcutCaptureToken {
+  position: relative;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 18px 0 9px;
+  border: var(--border-width) solid var(--border-accent);
+  border-radius: var(--radius-button);
+  background: var(--surface-shortcut);
+  color: var(--accent-link);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-body);
+}
+
+.shortcutCaptureRemove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: var(--border-width) solid var(--border-accent);
+  border-radius: var(--radius-round);
+  background: var(--surface-card);
+  color: var(--accent-link);
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.shortcutCaptureRemove:hover {
+  background: var(--surface-shortcut);
+}
+
+.shortcutCapturePendingToken {
+  border-style: dashed;
+  opacity: 0.72;
+}
+
+.shortcutCapturePlaceholder {
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-body);
+}

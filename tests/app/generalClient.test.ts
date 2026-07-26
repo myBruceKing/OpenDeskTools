@@ -15,6 +15,7 @@ import {
 const backendSnapshot = {
   version: "0.1.0",
   autostartEnabled: true,
+  elevatedAutostartEnabled: false,
   startMinimized: false,
   closeToTray: true,
   trayIconVisible: true,
@@ -28,6 +29,7 @@ describe("generalModel", () => {
     expect(createGeneralViewModel(backendSnapshot)).toEqual({
       version: "0.1.0",
       autostartEnabled: true,
+      elevatedAutostartEnabled: false,
       startMinimized: false,
       closeToTray: true,
       trayIconVisible: true,
@@ -38,6 +40,7 @@ describe("generalModel", () => {
     expect(createGeneralViewModel(null)).toEqual({
       version: null,
       autostartEnabled: null,
+      elevatedAutostartEnabled: null,
       startMinimized: null,
       closeToTray: null,
       trayIconVisible: null,
@@ -75,6 +78,11 @@ describe("generalClient", () => {
 
     await generalClient.setToggle("autostart", false);
     expect(mocks.invoke).toHaveBeenLastCalledWith("set_autostart_enabled", { enabled: false });
+
+    await generalClient.setToggle("elevatedAutostart", true);
+    expect(mocks.invoke).toHaveBeenLastCalledWith("set_elevated_autostart_enabled", {
+      enabled: true
+    });
 
     await generalClient.setToggle("startMinimized", true);
     expect(mocks.invoke).toHaveBeenLastCalledWith("set_start_minimized", { enabled: true });

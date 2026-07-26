@@ -148,7 +148,7 @@ pub fn update_hotkey_binding<R: Runtime>(
 ) -> Result<UpdateHotkeyBindingResponse, HotkeyCommandError> {
     let event_app = app.clone();
     let registrar = TauriHotkeyRegistrar::new(&app, runtime.keyboard_hook(), move |event| {
-        crate::queue_forced_hotkey_event(&event_app, event)
+        crate::hotkey_action_controller::queue_forced(&event_app, event)
     });
     let action_id = HotkeyActionId::parse(&patch.action_id).map_err(map_validation_error)?;
     let updated = runtime
@@ -180,7 +180,7 @@ pub fn update_hotkey_enabled<R: Runtime>(
 ) -> Result<UpdateHotkeyBindingResponse, HotkeyCommandError> {
     let event_app = app.clone();
     let registrar = TauriHotkeyRegistrar::new(&app, runtime.keyboard_hook(), move |event| {
-        crate::queue_forced_hotkey_event(&event_app, event)
+        crate::hotkey_action_controller::queue_forced(&event_app, event)
     });
     let action_id = HotkeyActionId::parse(&patch.action_id).map_err(map_validation_error)?;
     let updated = runtime

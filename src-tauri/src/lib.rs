@@ -1,9 +1,11 @@
 mod commands;
+mod hotkey_action_controller;
 mod infrastructure;
 
 use std::sync::Arc;
 
 use infrastructure::application::ApplicationRuntime;
+#[cfg(debug_assertions)]
 use infrastructure::clipboard_surface_controller;
 use infrastructure::clipboard_surface_foreground;
 use infrastructure::clipboard_surface_window::{
@@ -13,8 +15,7 @@ use infrastructure::clipboard_surface_window::{
 use infrastructure::debug_qa;
 #[cfg(debug_assertions)]
 use infrastructure::debug_qa::DebugQaOptions;
-use infrastructure::hotkey::{HotkeyActionId, OrdinaryHotkeyTransition, TauriHotkeyRegistrar};
-use infrastructure::keyboard_hook::{RuntimeHotkeyEvent, RuntimeHotkeyPhase};
+use infrastructure::hotkey::{HotkeyActionId, TauriHotkeyRegistrar};
 use infrastructure::qr_toast_surface_window;
 use infrastructure::surface_pointer_monitor::{self, PointerMonitorOwner};
 use infrastructure::tool_menu_surface_window::{self, TOOL_MENU_SURFACE_LABEL};
@@ -27,31 +28,14 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent, ShortcutState};
 
-const HOTKEY_ACTION_EVENT: &str = "hotkey://action";
 const CLIPBOARD_HISTORY_CHANGED_EVENT: &str = "clipboard://history-changed";
 const USAGE_STATISTICS_CHANGED_EVENT: &str = "usage://statistics-changed";
 
 #[cfg(debug_assertions)]
 pub fn write_debug_screenshot_probe_report() -> Result<std::path::PathBuf, String> {
-    let report =
-        infrastructure::screenshot::probe::run_gdi_probe().map_err(|error| error.to_string())?;
+    let report = infrastructure::screenshot::probe::run_capture_probe()
+        .map_err(|error| error.to_string())?;
     infrastructure::screenshot::probe::write_report(&report).map_err(|error| error.to_string())
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum HotkeyActionPhase {
-    Pressed,
-    Released,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HotkeyActionEvent {
-    action_id: HotkeyActionId,
-    phase: HotkeyActionPhase,
-    timestamp_ms: u128,
-    registration_revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +69,20 @@ pub(crate) fn clipboard_history_event_sink<R: Runtime>(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let startup_arguments = std::env::args_os().collect::<Vec<_>>();
+    if let Some(exit_code) =
+        infrastructure::elevated_autostart::configuration_exit_code(startup_arguments.clone())
+    {
+        std::process::exit(exit_code);
+    }
+    match infrastructure::elevated_autostart::redirect_normal_launch(startup_arguments.clone()) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("failed to redirect launch through the elevated task: {error}");
+        }
+    }
+    let elevated_wake_requested = infrastructure::elevated_autostart::consume_wake_request();
     if let Err(error) = infrastructure::elevation::wait_for_restart_parent() {
         eprintln!("administrator restart handshake failed: {error}");
         return;
@@ -95,7 +93,7 @@ pub fn run() {
     // prevents a second process from reaching tray/listener/hook setup.
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "single instance activation args_count={} action=wake_main",
             args.len()
         ));
@@ -110,7 +108,7 @@ pub fn run() {
                 .with_handler(handle_global_shortcut)
                 .build(),
         )
-        .setup(|app| {
+        .setup(move |app| {
             let qa_options = debug_qa::parse(std::env::args_os())?;
             let runtime = ApplicationRuntime::initialize(app.handle())?;
             app.manage(runtime);
@@ -196,19 +194,25 @@ pub fn run() {
             let registrar = TauriHotkeyRegistrar::new(
                 app.handle(),
                 runtime_state.keyboard_hook(),
-                move |event| queue_forced_hotkey_event(&forced_app, event),
+                move |event| hotkey_action_controller::queue_forced(&forced_app, event),
             );
             let hotkey_snapshot = runtime_state.hotkeys().reconcile(&registrar)?;
             runtime_state.sync_system_hotkey_disable(&hotkey_snapshot);
-            // Keep the registered login command pointed at the current
-            // executable (self-heals across moves/updates) without ever
-            // re-enabling autostart from a login launch.
-            if let Err(error) = runtime_state.autostart().sync_if_enabled() {
+            // Elevated autostart owns the login launch when present. Remove a
+            // stale ordinary Run entry so the two mechanisms cannot race into
+            // separate normal/elevated instances. Otherwise keep the ordinary
+            // command aligned with the current executable path.
+            if runtime_state.elevated_autostart().is_enabled() {
+                if let Err(error) = runtime_state.autostart().set(false) {
+                    eprintln!("failed to remove duplicate ordinary autostart: {error}");
+                }
+            } else if let Err(error) = runtime_state.autostart().sync_if_enabled() {
                 eprintln!("failed to reconcile the autostart command: {error}");
             }
             runtime_state.mark_startup_ready();
             let autostart_launch =
-                infrastructure::autostart::is_autostart_launch(std::env::args_os());
+                infrastructure::autostart::is_autostart_launch(std::env::args_os())
+                    && !elevated_wake_requested;
             let start_minimized = runtime_state.start_minimized();
             if let Some(window) = app.get_webview_window("main") {
                 configure_main_window(&window)?;
@@ -290,6 +294,7 @@ pub fn run() {
             commands::quick_launch::close_tool_menu_surface,
             commands::general::get_general_settings,
             commands::general::set_autostart_enabled,
+            commands::general::set_elevated_autostart_enabled,
             commands::general::set_start_minimized,
             commands::general::set_close_to_tray,
             commands::general::set_tray_icon_visible,
@@ -371,32 +376,6 @@ fn handle_tool_menu_surface_window_event<R: Runtime>(
         tauri::WindowEvent::Destroyed => tool_menu_surface_window::forget_destroyed(),
         _ => {}
     }
-}
-
-fn show_tool_menu_surface<R: Runtime>(
-    app: &AppHandle<R>,
-    runtime: &ApplicationRuntime,
-) -> Result<(), tool_menu_surface_window::ToolMenuSurfaceError> {
-    let snapshot = runtime.quick_launch().snapshot().map_err(|error| {
-        tool_menu_surface_window::ToolMenuSurfaceError::QuickLaunch(error.to_string())
-    })?;
-    tool_menu_surface_window::show(app, &snapshot)
-}
-
-fn release_tool_menu_surface<R: Runtime>(
-    app: &AppHandle<R>,
-    runtime: &ApplicationRuntime,
-) -> Result<(), tool_menu_surface_window::ToolMenuSurfaceError> {
-    let preferences = runtime
-        .quick_launch()
-        .tool_menu_preferences()
-        .map_err(|error| {
-            tool_menu_surface_window::ToolMenuSurfaceError::QuickLaunch(error.to_string())
-        })?;
-    if !preferences.keep_open_on_key_release {
-        tool_menu_surface_window::request_hide(app)?;
-    }
-    Ok(())
 }
 
 fn should_stop_capture_on_page_load(
@@ -533,10 +512,10 @@ fn handle_global_shortcut<R: Runtime>(
     };
     let binding = shortcut.to_string();
     let phase = match event.state {
-        ShortcutState::Pressed => HotkeyActionPhase::Pressed,
-        ShortcutState::Released => HotkeyActionPhase::Released,
+        ShortcutState::Pressed => hotkey_action_controller::HotkeyActionPhase::Pressed,
+        ShortcutState::Released => hotkey_action_controller::HotkeyActionPhase::Released,
     };
-    dispatch_ordinary_hotkey(
+    hotkey_action_controller::dispatch_standard(
         app,
         &runtime,
         action_id,
@@ -544,269 +523,6 @@ fn handle_global_shortcut<R: Runtime>(
         binding,
         phase,
     );
-}
-
-fn dispatch_ordinary_hotkey<R: Runtime>(
-    app: &AppHandle<R>,
-    runtime: &ApplicationRuntime,
-    action_id: HotkeyActionId,
-    registration_revision: u64,
-    binding: String,
-    phase: HotkeyActionPhase,
-) {
-    let transition = match phase {
-        HotkeyActionPhase::Pressed => OrdinaryHotkeyTransition::Pressed,
-        HotkeyActionPhase::Released => OrdinaryHotkeyTransition::Released,
-    };
-    if !runtime
-        .ordinary_hotkey_latch()
-        .consume(action_id, &binding, registration_revision, transition)
-        .unwrap_or(false)
-    {
-        return;
-    }
-    debug_qa::trace(format!(
-        "hotkey dispatch backend=standard action={} phase={phase:?} binding={binding}",
-        action_id.as_str(),
-    ));
-    if action_id == HotkeyActionId::ClipboardOpenPanel
-        && matches!(phase, HotkeyActionPhase::Pressed)
-    {
-        match clipboard_surface_controller::toggle_from_foreground(app, runtime) {
-            Ok(()) => record_usage_success(app, runtime, UsageAction::ClipboardPanel),
-            Err(error) => {
-                eprintln!("failed to process clipboard surface hotkey request: {error}");
-            }
-        }
-    }
-    if action_id == HotkeyActionId::ClipboardQrConvert
-        && matches!(phase, HotkeyActionPhase::Pressed)
-    {
-        trigger_qr_conversion(app, runtime);
-    }
-    if action_id == HotkeyActionId::ScreenshotCapture && matches!(phase, HotkeyActionPhase::Pressed)
-    {
-        trigger_screenshot_capture(app);
-    }
-    if action_id == HotkeyActionId::ClipboardPinImage && matches!(phase, HotkeyActionPhase::Pressed)
-    {
-        trigger_pin_latest_image(app);
-    }
-    if action_id == HotkeyActionId::LauncherOpen {
-        let result = match phase {
-            HotkeyActionPhase::Pressed => show_tool_menu_surface(app, runtime),
-            HotkeyActionPhase::Released => release_tool_menu_surface(app, runtime),
-        };
-        match result {
-            Ok(()) if matches!(phase, HotkeyActionPhase::Pressed) => {
-                record_usage_success(app, runtime, UsageAction::ToolMenu);
-            }
-            Ok(()) => {}
-            Err(error) => {
-                eprintln!("failed to process tool menu hotkey: {error}");
-            }
-        }
-    }
-    if !should_broadcast_hotkey_action(action_id) {
-        return;
-    }
-    let timestamp_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
-    let _ = app.emit(
-        HOTKEY_ACTION_EVENT,
-        HotkeyActionEvent {
-            action_id,
-            phase,
-            timestamp_ms,
-            registration_revision,
-        },
-    );
-}
-
-pub(crate) fn handle_forced_hotkey_event<R: Runtime>(
-    app: &AppHandle<R>,
-    event: RuntimeHotkeyEvent,
-) {
-    let Some(runtime) = app.try_state::<ApplicationRuntime>() else {
-        return;
-    };
-    let Some((action_id, registration_revision)) = runtime
-        .hotkeys()
-        .registered_action_for_forced_generation(event.generation)
-    else {
-        return;
-    };
-    let phase = match event.phase {
-        RuntimeHotkeyPhase::Pressed => HotkeyActionPhase::Pressed,
-        RuntimeHotkeyPhase::Released => HotkeyActionPhase::Released,
-    };
-    debug_qa::trace(format!(
-        "hotkey dispatch backend=forced action={} phase={phase:?} foreground_hwnd={:?} foreground_pid={:?}",
-        action_id.as_str(),
-        event.foreground_window,
-        event.foreground_process_id
-    ));
-    if action_id == HotkeyActionId::ClipboardOpenPanel
-        && matches!(phase, HotkeyActionPhase::Pressed)
-    {
-        if let Err(error) = clipboard_surface_controller::toggle_from_forced_candidate(
-            app,
-            &runtime,
-            event.foreground_window,
-            event.foreground_process_id,
-        ) {
-            eprintln!("failed to process forced clipboard surface toggle: {error}");
-            disable_forced_hotkey_after_route_failure(app, event.generation, error.user_message());
-            return;
-        }
-        record_usage_success(app, &runtime, UsageAction::ClipboardPanel);
-    }
-    if action_id == HotkeyActionId::ClipboardQrConvert
-        && matches!(phase, HotkeyActionPhase::Pressed)
-    {
-        trigger_qr_conversion(app, &runtime);
-    }
-    if action_id == HotkeyActionId::ScreenshotCapture && matches!(phase, HotkeyActionPhase::Pressed)
-    {
-        trigger_screenshot_capture(app);
-    }
-    if action_id == HotkeyActionId::ClipboardPinImage && matches!(phase, HotkeyActionPhase::Pressed)
-    {
-        trigger_pin_latest_image(app);
-    }
-    if action_id == HotkeyActionId::LauncherOpen {
-        let result = match phase {
-            HotkeyActionPhase::Pressed => show_tool_menu_surface(app, &runtime),
-            HotkeyActionPhase::Released => release_tool_menu_surface(app, &runtime),
-        };
-        if let Err(error) = result {
-            disable_forced_hotkey_after_route_failure(
-                app,
-                event.generation,
-                format!("工具盘窗口操作失败：{error}"),
-            );
-            return;
-        }
-        if matches!(phase, HotkeyActionPhase::Pressed) {
-            record_usage_success(app, &runtime, UsageAction::ToolMenu);
-        }
-    }
-    if !should_broadcast_hotkey_action(action_id) {
-        return;
-    }
-    let timestamp_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
-    let _ = app.emit(
-        HOTKEY_ACTION_EVENT,
-        HotkeyActionEvent {
-            action_id,
-            phase,
-            timestamp_ms,
-            registration_revision,
-        },
-    );
-}
-
-fn trigger_qr_conversion<R: Runtime>(app: &AppHandle<R>, _runtime: &ApplicationRuntime) {
-    let worker_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(runtime) = worker_app.try_state::<ApplicationRuntime>() else {
-            return;
-        };
-        let payload = match commands::qr::convert_latest_and_notify(&worker_app, &runtime) {
-            Ok(result) => serde_json::json!({
-                "success": true,
-                "kind": result.kind,
-                "systemClipboardSynced": result.system_clipboard_synced,
-                "message": result.message,
-            }),
-            Err(error) => serde_json::json!({
-                "success": false,
-                "kind": null,
-                "systemClipboardSynced": false,
-                "message": error.message,
-                "code": error.code,
-            }),
-        };
-        let toast_app = worker_app.clone();
-        if let Err(error) = worker_app.run_on_main_thread(move || {
-            if let Err(error) = qr_toast_surface_window::show(&toast_app, &payload) {
-                eprintln!("failed to show QR conversion feedback: {error}");
-            }
-        }) {
-            eprintln!("failed to dispatch QR conversion feedback: {error}");
-        }
-    });
-}
-
-fn trigger_screenshot_capture<R: Runtime>(app: &AppHandle<R>) {
-    let worker_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(runtime) = worker_app.try_state::<ApplicationRuntime>() else {
-            return;
-        };
-        match commands::capture::capture_and_notify(&worker_app, &runtime) {
-            Ok(result) if result.status == "cancelled" => {}
-            Ok(result) => {
-                eprintln!(
-                    "screenshot copied width={} height={}",
-                    result.width.unwrap_or_default(),
-                    result.height.unwrap_or_default()
-                );
-            }
-            Err(error) => {
-                show_capture_error(&worker_app, error.code, error.message);
-                eprintln!(
-                    "screenshot capture failed code={} message={}",
-                    error.code, error.message
-                );
-            }
-        }
-    });
-}
-
-fn trigger_pin_latest_image<R: Runtime>(app: &AppHandle<R>) {
-    let worker_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(runtime) = worker_app.try_state::<ApplicationRuntime>() else {
-            return;
-        };
-        match commands::capture::pin_latest_and_record(&worker_app, &runtime) {
-            Ok(outcome) => {
-                eprintln!(
-                    "image pinned pin_id={} width={} height={}",
-                    outcome.pin_id, outcome.width, outcome.height
-                );
-            }
-            Err(error) => {
-                show_capture_error(&worker_app, error.code, error.message);
-                eprintln!(
-                    "pin image failed code={} message={}",
-                    error.code, error.message
-                );
-            }
-        }
-    });
-}
-
-fn show_capture_error<R: Runtime>(app: &AppHandle<R>, code: &'static str, message: &'static str) {
-    let payload = serde_json::json!({
-        "success": false,
-        "kind": null,
-        "systemClipboardSynced": false,
-        "message": message,
-        "code": code,
-    });
-    let toast_app = app.clone();
-    if let Err(dispatch_error) = app.run_on_main_thread(move || {
-        if let Err(show_error) = qr_toast_surface_window::show(&toast_app, &payload) {
-            eprintln!("failed to show pin image feedback: {show_error}");
-        }
-    }) {
-        eprintln!("failed to dispatch pin image feedback: {dispatch_error}");
-    }
 }
 
 pub(crate) fn record_usage_success<R: Runtime>(
@@ -827,68 +543,10 @@ pub(crate) fn record_usage_success<R: Runtime>(
     }
 }
 
-pub(crate) fn queue_forced_hotkey_event<R: Runtime>(app: &AppHandle<R>, event: RuntimeHotkeyEvent) {
-    let main_thread_app = app.clone();
-    let generation = event.generation;
-    debug_qa::trace(format!(
-        "forced hotkey dispatch queued generation={generation} phase={:?}",
-        event.phase
-    ));
-    if let Err(error) = app.run_on_main_thread(move || {
-        debug_qa::trace(format!(
-            "forced hotkey dispatch main_thread generation={} phase={:?}",
-            event.generation, event.phase
-        ));
-        handle_forced_hotkey_event(&main_thread_app, event);
-    }) {
-        disable_forced_hotkey_after_route_failure(
-            app,
-            generation,
-            format!("快捷键事件无法切换到窗口线程：{error}"),
-        );
-    }
-}
-
-fn disable_forced_hotkey_after_route_failure<R: Runtime>(
-    app: &AppHandle<R>,
-    generation: u64,
-    reason: String,
-) {
-    let Some(runtime) = app.try_state::<ApplicationRuntime>() else {
-        return;
-    };
-    let unregister_result = runtime.keyboard_hook().unregister_win_v(generation);
-    let restored = unregister_result.as_ref().is_ok_and(|removed| *removed);
-    let detail = if unregister_result.is_ok() {
-        format!("{reason}。强制覆盖已停止，系统快捷键已恢复；请重试或重启应用。")
-    } else {
-        format!("{reason}。强制覆盖后端未能正常停止，请立即退出并重启应用。")
-    };
-    match runtime
-        .hotkeys()
-        .mark_forced_generation_degraded(generation, detail.clone())
-    {
-        Ok(true) => debug_qa::trace(format!(
-            "forced hotkey degraded generation={generation} input_restored={restored} detail={detail}"
-        )),
-        Ok(false) => debug_qa::trace(format!(
-            "forced hotkey degrade ignored stale_generation={generation} input_restored={restored}"
-        )),
-        Err(error) => eprintln!(
-            "failed to mark forced hotkey generation {generation} degraded after route failure: {error}"
-        ),
-    }
-    if let Err(error) = unregister_result {
-        eprintln!(
-            "failed to unregister forced hotkey generation {generation} after route failure: {error}"
-        );
-    }
-}
-
 #[cfg(debug_assertions)]
 fn schedule_debug_qa<R: Runtime>(app: &AppHandle<R>, options: DebugQaOptions) {
     if let Some(delay) = options.open_clipboard_surface_after {
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "scheduled deterministic open delay_ms={} trace_path={}",
             delay.as_millis(),
             debug_qa::trace_path().display()
@@ -900,22 +558,22 @@ fn schedule_debug_qa<R: Runtime>(app: &AppHandle<R>, options: DebugQaOptions) {
                 std::thread::sleep(delay);
                 let request_app = qa_app.clone();
                 if let Err(error) = qa_app.run_on_main_thread(move || {
-                    debug_qa::trace("deterministic open timer fired");
+                    debug_qa::trace!("deterministic open timer fired");
                     let Some(runtime) = request_app.try_state::<ApplicationRuntime>() else {
-                        debug_qa::trace("deterministic open failed: runtime state unavailable");
+                        debug_qa::trace!("deterministic open failed: runtime state unavailable");
                         return;
                     };
                     if let Err(error) =
                         clipboard_surface_controller::open_from_foreground(&request_app, &runtime)
                     {
-                        debug_qa::trace(format!("deterministic open failed: {error}"));
+                        debug_qa::trace!(format!("deterministic open failed: {error}"));
                     }
                 }) {
-                    debug_qa::trace(format!("deterministic open dispatch failed: {error}"));
+                    debug_qa::trace!(format!("deterministic open dispatch failed: {error}"));
                 }
             });
         if let Err(error) = spawn_result {
-            debug_qa::trace(format!("deterministic open timer thread failed: {error}"));
+            debug_qa::trace!(format!("deterministic open timer thread failed: {error}"));
         }
     }
 
@@ -930,15 +588,6 @@ fn schedule_debug_qa<R: Runtime>(app: &AppHandle<R>, options: DebugQaOptions) {
             eprintln!("[screenshot-probe] failed to start: {error}");
         }
     }
-}
-
-fn should_broadcast_hotkey_action(action_id: HotkeyActionId) -> bool {
-    !matches!(
-        action_id,
-        HotkeyActionId::ClipboardOpenPanel
-            | HotkeyActionId::ScreenshotCapture
-            | HotkeyActionId::ClipboardPinImage
-    )
 }
 
 #[cfg(test)]
@@ -988,25 +637,6 @@ mod tests {
             .unwrap(),
             serde_json::json!({ "change": "surface_opened" })
         );
-    }
-
-    #[test]
-    fn clipboard_panel_hotkey_is_consumed_by_native_surface_without_main_navigation_event() {
-        assert!(!should_broadcast_hotkey_action(
-            HotkeyActionId::ClipboardOpenPanel
-        ));
-        assert!(!should_broadcast_hotkey_action(
-            HotkeyActionId::ScreenshotCapture
-        ));
-        assert!(!should_broadcast_hotkey_action(
-            HotkeyActionId::ClipboardPinImage
-        ));
-        for action in [
-            HotkeyActionId::ClipboardQrConvert,
-            HotkeyActionId::LauncherOpen,
-        ] {
-            assert!(should_broadcast_hotkey_action(action));
-        }
     }
 
     #[test]

@@ -85,7 +85,7 @@ impl ClipboardInputCoordinator {
     {
         let content = self.clipboard.content_for_write(id)?;
         let requirement = input_target_requirement(&content);
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "clipboard input begin id={id} content_kind={} target_requirement={}",
             content_kind(&content),
             requirement.as_str()
@@ -97,7 +97,7 @@ impl ClipboardInputCoordinator {
                     .replace_current(&content, &mut suppress)?
                     .ok_or(ClipboardInputError::ClipboardChanged)?;
                 let input_result = send_ctrl_v(&mut SystemInputApi);
-                debug_qa::trace(format!(
+                debug_qa::trace!(format!(
                     "clipboard input keys_injected id={id} result={}",
                     if input_result.is_ok() { "ok" } else { "error" }
                 ));

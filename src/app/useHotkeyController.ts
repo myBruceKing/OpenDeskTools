@@ -1,22 +1,12 @@
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useMemo } from "react";
 import { hotkeyClient } from "./hotkeyClient";
 import { HotkeyController } from "./hotkeyController";
+import { useControllerStore } from "./useControllerStore";
 
 export function useHotkeyController() {
   const controller = useMemo(() => new HotkeyController(hotkeyClient), []);
-  const state = useSyncExternalStore(
-    controller.subscribe,
-    controller.getSnapshot,
-    controller.getSnapshot
-  );
-
-  useEffect(() => {
-    controller.start();
-    return () => controller.stop();
-  }, [controller]);
-
-  return {
-    state,
+  const state = useControllerStore(controller);
+  const actions = useMemo(() => ({
     openEditor: controller.openEditor.bind(controller),
     closeEditor: controller.closeEditor.bind(controller),
     setBinding: controller.setBinding.bind(controller),
@@ -25,5 +15,7 @@ export function useHotkeyController() {
     setEnabled: controller.setEnabled.bind(controller),
     save: controller.save.bind(controller),
     dismissSystemHotkeyNotice: controller.dismissSystemHotkeyNotice.bind(controller)
-  };
+  }), [controller]);
+
+  return { state, ...actions };
 }

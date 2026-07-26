@@ -1,24 +1,16 @@
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useMemo } from "react";
 import { themeClient } from "./themeClient";
 import { ThemeController } from "./themeController";
+import { useControllerStore } from "./useControllerStore";
 
 export function useThemeController() {
   const controller = useMemo(() => new ThemeController(themeClient), []);
-  const state = useSyncExternalStore(
-    controller.subscribe,
-    controller.getSnapshot,
-    controller.getSnapshot
-  );
-
-  useEffect(() => {
-    controller.start();
-    return () => controller.stop();
-  }, [controller]);
-
-  return {
-    state,
+  const state = useControllerStore(controller);
+  const actions = useMemo(() => ({
     update: controller.update.bind(controller),
     selectBackground: controller.selectBackground.bind(controller),
     removeBackground: controller.removeBackground.bind(controller)
-  };
+  }), [controller]);
+
+  return { state, ...actions };
 }

@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
-import styles from "./primitives.module.css";
+import styles from "./Button.module.css";
 
 type ButtonVariant = "outline" | "primary" | "text";
 type ButtonSize = "default" | "compact" | "inline" | "footer";

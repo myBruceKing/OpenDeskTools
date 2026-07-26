@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import styles from "./primitives.module.css";
+import styles from "./InlineNotice.module.css";
 
 export type InlineNoticeVariant = "info" | "warning" | "error" | "pending" | "success";
 

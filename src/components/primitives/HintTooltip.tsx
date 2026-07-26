@@ -8,7 +8,7 @@ import {
   useState,
   type CSSProperties
 } from "react";
-import styles from "./primitives.module.css";
+import styles from "./HintTooltip.module.css";
 
 type HintTooltipProps = {
   content: string;

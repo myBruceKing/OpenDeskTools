@@ -12,8 +12,8 @@ import {
 } from "../../src/app/clipboardModel";
 import { ClipboardPage } from "../../src/pages/clipboard/ClipboardPage";
 
-const primitivesCss = readFileSync(
-  "src/components/primitives/primitives.module.css",
+const hintTooltipCss = readFileSync(
+  "src/components/primitives/HintTooltip.module.css",
   "utf8"
 );
 const clipboardCss = readFileSync("src/pages/clipboard/ClipboardPage.module.css", "utf8");
@@ -673,10 +673,10 @@ describe("ClipboardPage", () => {
     expect(top).toBeGreaterThanOrEqual(8);
     expect(top + tooltipContainer.offsetHeight).toBeLessThanOrEqual(window.innerHeight - 8);
     expect(tooltipContainer.style.getPropertyValue("--tooltip-arrow-left")).not.toBe("");
-    expect(primitivesCss).toMatch(/\.hintBubble\s*\{[\s\S]*overflow:\s*visible;/);
-    expect(primitivesCss).toMatch(/\.hintBubbleContentInteractive\s*\{[\s\S]*overflow:\s*auto;/);
-    expect(primitivesCss).toMatch(/\.hintBubbleContent\s*\{[\s\S]*overflow-wrap:\s*anywhere;/);
-    expect(primitivesCss).toMatch(/\.hintBubbleInteractive\s*\{[\s\S]*pointer-events:\s*auto;/);
+    expect(hintTooltipCss).toMatch(/\.hintBubble\s*\{[\s\S]*overflow:\s*visible;/);
+    expect(hintTooltipCss).toMatch(/\.hintBubbleContentInteractive\s*\{[\s\S]*overflow:\s*auto;/);
+    expect(hintTooltipCss).toMatch(/\.hintBubbleContent\s*\{[\s\S]*overflow-wrap:\s*anywhere;/);
+    expect(hintTooltipCss).toMatch(/\.hintBubbleInteractive\s*\{[\s\S]*pointer-events:\s*auto;/);
     expect(tooltip.scrollHeight).toBeGreaterThan(tooltip.clientHeight);
 
     await act(async () => {

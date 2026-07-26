@@ -16,6 +16,12 @@ pub enum ElevationError {
     LaunchFailed(isize),
     #[error("Windows elevation operation failed: {0}")]
     WindowsApi(&'static str),
+    #[error("Windows elevation request failed with error {0}")]
+    RequestFailed(u32),
+    #[error("the elevated configuration process timed out")]
+    ChildTimedOut,
+    #[error("the elevated configuration process failed with exit code {0}")]
+    ChildFailed(u32),
     #[cfg(not(windows))]
     #[error("administrator restart is unavailable on this platform")]
     UnsupportedPlatform,
@@ -34,6 +40,12 @@ pub fn is_elevated() -> bool {
 
 pub fn launch_current_as_administrator() -> Result<(), ElevationError> {
     platform::launch_current_as_administrator()
+}
+
+pub fn run_current_as_administrator_and_wait(
+    argument: &std::ffi::OsStr,
+) -> Result<(), ElevationError> {
+    platform::run_current_as_administrator_and_wait(argument)
 }
 
 fn restart_parent_process_id(
@@ -68,19 +80,22 @@ mod platform {
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::{null, null_mut};
 
-    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows_sys::Win32::Security::{
         GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, OpenProcess, OpenProcessToken, WaitForSingleObject,
+        GetCurrentProcess, GetExitCodeProcess, OpenProcess, OpenProcessToken, WaitForSingleObject,
     };
-    use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, ShellExecuteW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNORMAL};
 
     use super::{ElevationError, RESTART_PARENT_ARGUMENT};
 
     const PARENT_EXIT_TIMEOUT_MS: u32 = 15_000;
+    const ELEVATED_CHILD_TIMEOUT_MS: u32 = 60_000;
     const PROCESS_SYNCHRONIZE_ACCESS: u32 = 0x0010_0000;
 
     pub fn is_elevated() -> bool {
@@ -133,6 +148,54 @@ mod platform {
         }
     }
 
+    pub fn run_current_as_administrator_and_wait(argument: &OsStr) -> Result<(), ElevationError> {
+        let executable =
+            std::env::current_exe().map_err(|_| ElevationError::WindowsApi("current_exe"))?;
+        let executable = wide(executable.as_os_str());
+        let operation = wide(OsStr::new("runas"));
+        let parameters = wide(argument);
+        let mut execute: SHELLEXECUTEINFOW = unsafe { zeroed() };
+        execute.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
+        execute.fMask = SEE_MASK_NOCLOSEPROCESS;
+        execute.lpVerb = operation.as_ptr();
+        execute.lpFile = executable.as_ptr();
+        execute.lpParameters = parameters.as_ptr();
+        execute.nShow = SW_HIDE;
+        if unsafe { ShellExecuteExW(&mut execute) } == 0 {
+            return Err(ElevationError::RequestFailed(unsafe { GetLastError() }));
+        }
+        if execute.hProcess.is_null() {
+            return Err(ElevationError::WindowsApi("ShellExecuteExW process handle"));
+        }
+        let wait_result =
+            unsafe { WaitForSingleObject(execute.hProcess, ELEVATED_CHILD_TIMEOUT_MS) };
+        if wait_result == WAIT_TIMEOUT {
+            unsafe {
+                CloseHandle(execute.hProcess);
+            }
+            return Err(ElevationError::ChildTimedOut);
+        }
+        if wait_result != WAIT_OBJECT_0 {
+            unsafe {
+                CloseHandle(execute.hProcess);
+            }
+            return Err(ElevationError::WindowsApi("WaitForSingleObject"));
+        }
+        let mut exit_code = 0_u32;
+        let exit_read = unsafe { GetExitCodeProcess(execute.hProcess, &mut exit_code) } != 0;
+        unsafe {
+            CloseHandle(execute.hProcess);
+        }
+        if !exit_read {
+            return Err(ElevationError::WindowsApi("GetExitCodeProcess"));
+        }
+        if exit_code == 0 {
+            Ok(())
+        } else {
+            Err(ElevationError::ChildFailed(exit_code))
+        }
+    }
+
     pub fn wait_for_process_exit(process_id: u32) -> Result<(), ElevationError> {
         let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE_ACCESS, 0, process_id) };
         if process.is_null() {
@@ -164,6 +227,12 @@ mod platform {
     }
 
     pub fn launch_current_as_administrator() -> Result<(), ElevationError> {
+        Err(ElevationError::UnsupportedPlatform)
+    }
+
+    pub fn run_current_as_administrator_and_wait(
+        _argument: &std::ffi::OsStr,
+    ) -> Result<(), ElevationError> {
         Err(ElevationError::UnsupportedPlatform)
     }
 

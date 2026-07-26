@@ -1,6 +1,7 @@
 export type GeneralBackendSnapshot = {
   version: string;
   autostartEnabled: boolean;
+  elevatedAutostartEnabled: boolean;
   startMinimized: boolean;
   closeToTray: boolean;
   trayIconVisible: boolean;
@@ -12,6 +13,7 @@ export type GeneralBackendSnapshot = {
 export type GeneralViewModel = {
   version: string | null;
   autostartEnabled: boolean | null;
+  elevatedAutostartEnabled: boolean | null;
   startMinimized: boolean | null;
   closeToTray: boolean | null;
   trayIconVisible: boolean | null;
@@ -26,6 +28,7 @@ export function createGeneralViewModel(
   return {
     version: snapshot?.version ?? null,
     autostartEnabled: snapshot?.autostartEnabled ?? null,
+    elevatedAutostartEnabled: snapshot?.elevatedAutostartEnabled ?? null,
     startMinimized: snapshot?.startMinimized ?? null,
     closeToTray: snapshot?.closeToTray ?? null,
     trayIconVisible: snapshot?.trayIconVisible ?? null,
@@ -38,6 +41,7 @@ export function createGeneralViewModel(
 /** Behaviour toggles the general page can persist to the backend. */
 export type GeneralToggleKind =
   | "autostart"
+  | "elevatedAutostart"
   | "startMinimized"
   | "closeToTray"
   | "trayIconVisible"

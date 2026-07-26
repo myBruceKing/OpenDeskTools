@@ -1,5 +1,5 @@
 use serde::Serialize;
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::infrastructure::application::ApplicationRuntime;
 
@@ -8,6 +8,7 @@ use crate::infrastructure::application::ApplicationRuntime;
 pub struct GeneralViewModel {
     version: String,
     autostart_enabled: bool,
+    elevated_autostart_enabled: bool,
     start_minimized: bool,
     close_to_tray: bool,
     tray_icon_visible: bool,
@@ -39,19 +40,85 @@ pub fn get_general_settings<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn set_autostart_enabled<R: Runtime>(
+pub async fn set_autostart_enabled<R: Runtime>(
     app: AppHandle<R>,
-    runtime: State<'_, ApplicationRuntime>,
     enabled: bool,
 ) -> Result<GeneralViewModel, GeneralCommandError> {
-    runtime
-        .autostart()
-        .set(enabled)
-        .map_err(|error| GeneralCommandError {
-            code: "autostart_update_failed",
-            message: format!("开机自启设置未生效：{error}"),
-        })?;
-    Ok(current_view_model(&app, &runtime))
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = worker_app
+            .try_state::<ApplicationRuntime>()
+            .ok_or_else(general_runtime_unavailable)?;
+        if !enabled && runtime.elevated_autostart().is_enabled() {
+            runtime
+                .elevated_autostart()
+                .set(false)
+                .map_err(elevated_autostart_error)?;
+        }
+        runtime
+            .autostart()
+            .set(enabled)
+            .map_err(|error| GeneralCommandError {
+                code: "autostart_update_failed",
+                message: format!("开机自启设置未生效：{error}"),
+            })?;
+        Ok(current_view_model(&worker_app, &runtime))
+    })
+    .await
+    .map_err(|_| general_runtime_unavailable())?
+}
+
+#[tauri::command]
+pub async fn set_elevated_autostart_enabled<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<GeneralViewModel, GeneralCommandError> {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = worker_app
+            .try_state::<ApplicationRuntime>()
+            .ok_or_else(general_runtime_unavailable)?;
+        if enabled {
+            if !runtime.autostart().is_enabled().unwrap_or(false) {
+                return Err(GeneralCommandError {
+                    code: "elevated_autostart_requires_autostart",
+                    message: "请先开启“开机自启动”，再启用管理员权限启动。".to_owned(),
+                });
+            }
+            runtime
+                .autostart()
+                .set(false)
+                .map_err(|error| GeneralCommandError {
+                    code: "elevated_autostart_prepare_failed",
+                    message: format!("管理员自启配置前未能暂停普通自启：{error}"),
+                })?;
+            if let Err(error) = runtime.elevated_autostart().set(true) {
+                let rollback = runtime.autostart().set(true);
+                return Err(GeneralCommandError {
+                    code: "elevated_autostart_update_failed",
+                    message: elevated_autostart_failure_message(&error, rollback.as_ref().err()),
+                });
+            }
+        } else {
+            runtime
+                .autostart()
+                .set(true)
+                .map_err(|error| GeneralCommandError {
+                    code: "elevated_autostart_prepare_failed",
+                    message: format!("管理员自启关闭前未能恢复普通自启：{error}"),
+                })?;
+            if let Err(error) = runtime.elevated_autostart().set(false) {
+                let rollback = runtime.autostart().set(false);
+                return Err(GeneralCommandError {
+                    code: "elevated_autostart_update_failed",
+                    message: elevated_autostart_failure_message(&error, rollback.as_ref().err()),
+                });
+            }
+        }
+        Ok(current_view_model(&worker_app, &runtime))
+    })
+    .await
+    .map_err(|_| general_runtime_unavailable())?
 }
 
 #[tauri::command]
@@ -98,10 +165,10 @@ pub fn set_tray_icon_visible<R: Runtime>(
             message: format!("托盘图标设置未保存：{error}"),
         })?;
     if let Err(error) = crate::infrastructure::tray::set_visible(&app, enabled) {
-        let _ = runtime.set_tray_icon_visible(previous);
+        let rollback = runtime.set_tray_icon_visible(previous);
         return Err(GeneralCommandError {
             code: "tray_icon_update_failed",
-            message: format!("托盘图标设置未生效：{error}"),
+            message: tray_visibility_failure_message(&error, rollback.as_ref().err()),
         });
     }
     Ok(current_view_model(&app, &runtime))
@@ -198,7 +265,9 @@ fn current_view_model<R: Runtime>(
     build_view_model(
         app.package_info().version.to_string(),
         GeneralBehavior {
-            autostart_enabled: runtime.autostart().is_enabled().unwrap_or(false),
+            autostart_enabled: runtime.elevated_autostart().is_enabled()
+                || runtime.autostart().is_enabled().unwrap_or(false),
+            elevated_autostart_enabled: runtime.elevated_autostart().is_enabled(),
             start_minimized: runtime.start_minimized(),
             close_to_tray: runtime.close_to_tray(),
             tray_icon_visible: runtime.tray_icon_visible(),
@@ -212,6 +281,7 @@ fn current_view_model<R: Runtime>(
 #[derive(Debug, Clone, Copy)]
 struct GeneralBehavior {
     autostart_enabled: bool,
+    elevated_autostart_enabled: bool,
     start_minimized: bool,
     close_to_tray: bool,
     tray_icon_visible: bool,
@@ -227,6 +297,7 @@ fn build_view_model(
     GeneralViewModel {
         version,
         autostart_enabled: behavior.autostart_enabled,
+        elevated_autostart_enabled: behavior.elevated_autostart_enabled,
         start_minimized: behavior.start_minimized,
         close_to_tray: behavior.close_to_tray,
         tray_icon_visible: behavior.tray_icon_visible,
@@ -246,6 +317,46 @@ fn display_data_directory(path: &std::path::Path) -> String {
         .to_owned()
 }
 
+fn tray_visibility_failure_message(
+    apply: &dyn std::fmt::Display,
+    rollback: Option<&crate::infrastructure::storage::StorageError>,
+) -> String {
+    match rollback {
+        None => format!("托盘图标设置未生效，保存状态已回滚：{apply}"),
+        Some(rollback) => format!(
+            "托盘图标设置未生效，且保存状态回滚失败；请重启应用后检查设置：应用错误={apply}；回滚错误={rollback}"
+        ),
+    }
+}
+
+fn elevated_autostart_error(
+    error: crate::infrastructure::elevated_autostart::ElevatedAutostartError,
+) -> GeneralCommandError {
+    GeneralCommandError {
+        code: "elevated_autostart_update_failed",
+        message: format!("管理员权限自启设置未生效：{error}"),
+    }
+}
+
+fn elevated_autostart_failure_message(
+    apply: &dyn std::fmt::Display,
+    rollback: Option<&crate::infrastructure::autostart::AutostartError>,
+) -> String {
+    match rollback {
+        None => format!("管理员权限自启设置未生效，普通自启状态已恢复：{apply}"),
+        Some(rollback) => format!(
+            "管理员权限自启设置未生效，且普通自启状态恢复失败；请重启应用后检查设置：授权错误={apply}；回滚错误={rollback}"
+        ),
+    }
+}
+
+fn general_runtime_unavailable() -> GeneralCommandError {
+    GeneralCommandError {
+        code: "general_runtime_unavailable",
+        message: "常规设置后台暂时不可用，请重启应用后重试。".to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +367,7 @@ mod tests {
             "1.2.3".to_owned(),
             GeneralBehavior {
                 autostart_enabled: true,
+                elevated_autostart_enabled: true,
                 start_minimized: true,
                 close_to_tray: false,
                 tray_icon_visible: true,
@@ -267,6 +379,7 @@ mod tests {
 
         assert_eq!(view_model.version, "1.2.3");
         assert!(view_model.autostart_enabled);
+        assert!(view_model.elevated_autostart_enabled);
         assert!(view_model.start_minimized);
         assert!(!view_model.close_to_tray);
         assert!(view_model.tray_icon_visible);
@@ -289,6 +402,20 @@ mod tests {
         assert_eq!(
             display_data_directory(std::path::Path::new("/var/tmp/odt")),
             "/var/tmp/odt"
+        );
+    }
+
+    #[test]
+    fn tray_visibility_failure_distinguishes_successful_and_failed_rollback() {
+        let apply = "tray unavailable";
+        assert!(
+            tray_visibility_failure_message(&apply, None).contains("保存状态已回滚"),
+            "successful rollback must be explicit"
+        );
+        let rollback = crate::infrastructure::storage::StorageError::LockPoisoned;
+        assert!(
+            tray_visibility_failure_message(&apply, Some(&rollback)).contains("回滚失败"),
+            "failed rollback must not be reported as a normal apply failure"
         );
     }
 }

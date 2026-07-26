@@ -1,0 +1,105 @@
+.toggle {
+  width: var(--toggle-width);
+  height: var(--toggle-height);
+  display: inline-flex;
+  align-items: center;
+  padding: var(--toggle-padding);
+  border: var(--border-width) solid var(--border-toggle-off);
+  border-radius: var(--radius-round);
+  background: var(--surface-toggle-off);
+}
+
+.toggle:not(:disabled) {
+  cursor: pointer;
+}
+
+.toggleThumb {
+  width: var(--toggle-thumb-size);
+  height: var(--toggle-thumb-size);
+  flex: 0 0 var(--toggle-thumb-size);
+  border-radius: 50%;
+  background: var(--surface-toggle-thumb);
+  transform: translateX(0);
+  transition: transform var(--motion-duration-fast) ease;
+}
+
+.toggleOn {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+}
+
+.toggleOn .toggleThumb {
+  transform: translateX(
+    calc(
+      var(--toggle-width) - var(--toggle-padding) - var(--toggle-padding) -
+        var(--toggle-thumb-size)
+    )
+  );
+}
+
+.toggleUnavailable {
+  border-color: var(--border-toggle-off);
+  background: var(--surface-toggle-unavailable);
+}
+
+.toggle:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.toggle:disabled:not(.toggleOn) {
+  background: var(--surface-toggle-unavailable);
+}
+
+.segmented {
+  min-width: 0;
+  height: var(--segmented-height, var(--control-height-compact));
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  overflow: hidden;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-button);
+  background: var(--surface-card-subtle);
+}
+
+.segmentedItem {
+  min-width: 0;
+  height: 100%;
+  padding: 0 var(--segmented-item-padding-x, clamp(9px, 0.9115vw, 10px));
+  border: 0;
+  border-right: var(--border-width) solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--segmented-font-size, var(--font-size-body));
+  line-height: var(--line-height-body);
+  white-space: nowrap;
+}
+
+.segmentedItem:last-child {
+  border-right: 0;
+}
+
+.segmentedItemActive {
+  border: var(--border-width) solid var(--accent-primary);
+  border-radius: var(--radius-button);
+  background: var(--surface-card);
+  color: var(--accent-link);
+  font-weight: var(--font-weight-semibold);
+}
+
+.segmentedItem:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+  opacity: 1;
+}
+
+.segmentedItemActive:disabled {
+  color: var(--accent-link);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggleThumb {
+    transition: none;
+  }
+}

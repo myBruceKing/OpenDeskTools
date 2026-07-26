@@ -285,6 +285,13 @@ pub enum ThemeError {
     EmptyPatch,
     #[error("theme revision conflict: expected {expected}, actual {actual}")]
     RevisionConflict { expected: u64, actual: u64 },
+    #[error(
+        "theme update failed and imported background cleanup also failed: update={update}; cleanup={cleanup}"
+    )]
+    Rollback {
+        update: Box<ThemeError>,
+        cleanup: ThemeAssetError,
+    },
     #[error("theme state lock is poisoned")]
     StateLockPoisoned,
 }
@@ -426,13 +433,21 @@ impl ThemeService {
                 ..ThemePreferencesPatch::default()
             },
         );
-        if updated.is_err()
-            && imported.newly_created
-            && previous_id.as_deref() != Some(new_id.as_str())
-        {
-            let _ = assets.remove(&new_id);
-        }
-        let updated = updated?;
+        let updated = match updated {
+            Ok(updated) => updated,
+            Err(update)
+                if imported.newly_created && previous_id.as_deref() != Some(new_id.as_str()) =>
+            {
+                return match assets.remove(&new_id) {
+                    Ok(()) => Err(update),
+                    Err(cleanup) => Err(ThemeError::Rollback {
+                        update: Box::new(update),
+                        cleanup,
+                    }),
+                };
+            }
+            Err(update) => return Err(update),
+        };
         if let Some(previous_id) = previous_id.filter(|id| id != &new_id) {
             if let Err(error) = assets.remove(&previous_id) {
                 eprintln!("failed to remove replaced theme background: {error}");

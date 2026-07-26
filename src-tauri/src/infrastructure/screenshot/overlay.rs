@@ -85,8 +85,8 @@ mod windows_impl {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetAncestor,
         GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW,
-        GetWindowTextW, GetWindowThreadProcessId, IsWindow, KillTimer, LoadCursorW,
-        PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow, SetTimer,
+        GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible, KillTimer,
+        LoadCursorW, PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow, SetTimer,
         SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, UnregisterClassW,
         CREATESTRUCTW, CS_DBLCLKS, ES_AUTOHSCROLL, GA_ROOT, GWLP_USERDATA, HWND_TOPMOST, IDC_CROSS,
         MSG, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOW, WM_ACTIVATEAPP, WM_CAPTURECHANGED,
@@ -439,6 +439,15 @@ mod windows_impl {
     pub(super) fn select(
         snapshot: Arc<VirtualDesktopSnapshot>,
     ) -> Result<Option<CaptureSelection>, ScreenshotError> {
+        let started = Instant::now();
+        debug_qa::trace!(format!(
+            "screenshot overlay stage=creating monitors={} virtual_bounds=({},{},{},{})",
+            snapshot.frames.len(),
+            snapshot.virtual_bounds.left,
+            snapshot.virtual_bounds.top,
+            snapshot.virtual_bounds.right,
+            snapshot.virtual_bounds.bottom
+        ));
         let _class = OverlayWindowClass::register()?;
         let _gdi_plus = GdiPlusToken::start();
         let candidate_detector = Rc::new(RefCell::new(CaptureCandidateDetector::snapshot(
@@ -519,6 +528,16 @@ mod windows_impl {
                 let _ = UpdateWindow(*window);
             }
         }
+        let visible_windows = windows
+            .iter()
+            .filter(|window| unsafe { IsWindowVisible(**window) } != 0)
+            .count();
+        debug_qa::trace!(format!(
+            "screenshot overlay stage=shown windows={} visible={} elapsed_ms={}",
+            windows.len(),
+            visible_windows,
+            started.elapsed().as_millis()
+        ));
         let focus_index = snapshot
             .frames
             .iter()
@@ -535,9 +554,15 @@ mod windows_impl {
                     drop(contexts);
                     return Err(ScreenshotError::OverlayActivationDenied);
                 }
-                debug_qa::trace(format!(
+                debug_qa::trace!(format!(
                     "screenshot overlay activation denied foreground={:#x} reason=higher_integrity continuation=topmost_mouse_first",
                     foreground as usize
+                ));
+            } else {
+                debug_qa::trace!(format!(
+                    "screenshot overlay stage=activated focus_window={:#x} elapsed_ms={}",
+                    focus_window as usize,
+                    started.elapsed().as_millis()
                 ));
             }
             // UI Automation runs on a detached COM worker. Polling from a timer
@@ -574,12 +599,30 @@ mod windows_impl {
             .lock()
             .map_err(|_| ScreenshotError::OverlayStateUnavailable)?;
         match state.selection.outcome() {
-            Some(SelectionOutcome::Confirmed(selection)) => Ok(Some(CaptureSelection {
-                rect: selection,
-                action: state.action.unwrap_or(CaptureAction::Finish),
-                annotations: state.annotations.clone(),
-            })),
-            Some(SelectionOutcome::Cancelled) | None => Ok(None),
+            Some(SelectionOutcome::Confirmed(selection)) => {
+                let action = state.action.unwrap_or(CaptureAction::Finish);
+                debug_qa::trace!(format!(
+                    "screenshot overlay result=confirmed action={action:?} rect=({},{},{},{}) annotations={} elapsed_ms={}",
+                    selection.left,
+                    selection.top,
+                    selection.right,
+                    selection.bottom,
+                    state.annotations.len(),
+                    started.elapsed().as_millis()
+                ));
+                Ok(Some(CaptureSelection {
+                    rect: selection,
+                    action,
+                    annotations: state.annotations.clone(),
+                }))
+            }
+            Some(SelectionOutcome::Cancelled) | None => {
+                debug_qa::trace!(format!(
+                    "screenshot overlay result=cancelled elapsed_ms={}",
+                    started.elapsed().as_millis()
+                ));
+                Ok(None)
+            }
         }
     }
 

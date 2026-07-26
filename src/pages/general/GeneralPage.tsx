@@ -31,10 +31,25 @@ export function GeneralPage() {
           {error ? <InlineNotice variant="error">{error}</InlineNotice> : null}
           <SwitchRow
             title="开机自启动"
-            description="登录 Windows 后以普通权限在后台启动（无感知，仅驻留托盘）"
+            description={
+              viewModel.elevatedAutostartEnabled
+                ? "登录 Windows 后由计划任务以管理员权限在后台启动"
+                : "登录 Windows 后以普通权限在后台启动（无感知，仅驻留托盘）"
+            }
             checked={viewModel.autostartEnabled}
             disabled={busy || viewModel.autostartEnabled === null}
             onChange={(checked) => void setToggle("autostart", checked)}
+          />
+          <SwitchRow
+            title="以管理员权限开机启动"
+            description="开启或关闭时会弹出一次 Windows 授权；开启后登录无需再次确认"
+            checked={viewModel.elevatedAutostartEnabled}
+            disabled={
+              busy
+              || viewModel.elevatedAutostartEnabled === null
+              || viewModel.autostartEnabled !== true
+            }
+            onChange={(checked) => void setToggle("elevatedAutostart", checked)}
           />
           <SwitchRow
             title="启动时最小化到托盘"

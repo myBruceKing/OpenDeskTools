@@ -25,6 +25,7 @@ import { GeneralPage } from "../../src/pages/general/GeneralPage";
 const snapshot = (overrides: Record<string, unknown> = {}) => ({
   version: "0.1.0",
   autostartEnabled: false,
+  elevatedAutostartEnabled: false,
   startMinimized: false,
   closeToTray: true,
   trayIconVisible: true,
@@ -98,6 +99,26 @@ describe("GeneralPage autostart", () => {
 
     expect(mocks.setToggle).toHaveBeenCalledWith("autostart", true);
     expect(autostartToggle().getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("requests one-time authorization for persistent elevated autostart", async () => {
+    mocks.load.mockResolvedValue(snapshot({ autostartEnabled: true }));
+    mocks.setToggle.mockResolvedValue(
+      snapshot({ autostartEnabled: true, elevatedAutostartEnabled: true })
+    );
+
+    await renderPage();
+    const elevatedToggle = container.querySelector<HTMLButtonElement>(
+      '[aria-label="以管理员权限开机启动"]'
+    );
+    if (!elevatedToggle) throw new Error("elevated autostart toggle should render");
+
+    await act(async () => elevatedToggle.click());
+    await act(async () => Promise.resolve());
+
+    expect(mocks.setToggle).toHaveBeenCalledWith("elevatedAutostart", true);
+    expect(elevatedToggle.getAttribute("aria-checked")).toBe("true");
+    expect(container.textContent).toContain("登录无需再次确认");
   });
 
   it("persists the close-to-tray preference through the toggle client", async () => {

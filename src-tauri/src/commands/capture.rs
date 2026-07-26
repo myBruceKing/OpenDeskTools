@@ -23,7 +23,8 @@ pub struct ScreenshotCaptureDto {
     pub(crate) status: &'static str,
     pub(crate) width: Option<u32>,
     pub(crate) height: Option<u32>,
-    pub(crate) message: &'static str,
+    pub(crate) history_status: &'static str,
+    pub(crate) message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -71,7 +72,8 @@ pub(crate) fn capture_and_notify<R: Runtime>(
             status: "cancelled",
             width: None,
             height: None,
-            message: "已取消截图。",
+            history_status: CaptureHistoryStatus::NotAttempted.as_str(),
+            message: "已取消截图。".to_owned(),
         }),
         ScreenshotCaptureOutcome::Selected { image, action } => {
             if action == CaptureAction::Cancel {
@@ -79,11 +81,12 @@ pub(crate) fn capture_and_notify<R: Runtime>(
                     status: "cancelled",
                     width: None,
                     height: None,
-                    message: "已取消截图。",
+                    history_status: CaptureHistoryStatus::NotAttempted.as_str(),
+                    message: "已取消截图。".to_owned(),
                 });
             }
             let clipboard_owner = main_window_handle(app).unwrap_or_default();
-            let (status, message) = match action {
+            let (status, primary_message) = match action {
                 CaptureAction::Copy | CaptureAction::Finish => {
                     runtime
                         .screenshot()
@@ -91,7 +94,7 @@ pub(crate) fn capture_and_notify<R: Runtime>(
                             runtime.clipboard_listener().suppress_sequence(sequence)
                         })
                         .map_err(map_screenshot_error)?;
-                    ("copied", "截图已保存到内置历史并复制到系统剪贴板。")
+                    ("copied", "截图已复制到系统剪贴板。")
                 }
                 CaptureAction::Save => {
                     let suggested_name = local_timestamped_png_name("OpenDeskTools-截图");
@@ -107,7 +110,8 @@ pub(crate) fn capture_and_notify<R: Runtime>(
                                 status: "cancelled",
                                 width: None,
                                 height: None,
-                                message: "已取消保存截图。",
+                                history_status: CaptureHistoryStatus::NotAttempted.as_str(),
+                                message: "已取消保存截图。".to_owned(),
                             });
                         }
                         Err(_) => {
@@ -118,14 +122,14 @@ pub(crate) fn capture_and_notify<R: Runtime>(
                             });
                         }
                     }
-                    ("saved", "截图已保存为 PNG，并加入内置历史。")
+                    ("saved", "截图已保存为 PNG。")
                 }
                 CaptureAction::Pin => {
                     runtime
                         .pin_image()
                         .pin_rgba(image.width, image.height, image.rgba.clone())
                         .map_err(map_pin_error)?;
-                    ("pinned", "截图已贴到屏幕，并加入内置历史。")
+                    ("pinned", "截图已贴到屏幕。")
                 }
                 CaptureAction::DecodeQr => {
                     runtime
@@ -142,11 +146,17 @@ pub(crate) fn capture_and_notify<R: Runtime>(
                 }
                 CaptureAction::Cancel => unreachable!(),
             };
-            let history_retained = runtime
-                .screenshot()
-                .record_image(&image)
-                .map_err(map_screenshot_error)?;
-            if history_retained {
+            let history_status = match runtime.screenshot().record_image(&image) {
+                Ok(true) => CaptureHistoryStatus::Retained,
+                Ok(false) => CaptureHistoryStatus::NotRetained,
+                Err(error) => {
+                    eprintln!(
+                        "screenshot primary action succeeded but history persistence failed: {error}"
+                    );
+                    CaptureHistoryStatus::Failed
+                }
+            };
+            if history_status == CaptureHistoryStatus::Retained {
                 clipboard_history_event_sink(app)();
             }
             record_usage_success(app, runtime, UsageAction::ScreenshotCapture);
@@ -154,10 +164,43 @@ pub(crate) fn capture_and_notify<R: Runtime>(
                 status,
                 width: Some(image.width),
                 height: Some(image.height),
-                message,
+                history_status: history_status.as_str(),
+                message: capture_success_message(primary_message, history_status),
             })
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureHistoryStatus {
+    NotAttempted,
+    Retained,
+    NotRetained,
+    Failed,
+}
+
+impl CaptureHistoryStatus {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotAttempted => "notAttempted",
+            Self::Retained => "retained",
+            Self::NotRetained => "notRetained",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+fn capture_success_message(
+    primary_message: &'static str,
+    history_status: CaptureHistoryStatus,
+) -> String {
+    let history_message = match history_status {
+        CaptureHistoryStatus::NotAttempted => "",
+        CaptureHistoryStatus::Retained => "已加入内置历史。",
+        CaptureHistoryStatus::NotRetained => "根据剪贴板保留规则，未加入内置历史。",
+        CaptureHistoryStatus::Failed => "内置历史保存失败，主操作不受影响。",
+    };
+    format!("{primary_message}{history_message}")
 }
 
 #[tauri::command]
@@ -287,6 +330,24 @@ mod tests {
         assert_eq!(
             map_pin_error(PinImageError::ImageUnavailable).code,
             "pin_image_unavailable"
+        );
+    }
+
+    #[test]
+    fn successful_capture_message_keeps_primary_success_when_history_degrades() {
+        assert_eq!(
+            capture_success_message("截图已复制到系统剪贴板。", CaptureHistoryStatus::Retained),
+            "截图已复制到系统剪贴板。已加入内置历史。"
+        );
+        assert_eq!(
+            capture_success_message("截图已复制到系统剪贴板。", CaptureHistoryStatus::Failed),
+            "截图已复制到系统剪贴板。内置历史保存失败，主操作不受影响。"
+        );
+        assert_eq!(CaptureHistoryStatus::NotAttempted.as_str(), "notAttempted");
+        assert_eq!(CaptureHistoryStatus::NotRetained.as_str(), "notRetained");
+        assert_eq!(
+            capture_success_message("截图已保存为 PNG。", CaptureHistoryStatus::NotRetained),
+            "截图已保存为 PNG。根据剪贴板保留规则，未加入内置历史。"
         );
     }
 }

@@ -1,4 +1,4 @@
-import styles from "./primitives.module.css";
+import styles from "./SelectionControl.module.css";
 
 type ToggleProps = {
   checked: boolean | null;

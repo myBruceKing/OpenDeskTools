@@ -1,22 +1,14 @@
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo } from "react";
 import { clipboardClient } from "./clipboardClient";
 import { ClipboardController } from "./clipboardController";
+import { useControllerStore } from "./useControllerStore";
 
 export function useClipboardController(surfaceActiveHint = false) {
   const controller = useMemo(
     () => new ClipboardController(clipboardClient, surfaceActiveHint),
     []
   );
-  const state = useSyncExternalStore(
-    controller.subscribe,
-    controller.getSnapshot,
-    controller.getSnapshot
-  );
-
-  useEffect(() => {
-    controller.start();
-    return () => controller.stop();
-  }, [controller]);
+  const state = useControllerStore(controller);
 
   useEffect(() => {
     controller.setSurfaceActiveHint(surfaceActiveHint);

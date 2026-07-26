@@ -111,7 +111,7 @@ mod platform {
                     callback: Some(Box::new(callback)),
                 },
             );
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "outside pointer monitor start owner={owner:?} internal_roots={internal_surface_roots:x?} backend=RawInput pass_through=true"
         ));
         Ok(())
@@ -158,7 +158,7 @@ mod platform {
             .spawn(move || {
                 let result = run_worker(started_tx);
                 if let Err(error) = result {
-                    debug_qa::trace(format!(
+                    debug_qa::trace!(format!(
                         "outside pointer monitor worker exit result=error error={error}"
                     ));
                 }

@@ -62,10 +62,10 @@ pub enum ToolMenuSurfaceError {
 /// this already-created surface, so they cannot block the keyboard hook path.
 pub fn prepare<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> {
     if app.get_webview_window(TOOL_MENU_SURFACE_LABEL).is_some() {
-        debug_qa::trace("tool-menu prepare result=existing");
+        debug_qa::trace!("tool-menu prepare result=existing");
         return Ok(());
     }
-    debug_qa::trace("tool-menu prepare stage=build requested");
+    debug_qa::trace!("tool-menu prepare stage=build requested");
     let window = WebviewWindowBuilder::new(
         app,
         TOOL_MENU_SURFACE_LABEL,
@@ -87,7 +87,7 @@ pub fn prepare<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceErro
     configure_popup_style(&window)?;
     configure_transparent_non_client(&window);
     apply_circular_region(&window)?;
-    debug_qa::trace("tool-menu prepare result=ready hidden");
+    debug_qa::trace!("tool-menu prepare result=ready hidden");
     Ok(())
 }
 
@@ -122,7 +122,7 @@ pub fn show<R: Runtime>(
         rollback_failed_show(&window);
         return Err(error.into());
     }
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "tool-menu show result=visible layout={:?} visible_items={} size={}x{}",
         snapshot.tool_menu.layout,
         snapshot
@@ -265,7 +265,7 @@ fn restore_visible_after_failed_hide(visible: &AtomicBool) {
 
 pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> {
     if !begin_hide(&TOOL_MENU_VISIBLE) {
-        debug_qa::trace("tool-menu hide result=skipped already_hidden_or_closing");
+        debug_qa::trace!("tool-menu hide result=skipped already_hidden_or_closing");
         return Ok(());
     }
     let window = match prepared(app) {
@@ -281,7 +281,7 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> 
         return Err(error.into());
     }
     let animated = surface_window_animation::fade_hide(&window);
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "tool-menu fade-hide result={} duration_ms={}",
         if animated { "animated" } else { "fallback" },
         surface_window_animation::exit_duration_ms(&window)
@@ -292,7 +292,7 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) -> Result<(), ToolMenuSurfaceError> 
             return Err(error.into());
         }
     }
-    debug_qa::trace("tool-menu hide result=transition_started");
+    debug_qa::trace!("tool-menu hide result=transition_started");
     Ok(())
 }
 
@@ -324,7 +324,7 @@ fn start_outside_pointer_monitor<R: Runtime>(
         PointerMonitorOwner::ToolMenu,
         vec![root as usize],
         move |observation| {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "tool-menu outside pointer press backend={} message={} point=({}, {}) observed_root={:#x}",
                 observation.backend,
                 observation.message,
@@ -516,7 +516,7 @@ unsafe extern "system" fn popup_style_subclass_proc(
         let change = unsafe { &mut *(lparam as *mut STYLESTRUCT) };
         let requested = change.styleNew;
         change.styleNew = popup_window_style(requested as isize) as u32;
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "tool-menu popup-style-guard requested={requested:#x} applied={:#x}",
             change.styleNew
         ));
@@ -526,18 +526,18 @@ unsafe extern "system" fn popup_style_subclass_proc(
     // repaint the retained Tao caption/background surface on deactivation exposes
     // a light strip above the fading document even though WS_CAPTION is gone.
     if message == WM_NCACTIVATE {
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "tool-menu native-paint suppressed=ncactivate active={}",
             wparam != 0
         ));
         return 1;
     }
     if message == WM_NCPAINT {
-        debug_qa::trace("tool-menu native-paint suppressed=ncpaint");
+        debug_qa::trace!("tool-menu native-paint suppressed=ncpaint");
         return 0;
     }
     if message == WM_ERASEBKGND {
-        debug_qa::trace("tool-menu native-paint suppressed=erase-background");
+        debug_qa::trace!("tool-menu native-paint suppressed=erase-background");
         return 1;
     }
 
@@ -591,7 +591,7 @@ fn configure_popup_style<R: Runtime>(
         {
             return Err(ToolMenuSurfaceError::ConfigurePopupStyle);
         }
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "tool-menu popup-style result=applied original={original_style:#x} current={:#x}",
             GetWindowLongPtrW(hwnd.0, GWL_STYLE)
         ));
@@ -716,7 +716,7 @@ fn configure_transparent_non_client<R: Runtime>(window: &WebviewWindow<R>) {
     };
 
     let Ok(hwnd) = window.hwnd() else {
-        debug_qa::trace("tool-menu non-client result=unavailable no_hwnd");
+        debug_qa::trace!("tool-menu non-client result=unavailable no_hwnd");
         return;
     };
     let policy = DWMNCRP_DISABLED;
@@ -748,7 +748,7 @@ fn configure_transparent_non_client<R: Runtime>(window: &WebviewWindow<R>) {
             std::mem::size_of_val(&transitions_disabled) as u32,
         )
     };
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "tool-menu non-client result=applied policy_hresult={policy_result:#x} border_hresult={border_result:#x} transition_hresult={transition_result:#x}"
     ));
 }

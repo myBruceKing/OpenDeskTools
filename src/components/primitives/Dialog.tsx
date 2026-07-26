@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { TextField } from "./Field";
-import styles from "./primitives.module.css";
+import styles from "./Dialog.module.css";
 
 type DialogShellProps = {
   open: boolean;

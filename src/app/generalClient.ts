@@ -12,6 +12,7 @@ const RESTART_AS_ADMINISTRATOR_COMMAND = "restart_as_administrator";
 
 const TOGGLE_COMMANDS: Record<GeneralToggleKind, string> = {
   autostart: "set_autostart_enabled",
+  elevatedAutostart: "set_elevated_autostart_enabled",
   startMinimized: "set_start_minimized",
   closeToTray: "set_close_to_tray",
   trayIconVisible: "set_tray_icon_visible",

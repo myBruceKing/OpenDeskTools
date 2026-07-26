@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::Response, AppHandle, State, WebviewWindow};
 
-use crate::infrastructure::application::ApplicationRuntime;
+use crate::infrastructure::application::{ApplicationRuntime, ClipboardMonitoringError};
 use crate::infrastructure::clipboard::{
     file_names, ClipboardContentKind, ClipboardError, ClipboardHistoryItem, ClipboardHistoryQuery,
 };
@@ -245,11 +245,7 @@ pub fn set_clipboard_monitoring(
     runtime
         .set_clipboard_monitoring_enabled(input.enabled, crate::clipboard_history_event_sink(&app))
         .map(monitoring_dto)
-        .map_err(|_| ClipboardCommandErrorDto {
-            code: "clipboard_monitoring_unavailable",
-            message: "剪贴板监控状态未能更新，请重试。",
-            retryable: true,
-        })
+        .map_err(map_monitoring_error)
 }
 
 #[tauri::command]
@@ -426,17 +422,17 @@ pub fn open_clipboard_preview_surface(
     app: AppHandle,
     record_id: String,
 ) -> Result<(), ClipboardCommandErrorDto> {
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "preview command=open request raw_record_id={record_id:?}"
     ));
     let id = parse_id(&record_id)?;
     clipboard_surface_window::open_preview(&app, id.to_string()).map_err(|error| {
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "preview command=open result=error record_id={id} error={error}"
         ));
         window_unavailable_error()
     })?;
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "preview command=open result=success record_id={id}"
     ));
     Ok(())
@@ -444,14 +440,14 @@ pub fn open_clipboard_preview_surface(
 
 #[tauri::command]
 pub fn close_clipboard_preview_surface(app: AppHandle) -> Result<(), ClipboardCommandErrorDto> {
-    debug_qa::trace("preview command=close request");
+    debug_qa::trace!("preview command=close request");
     clipboard_surface_window::close_preview(&app, ClipboardPreviewCloseReason::Command).map_err(
         |error| {
-            debug_qa::trace(format!("preview command=close result=error error={error}"));
+            debug_qa::trace!(format!("preview command=close result=error error={error}"));
             window_unavailable_error()
         },
     )?;
-    debug_qa::trace("preview command=close result=success");
+    debug_qa::trace!("preview command=close result=success");
     Ok(())
 }
 
@@ -463,7 +459,7 @@ pub fn trace_clipboard_preview_debug(
 ) {
     let record_id = record_id.and_then(|value| parse_id(&value).ok());
     let detail = sanitize_clipboard_preview_debug_detail(detail);
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "preview frontend event={} record_id={record_id:?} detail={detail:?}",
         event.as_str(),
     ));
@@ -644,6 +640,26 @@ fn monitoring_dto(status: ClipboardListenerStatus) -> ClipboardMonitoringDto {
         ClipboardListenerStatus::Running => ClipboardMonitoringDto::Running,
         ClipboardListenerStatus::Stopped => ClipboardMonitoringDto::Paused,
         ClipboardListenerStatus::Unavailable => ClipboardMonitoringDto::Unavailable,
+    }
+}
+
+fn map_monitoring_error(error: ClipboardMonitoringError) -> ClipboardCommandErrorDto {
+    match error {
+        ClipboardMonitoringError::Listener(_) => ClipboardCommandErrorDto {
+            code: "clipboard_monitoring_unavailable",
+            message: "剪贴板监控运行状态未能更新，请重试。",
+            retryable: true,
+        },
+        ClipboardMonitoringError::Persistence(_) => ClipboardCommandErrorDto {
+            code: "clipboard_monitoring_persistence_failed",
+            message: "剪贴板监控状态已回滚，但设置未能保存，请重试。",
+            retryable: true,
+        },
+        ClipboardMonitoringError::Rollback { .. } => ClipboardCommandErrorDto {
+            code: "clipboard_monitoring_rollback_failed",
+            message: "剪贴板监控状态与保存设置可能不一致，请重启应用后重试。",
+            retryable: true,
+        },
     }
 }
 
@@ -1033,6 +1049,26 @@ mod tests {
             monitoring_dto(ClipboardListenerStatus::Unavailable),
             ClipboardMonitoringDto::Unavailable
         );
+    }
+
+    #[test]
+    fn monitoring_failures_preserve_listener_persistence_and_rollback_categories() {
+        let listener = map_monitoring_error(ClipboardMonitoringError::Listener(
+            crate::infrastructure::clipboard_listener::ClipboardListenerError::StateLockPoisoned,
+        ));
+        assert_eq!(listener.code, "clipboard_monitoring_unavailable");
+
+        let persistence = map_monitoring_error(ClipboardMonitoringError::Persistence(
+            crate::infrastructure::storage::StorageError::LockPoisoned,
+        ));
+        assert_eq!(persistence.code, "clipboard_monitoring_persistence_failed");
+
+        let rollback = map_monitoring_error(ClipboardMonitoringError::Rollback {
+            persistence: crate::infrastructure::storage::StorageError::LockPoisoned,
+            rollback:
+                crate::infrastructure::clipboard_listener::ClipboardListenerError::StateLockPoisoned,
+        });
+        assert_eq!(rollback.code, "clipboard_monitoring_rollback_failed");
     }
 
     #[test]

@@ -577,8 +577,14 @@ mod platform {
             .control
             .lock()
             .map_err(|_| ClipboardListenerError::StateLockPoisoned)?;
-        if control.is_some() {
-            return Ok(());
+        if let Some(existing) = control.as_ref() {
+            if listener_control_is_healthy(existing, manager.status.load(Ordering::Acquire)) {
+                return Ok(());
+            }
+        }
+        if let Some(stale) = control.take() {
+            manager.status.store(STATUS_STOPPED, Ordering::Release);
+            stop_control(stale)?;
         }
 
         let (signal_sender, signal_receiver) = mpsc::sync_channel(1);
@@ -669,6 +675,16 @@ mod platform {
             return Ok(());
         };
 
+        stop_control(control)
+    }
+
+    fn listener_control_is_healthy(control: &ListenerControl, status: u8) -> bool {
+        status == STATUS_RUNNING
+            && !control.message_thread.is_finished()
+            && !control.worker_thread.is_finished()
+    }
+
+    fn stop_control(control: ListenerControl) -> Result<(), ClipboardListenerError> {
         if should_post_to_message_window(control.message_thread.is_finished()) {
             let posted = unsafe { PostMessageW(control.window as HWND, STOP_MESSAGE, 0, 0) } != 0;
             if !posted {
@@ -1784,6 +1800,42 @@ mod platform {
         use std::collections::VecDeque;
 
         use super::*;
+
+        #[test]
+        fn listener_control_health_requires_running_status_and_live_threads() {
+            let (message_sender, message_receiver) = mpsc::channel::<()>();
+            let (worker_sender, worker_receiver) = mpsc::channel::<()>();
+            let control = ListenerControl {
+                window: 0,
+                message_thread_id: 0,
+                message_thread: thread::spawn(move || {
+                    let _ = message_receiver.recv();
+                }),
+                worker_thread: thread::spawn(move || {
+                    let _ = worker_receiver.recv();
+                }),
+            };
+            assert!(listener_control_is_healthy(&control, STATUS_RUNNING));
+            assert!(!listener_control_is_healthy(&control, STATUS_UNAVAILABLE));
+            drop((message_sender, worker_sender));
+            stop_control(control).unwrap();
+
+            let (message_sender, message_receiver) = mpsc::channel::<()>();
+            let control = ListenerControl {
+                window: 0,
+                message_thread_id: 0,
+                message_thread: thread::spawn(move || {
+                    let _ = message_receiver.recv();
+                }),
+                worker_thread: thread::spawn(|| {}),
+            };
+            while !control.worker_thread.is_finished() {
+                thread::yield_now();
+            }
+            assert!(!listener_control_is_healthy(&control, STATUS_RUNNING));
+            drop(message_sender);
+            stop_control(control).unwrap();
+        }
 
         fn hdrop(paths: &[&str]) -> Vec<u8> {
             let mut bytes = vec![0_u8; 20];

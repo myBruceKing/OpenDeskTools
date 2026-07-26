@@ -159,7 +159,7 @@ fn request_from_foreground<R: Runtime>(
     source: SurfaceRequestSource,
 ) -> Result<(), String> {
     let visible = clipboard_surface_window::is_visible(app);
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface request source={} request={request:?} visible_before={visible}",
         source.as_str()
     ));
@@ -170,7 +170,7 @@ fn request_from_foreground<R: Runtime>(
         }
         #[cfg(debug_assertions)]
         SurfaceRequestRoute::KeepOpen => {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "surface request source={} kept existing visible surface",
                 source.as_str()
             ));
@@ -195,7 +195,7 @@ fn request_from_foreground<R: Runtime>(
 
     let capture_result = runtime.surface().capture_external_target(owner_window);
     if let Err(error) = &capture_result {
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "target capture unavailable source={} error={error}",
             source.as_str()
         ));
@@ -206,7 +206,7 @@ fn request_from_foreground<R: Runtime>(
                 format!("target capture failed: {error}; fallback failed: {fallback}")
             })?;
     }
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "target captured source={} target_top={:?} input_available={}",
         source.as_str(),
         runtime.surface().target_top_window(),
@@ -225,7 +225,7 @@ fn show<R: Runtime>(
     match result {
         Ok(()) => {
             clipboard_surface_window::notify_opened(app);
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "show success source={source} visible_after={}",
                 clipboard_surface_window::is_visible(app)
             ));
@@ -233,7 +233,7 @@ fn show<R: Runtime>(
         }
         Err(error) => {
             let clear_result = runtime.surface().clear();
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "show failure source={source} error={error} clear_result={clear_result:?}"
             ));
             Err(error.to_string())

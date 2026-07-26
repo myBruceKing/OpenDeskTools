@@ -86,7 +86,7 @@ mod platform {
         if target_top_window == 0 {
             return Err(ForegroundMonitorError::InstallHook);
         }
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "foreground monitor start target_top={target_top_window:#x} internal_roots={internal_surface_roots:x?} flags=out_of_context include_own_process=true"
         ));
         let mut slot = worker_slot()
@@ -243,7 +243,7 @@ mod platform {
                 &context.internal_surface_roots,
                 observed_top_window,
             );
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "surface event observed event={event:#x} target_top={:#x} internal_roots={:x?} observed_top={observed_top_window:#x} decision={detail}",
                 context.target_top_window,
                 context.internal_surface_roots,

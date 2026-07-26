@@ -12,6 +12,7 @@ pub mod data_directory;
 pub mod debug_qa;
 pub mod diagnostics;
 pub mod disabled_hotkeys;
+pub mod elevated_autostart;
 pub mod elevation;
 pub mod general_settings;
 pub mod hotkey;

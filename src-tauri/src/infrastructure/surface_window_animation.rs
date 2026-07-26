@@ -117,7 +117,7 @@ fn fade_hide_with<R: Runtime>(window: &WebviewWindow<R>, mode: FinalHideMode) ->
             let _ = main_thread_window
                 .eval("document.documentElement.removeAttribute('data-surface-closing');");
             #[cfg(debug_assertions)]
-            super::debug_qa::trace(format!(
+            super::debug_qa::trace!(format!(
                 "surface exit final-hide label={main_thread_label} backend={} visible_after={:?}",
                 hide_mode_name(mode),
                 is_visible_now(&main_thread_window, mode)

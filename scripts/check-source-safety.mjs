@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 
 const contentRules = [
@@ -55,7 +55,7 @@ function repositoryFiles() {
   return output
     .toString("utf8")
     .split("\0")
-    .filter(Boolean);
+    .filter((file) => file.length > 0 && existsSync(file));
 }
 
 function lineNumberAt(text, index) {

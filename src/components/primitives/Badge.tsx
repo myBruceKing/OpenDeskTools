@@ -5,7 +5,7 @@ import {
 } from "@fluentui/react-icons";
 import type { HotkeyState } from "../../app/overviewModel";
 import { HintTooltip } from "./HintTooltip";
-import styles from "./primitives.module.css";
+import styles from "./Badge.module.css";
 
 export function ShortcutBadge({ value }: { value: string | null }) {
   return <span className={styles.keycap}>{value ?? "—"}</span>;

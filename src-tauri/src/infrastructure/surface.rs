@@ -179,7 +179,7 @@ impl SurfaceManager {
             return Err(SurfaceError::TargetUnavailable);
         };
         if !captured_focus_satisfies(target, requirement) {
-            debug_qa::trace(format!(
+            debug_qa::trace!(format!(
                 "surface input handoff rejected requirement={} target_top={:#x} captured_focus={:?} captured_focus_thread={:?}",
                 requirement.as_str(),
                 target.top_window,
@@ -363,7 +363,7 @@ fn build_target<A: SurfaceApi>(
         focus_window: focus.map(|(window, _)| window),
         focus_thread_id: focus.map(|(_, thread)| thread),
     };
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface target captured target_top={:#x} process_id={} top_thread={} focus={:?} focus_thread={:?} focus_kind={}",
         target.top_window,
         target.process_id,
@@ -413,7 +413,7 @@ fn active_thread_focus<A: SurfaceApi>(
     let active_window = api.active_window(thread_id);
     let active_root = active_window.and_then(|window| api.root_window(window));
     if active_root != Some(top_window) {
-        debug_qa::trace(format!(
+        debug_qa::trace!(format!(
             "surface focus candidate rejected source={source} thread={thread_id} reason=inactive active={:?} active_root={:?} target_top={:#x}",
             active_window.map(|window| format!("{window:#x}")),
             active_root.map(|window| format!("{window:#x}")),
@@ -423,7 +423,7 @@ fn active_thread_focus<A: SurfaceApi>(
     }
     let focus_window = api.focused_window(thread_id)?;
     let focus = valid_focus(api, focus_window, top_window, process_id);
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface focus candidate source={source} thread={thread_id} focus={:#x} target_top={:#x} result={}",
         focus_window,
         top_window,
@@ -604,7 +604,7 @@ fn restore_and_run_locked<T, F, A: SurfaceApi>(
 where
     F: FnOnce() -> T,
 {
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface input restore begin generation={generation} requirement={} target_top={:#x} captured_focus={:?} captured_focus_thread={:?}",
         requirement.as_str(),
         target.top_window,
@@ -652,7 +652,7 @@ fn trace_focus<A: SurfaceApi>(
 ) {
     let observed_thread = target.focus_thread_id.unwrap_or(target.top_thread_id);
     let observed_focus = api.focused_window(observed_thread);
-    debug_qa::trace(format!(
+    debug_qa::trace!(format!(
         "surface input focus stage={stage} requirement={} target_top={:#x} captured_focus={:?} observed_focus={:?} observed_thread={}",
         requirement.as_str(),
         target.top_window,

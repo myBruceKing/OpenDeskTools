@@ -22,6 +22,7 @@ use super::diagnostics;
 use super::disabled_hotkeys::{
     self, DisabledHotkeysOutcome, OwnedLettersStore, SystemHotkeyDisabler,
 };
+use super::elevated_autostart::{ElevatedAutostartError, ElevatedAutostartManager};
 use super::general_settings;
 use super::hotkey::{HotkeyError, HotkeyManager, HotkeySnapshot, OrdinaryHotkeyLatch};
 use super::hotkey_capture::HotkeyCaptureManager;
@@ -59,6 +60,7 @@ pub struct ApplicationRuntime {
     hotkey_capture: HotkeyCaptureManager,
     system_hotkeys: SystemHotkeyDisabler,
     autostart: AutostartManager,
+    elevated_autostart: ElevatedAutostartManager,
     data_directory: DataDirectoryPreference,
     theme: Arc<ThemeService>,
     usage_statistics: UsageStatisticsService,
@@ -89,12 +91,29 @@ pub enum ApplicationRuntimeError {
     Theme(#[from] ThemeError),
     #[error("failed to initialize the autostart manager: {0}")]
     Autostart(#[from] AutostartError),
+    #[error("failed to initialize the elevated autostart manager: {0}")]
+    ElevatedAutostart(#[from] ElevatedAutostartError),
     #[error("failed to initialize hotkey manager: {0}")]
     Hotkey(#[from] HotkeyError),
     #[error("failed to initialize clipboard service: {0}")]
     Clipboard(String),
     #[error("failed to initialize quick launch service: {0}")]
     QuickLaunch(#[from] QuickLaunchError),
+}
+
+#[derive(Debug, Error)]
+pub enum ClipboardMonitoringError {
+    #[error("clipboard listener operation failed: {0}")]
+    Listener(#[from] ClipboardListenerError),
+    #[error("clipboard monitoring preference could not be persisted: {0}")]
+    Persistence(#[from] StorageError),
+    #[error(
+        "clipboard monitoring preference failed and runtime rollback also failed: persistence={persistence}; rollback={rollback}"
+    )]
+    Rollback {
+        persistence: StorageError,
+        rollback: ClipboardListenerError,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -192,28 +211,56 @@ impl ApplicationRuntime {
     }
 
     pub(crate) fn clipboard_monitoring_enabled(&self) -> bool {
-        clipboard_settings::monitoring_enabled(&self.storage).unwrap_or(true)
+        self.read_clipboard_monitoring_enabled().unwrap_or(true)
+    }
+
+    fn read_clipboard_monitoring_enabled(&self) -> Result<bool, StorageError> {
+        clipboard_settings::monitoring_enabled(&self.storage)
     }
 
     pub(crate) fn set_clipboard_monitoring_enabled(
         &self,
         enabled: bool,
         sink: ClipboardHistoryEventSink,
-    ) -> Result<ClipboardListenerStatus, ClipboardListenerError> {
-        let was_enabled = self.clipboard_monitoring_enabled();
+    ) -> Result<ClipboardListenerStatus, ClipboardMonitoringError> {
+        let was_enabled = self.read_clipboard_monitoring_enabled()?;
+        if enabled == was_enabled {
+            if enabled {
+                self.start_clipboard_listener(sink)?;
+            } else {
+                self.clipboard_listener.stop()?;
+            }
+            return Ok(self.clipboard_listener.status());
+        }
+
         if enabled {
             self.start_clipboard_listener(sink.clone())?;
-            if clipboard_settings::set_monitoring_enabled(&self.storage, true).is_err() {
-                let _ = self.clipboard_listener.stop();
-                return Err(ClipboardListenerError::StateLockPoisoned);
+            if let Err(persistence) =
+                clipboard_settings::set_monitoring_enabled(&self.storage, true)
+            {
+                return match self.clipboard_listener.stop() {
+                    Ok(()) => Err(ClipboardMonitoringError::Persistence(persistence)),
+                    Err(rollback) => Err(ClipboardMonitoringError::Rollback {
+                        persistence,
+                        rollback,
+                    }),
+                };
             }
         } else {
             self.clipboard_listener.stop()?;
-            if clipboard_settings::set_monitoring_enabled(&self.storage, false).is_err() {
+            if let Err(persistence) =
+                clipboard_settings::set_monitoring_enabled(&self.storage, false)
+            {
                 if was_enabled {
-                    let _ = self.start_clipboard_listener(sink);
+                    return match self.start_clipboard_listener(sink) {
+                        Ok(()) => Err(ClipboardMonitoringError::Persistence(persistence)),
+                        Err(rollback) => Err(ClipboardMonitoringError::Rollback {
+                            persistence,
+                            rollback,
+                        }),
+                    };
                 }
-                return Err(ClipboardListenerError::StateLockPoisoned);
+                return Err(ClipboardMonitoringError::Persistence(persistence));
             }
         }
         Ok(self.clipboard_listener.status())
@@ -241,6 +288,10 @@ impl ApplicationRuntime {
 
     pub(crate) fn autostart(&self) -> &AutostartManager {
         &self.autostart
+    }
+
+    pub(crate) fn elevated_autostart(&self) -> &ElevatedAutostartManager {
+        &self.elevated_autostart
     }
 
     /// Whether a normal (non-autostart) launch should stay hidden in the tray.
@@ -299,7 +350,7 @@ impl ApplicationRuntime {
         let desired = disabled_hotkeys::desired_disabled_letters(snapshot);
         match self.system_hotkeys.reconcile(&desired) {
             Ok(outcome) => {
-                debug_qa::trace(format!(
+                debug_qa::trace!(format!(
                     "disabled-hotkeys reconciled changed={} value={:?} managed={:?}",
                     outcome.changed, outcome.registry_value, outcome.managed_letters
                 ));
@@ -351,6 +402,7 @@ impl ApplicationRuntime {
         let system_hotkeys =
             SystemHotkeyDisabler::for_system(Arc::clone(&storage) as Arc<dyn OwnedLettersStore>);
         let autostart = AutostartManager::for_system()?;
+        let elevated_autostart = ElevatedAutostartManager::for_system()?;
         Ok(Self {
             storage,
             clipboard,
@@ -367,6 +419,7 @@ impl ApplicationRuntime {
             keyboard_hook,
             system_hotkeys,
             autostart,
+            elevated_autostart,
             data_directory,
             theme,
             usage_statistics,
@@ -556,6 +609,42 @@ mod tests {
         assert_eq!(
             runtime.clipboard_listener().status(),
             super::super::clipboard_listener::ClipboardListenerStatus::Stopped
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repeated_monitoring_preferences_reconcile_listener_without_state_drift() {
+        use super::super::clipboard_listener::ClipboardListenerStatus;
+
+        let temp = tempdir().unwrap();
+        let runtime =
+            ApplicationRuntime::from_app_data_dir(temp.path().join("application-data")).unwrap();
+        let sink: ClipboardHistoryEventSink = Arc::new(|| {});
+
+        assert_eq!(
+            runtime
+                .set_clipboard_monitoring_enabled(true, Arc::clone(&sink))
+                .unwrap(),
+            ClipboardListenerStatus::Running
+        );
+        assert_eq!(
+            runtime
+                .set_clipboard_monitoring_enabled(true, Arc::clone(&sink))
+                .unwrap(),
+            ClipboardListenerStatus::Running
+        );
+        assert_eq!(
+            runtime
+                .set_clipboard_monitoring_enabled(false, Arc::clone(&sink))
+                .unwrap(),
+            ClipboardListenerStatus::Stopped
+        );
+        assert_eq!(
+            runtime
+                .set_clipboard_monitoring_enabled(false, sink)
+                .unwrap(),
+            ClipboardListenerStatus::Stopped
         );
     }
 

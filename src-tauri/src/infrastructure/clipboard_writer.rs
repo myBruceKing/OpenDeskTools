@@ -8,8 +8,8 @@ use super::clipboard::ClipboardWriteContent;
 const CF_UNICODETEXT_FORMAT: u32 = 13;
 const CF_HDROP_FORMAT: u32 = 15;
 const CF_DIBV5_FORMAT: u32 = 17;
-const OPEN_ATTEMPTS: usize = 5;
-const OPEN_RETRY_DELAY: Duration = Duration::from_millis(12);
+const OPEN_ATTEMPTS: usize = 20;
+const OPEN_RETRY_DELAY: Duration = Duration::from_millis(15);
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ClipboardWriterError {
@@ -307,12 +307,9 @@ fn write_prepared<O: ClipboardOps>(
         }
     }
     let sequence = clipboard.0.sequence();
-    if sequence == 0 {
-        return Err(WriteFailure {
-            error: ClipboardWriterError::Busy,
-        });
+    if sequence != 0 {
+        suppress(sequence);
     }
-    suppress(sequence);
     Ok(Some(sequence))
 }
 
@@ -321,15 +318,18 @@ fn replace_current_formats_with_ops<O: ClipboardOps>(
     formats: &[ClipboardFormatBytes],
     suppress: &mut impl FnMut(u32),
 ) -> Result<Option<u32>, ClipboardWriterError> {
-    let expected_sequence = ops.sequence();
-    if expected_sequence == 0 {
-        return Err(ClipboardWriterError::Busy);
-    }
+    // The sequence number is only an optimistic concurrency guard. Windows
+    // returns zero when the current window station cannot expose it, but the
+    // actual OpenClipboard/EmptyClipboard/SetClipboardData transaction can
+    // still provide the authoritative success or failure result.
+    let expected_sequence = match ops.sequence() {
+        0 => None,
+        sequence => Some(sequence),
+    };
     // Allocate every HGLOBAL before Open/EmptyClipboard. If another process
     // changes the clipboard during allocation, write_prepared returns None.
     let prepared = prepare_formats(ops, formats)?;
-    write_prepared(ops, prepared, Some(expected_sequence), suppress)
-        .map_err(|failure| failure.error)
+    write_prepared(ops, prepared, expected_sequence, suppress).map_err(|failure| failure.error)
 }
 
 #[cfg(windows)]
@@ -548,6 +548,7 @@ mod tests {
         prepare_fail_at: Option<usize>,
         set_fail_at: Vec<usize>,
         change_sequence_on_open: bool,
+        keep_sequence_zero: bool,
     }
     impl ClipboardOps for FakeOps {
         type Prepared = ClipboardFormatBytes;
@@ -588,11 +589,15 @@ mod tests {
         fn set_prepared(&mut self, prepared: Self::Prepared) -> bool {
             self.sets += 1;
             if self.set_fail_at.contains(&self.sets) {
-                self.sequence += 1;
+                if !self.keep_sequence_zero {
+                    self.sequence += 1;
+                }
                 return false;
             }
             self.formats.push(prepared);
-            self.sequence += 1;
+            if !self.keep_sequence_zero {
+                self.sequence += 1;
+            }
             true
         }
     }
@@ -621,6 +626,28 @@ mod tests {
         assert_eq!(ops.formats, replacement);
         assert!(ops.unsupported_original_formats.is_empty());
         assert_eq!(suppressed, vec![11]);
+    }
+
+    #[test]
+    fn unavailable_sequence_number_does_not_preempt_a_successful_clipboard_transaction() {
+        let replacement = vec![format(CF_UNICODETEXT_FORMAT, 65)];
+        let mut ops = FakeOps {
+            sequence: 0,
+            keep_sequence_zero: true,
+            ..Default::default()
+        };
+        let mut suppressed = Vec::new();
+
+        assert_eq!(
+            replace_current_formats_with_ops(&mut ops, &replacement, &mut |sequence| {
+                suppressed.push(sequence)
+            })
+            .unwrap(),
+            Some(0)
+        );
+        assert_eq!(ops.emptied, 1);
+        assert_eq!(ops.formats, replacement);
+        assert!(suppressed.is_empty());
     }
 
     #[test]

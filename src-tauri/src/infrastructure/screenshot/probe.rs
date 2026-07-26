@@ -3,8 +3,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::backend::gdi::GdiCaptureBackend;
-use super::backend::{capture_snapshot, CaptureOptions};
+use super::backend::{capture_preferred_snapshot, CaptureOptions};
 use super::model::{CaptureBackendName, DisplayRotation, PhysicalRect};
 use super::monitor::MonitorTopology;
 use super::ScreenshotError;
@@ -36,10 +35,9 @@ pub struct ScreenshotProbeMonitor {
     pub sha256: String,
 }
 
-pub fn run_gdi_probe() -> Result<ScreenshotProbeReport, ScreenshotError> {
+pub fn run_capture_probe() -> Result<ScreenshotProbeReport, ScreenshotError> {
     let topology = MonitorTopology::query()?;
-    let mut backend = GdiCaptureBackend::new();
-    let snapshot = capture_snapshot(&mut backend, &topology, 1, &CaptureOptions::default())?;
+    let snapshot = capture_preferred_snapshot(&topology, 1, &CaptureOptions::default())?;
     let mut total_bytes = 0usize;
     let monitors = snapshot
         .frames

@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type FocusEvent, type KeyboardEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { canonicalHotkeyKeyFromInput } from "../../app/hotkeyKeyContract";
-import styles from "./primitives.module.css";
+import styles from "./Field.module.css";
 
 type SearchFieldProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
   icon?: ReactNode;
