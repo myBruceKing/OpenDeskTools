@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 use super::clipboard::{
-    ClipboardCaptureMetadata, ClipboardError, ClipboardService, JS_MAX_SAFE_INTEGER,
+    file_names, is_common_image_file_name, ClipboardCaptureMetadata, ClipboardError,
+    ClipboardService, JS_MAX_SAFE_INTEGER,
 };
 use super::image::ImageError;
 
@@ -395,8 +396,6 @@ fn process_clipboard_notification<R: ClipboardReader, T: ClipboardRecordTarget>(
         return;
     }
 
-    // File drops are the primary semantic payload. An Explorer-copied image file
-    // remains a file rather than being silently converted to a bitmap preview.
     let files = reader.read_files().unwrap_or(None);
     let image = reader.read_image().unwrap_or(None);
     let text = match (files.is_some() || image.is_some(), reader.read_text()) {
@@ -409,7 +408,33 @@ fn process_clipboard_notification<R: ClipboardReader, T: ClipboardRecordTarget>(
     let Some(sequence) = stable_sequence(sequence, final_sequence) else {
         return;
     };
-    let outcome = if let Some(files) = files {
+    // Chat clients can publish the same copied image as both a synthetic file
+    // drop and a rendered bitmap. Preserve pure file-copy semantics, but prefer
+    // the durable bitmap when a single image file and valid pixels coexist.
+    let prefer_image =
+        image.is_some() && files.as_ref().is_some_and(clipboard_files_are_single_image);
+    let outcome = if prefer_image {
+        let image_outcome = target.record_listener_image(
+            image.expect("image presence was checked"),
+            captured_at_ms,
+            source.clone(),
+        );
+        if image_outcome == ListenerRecordOutcome::PermanentReject {
+            if let Some(files) = files {
+                let files_outcome =
+                    target.record_listener_files(files, captured_at_ms, source.clone());
+                if files_outcome == ListenerRecordOutcome::PermanentReject {
+                    fallback_image_or_text(target, None, text, captured_at_ms, source)
+                } else {
+                    files_outcome
+                }
+            } else {
+                fallback_image_or_text(target, None, text, captured_at_ms, source)
+            }
+        } else {
+            image_outcome
+        }
+    } else if let Some(files) = files {
         let files_outcome = target.record_listener_files(files, captured_at_ms, source.clone());
         if files_outcome == ListenerRecordOutcome::PermanentReject {
             fallback_image_or_text(target, image, text, captured_at_ms, source)
@@ -443,6 +468,13 @@ fn process_clipboard_notification<R: ClipboardReader, T: ClipboardRecordTarget>(
         ListenerRecordOutcome::PermanentReject => commit_sequence(last_sequence, sequence),
         ListenerRecordOutcome::RetryableFailure => {}
     }
+}
+
+fn clipboard_files_are_single_image(files: &ClipboardFiles) -> bool {
+    file_names(&files.paths)
+        .ok()
+        .filter(|names| names.len() == 1)
+        .is_some_and(|names| is_common_image_file_name(&names[0]))
 }
 
 fn fallback_image_or_text<T: ClipboardRecordTarget>(
@@ -2751,6 +2783,7 @@ mod tests {
         images: AtomicUsize,
         texts: AtomicUsize,
         file_outcome: ListenerRecordOutcome,
+        image_outcome: ListenerRecordOutcome,
     }
 
     impl ClipboardRecordTarget for FileTarget {
@@ -2771,7 +2804,7 @@ mod tests {
             _source: ClipboardSourceMetadata,
         ) -> ListenerRecordOutcome {
             self.images.fetch_add(1, Ordering::SeqCst);
-            ListenerRecordOutcome::Recorded { retained: true }
+            self.image_outcome
         }
 
         fn record_listener_files(
@@ -2947,7 +2980,7 @@ mod tests {
     }
 
     #[test]
-    fn file_drop_has_priority_over_bitmap_and_text_with_permanent_reject_fallback() {
+    fn dual_payload_single_image_prefers_bitmap_and_falls_back_to_file() {
         let sink: ClipboardHistoryEventSink = Arc::new(|| {});
         let files = ClipboardFiles {
             paths: vec![r"C:\preview.png".encode_utf16().collect()],
@@ -2962,6 +2995,7 @@ mod tests {
             images: AtomicUsize::new(0),
             texts: AtomicUsize::new(0),
             file_outcome: ListenerRecordOutcome::Recorded { retained: true },
+            image_outcome: ListenerRecordOutcome::Recorded { retained: true },
         };
         let mut reader = FileReader {
             sequences: VecDeque::from([11, 11]),
@@ -2971,8 +3005,8 @@ mod tests {
         };
         let mut sequence = None;
         process_clipboard_notification(&mut reader, &mut sequence, &target, &sink, 1);
-        assert_eq!(target.files.load(Ordering::SeqCst), 1);
-        assert_eq!(target.images.load(Ordering::SeqCst), 0);
+        assert_eq!(target.files.load(Ordering::SeqCst), 0);
+        assert_eq!(target.images.load(Ordering::SeqCst), 1);
         assert_eq!(target.texts.load(Ordering::SeqCst), 0);
         assert_eq!(sequence, Some(11));
 
@@ -2980,7 +3014,8 @@ mod tests {
             files: AtomicUsize::new(0),
             images: AtomicUsize::new(0),
             texts: AtomicUsize::new(0),
-            file_outcome: ListenerRecordOutcome::PermanentReject,
+            file_outcome: ListenerRecordOutcome::Recorded { retained: true },
+            image_outcome: ListenerRecordOutcome::PermanentReject,
         };
         let mut reader = FileReader {
             sequences: VecDeque::from([12, 12]),
@@ -2992,6 +3027,34 @@ mod tests {
         assert_eq!(fallback.files.load(Ordering::SeqCst), 1);
         assert_eq!(fallback.images.load(Ordering::SeqCst), 1);
         assert_eq!(fallback.texts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn pure_file_drop_keeps_file_semantics_for_image_files() {
+        let sink: ClipboardHistoryEventSink = Arc::new(|| {});
+        let target = FileTarget {
+            files: AtomicUsize::new(0),
+            images: AtomicUsize::new(0),
+            texts: AtomicUsize::new(0),
+            file_outcome: ListenerRecordOutcome::Recorded { retained: true },
+            image_outcome: ListenerRecordOutcome::Recorded { retained: true },
+        };
+        let mut reader = FileReader {
+            sequences: VecDeque::from([13, 13]),
+            files: Some(ClipboardFiles {
+                paths: vec![r"C:\photo.jpg".encode_utf16().collect()],
+            }),
+            image: None,
+            text: Some("photo.jpg".to_owned()),
+        };
+        let mut sequence = None;
+
+        process_clipboard_notification(&mut reader, &mut sequence, &target, &sink, 1);
+
+        assert_eq!(target.files.load(Ordering::SeqCst), 1);
+        assert_eq!(target.images.load(Ordering::SeqCst), 0);
+        assert_eq!(target.texts.load(Ordering::SeqCst), 0);
+        assert_eq!(sequence, Some(13));
     }
 
     #[test]

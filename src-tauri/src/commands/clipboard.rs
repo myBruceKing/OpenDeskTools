@@ -3,7 +3,8 @@ use tauri::{ipc::Response, AppHandle, State, WebviewWindow};
 
 use crate::infrastructure::application::{ApplicationRuntime, ClipboardMonitoringError};
 use crate::infrastructure::clipboard::{
-    file_names, ClipboardContentKind, ClipboardError, ClipboardHistoryItem, ClipboardHistoryQuery,
+    file_names, is_common_image_file_name, ClipboardContentKind, ClipboardError,
+    ClipboardHistoryItem, ClipboardHistoryQuery,
 };
 use crate::infrastructure::clipboard_input::{
     ClipboardActionKind, ClipboardActionOutcome, ClipboardInputError,
@@ -802,12 +803,15 @@ fn file_display_category(names: &[String]) -> &'static str {
     if names.len() != 1 {
         return "files";
     }
-    let extension = names[0]
+    if is_common_image_file_name(&names[0]) {
+        return "image";
+    }
+    match names[0]
         .rsplit_once('.')
-        .map(|(_, extension)| extension.to_ascii_lowercase());
-    match extension.as_deref() {
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .as_deref()
+    {
         Some("txt" | "md" | "log" | "csv" | "json" | "xml" | "yaml" | "yml") => "text",
-        Some("png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "tif" | "tiff" | "ico") => "image",
         _ => "files",
     }
 }

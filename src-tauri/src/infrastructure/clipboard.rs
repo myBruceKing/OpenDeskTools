@@ -26,6 +26,15 @@ pub const MAX_CLIPBOARD_FILE_PATHS_JSON_BYTES: usize = 1024 * 1024;
 const APPLICATION_SOURCE_NAME: &str = "OpenDeskTools";
 const APPLICATION_SOURCE_PROCESS_FALLBACK: &str = "OpenDeskTools.exe";
 
+pub(crate) fn is_common_image_file_name(name: &str) -> bool {
+    matches!(
+        name.rsplit_once('.')
+            .map(|(_, extension)| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "tif" | "tiff" | "ico")
+    )
+}
+
 #[cfg(test)]
 type AfterImageStoreHook = Arc<dyn Fn(&ClipboardCaptureMetadata) + Send + Sync + 'static>;
 
@@ -1357,6 +1366,16 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn common_image_file_names_are_classified_case_insensitively() {
+        for name in ["photo.png", "PHOTO.JPG", "capture.WebP", "scan.tiff"] {
+            assert!(is_common_image_file_name(name), "{name}");
+        }
+        for name in ["photo", "archive.zip", "notes.md", "image.png.exe"] {
+            assert!(!is_common_image_file_name(name), "{name}");
+        }
+    }
 
     fn service() -> (tempfile::TempDir, Arc<StorageService>, ClipboardService) {
         let temp = tempdir().unwrap();
