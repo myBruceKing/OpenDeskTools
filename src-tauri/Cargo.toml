@@ -34,7 +34,6 @@ quircs = "0.10.3"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-tauri-plugin-single-instance = "2"
 rfd = { version = "0.17.2", default-features = false, features = ["common-controls-v6"] }
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",

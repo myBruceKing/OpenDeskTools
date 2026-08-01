@@ -47,7 +47,8 @@ pub enum ElevatedAutostartError {
 
 /// Redirects a normal, non-elevated double-click through the already-authorized
 /// task. The task starts a short-lived elevated peer that can cross the
-/// integrity boundary and notify the existing elevated single instance.
+/// integrity boundary and notify the existing elevated primary process before
+/// the peer initializes Tauri.
 pub fn redirect_normal_launch(
     arguments: impl IntoIterator<Item = OsString>,
 ) -> Result<bool, ElevatedAutostartError> {
@@ -74,7 +75,8 @@ pub fn redirect_normal_launch(
     Ok(true)
 }
 
-/// Consumes a recent wake request before the single-instance plugin runs. If
+/// Consumes a recent wake request before process-level single-instance
+/// arbitration runs. If
 /// no elevated instance exists, this lets the task-started process show its own
 /// main window instead of remaining hidden as a login launch.
 pub fn consume_wake_request() -> bool {

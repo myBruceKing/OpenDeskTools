@@ -8,7 +8,14 @@ use thiserror::Error;
 
 const EVENT_CAPACITY: usize = 64;
 const VK_TAB: u32 = 0x09;
+const VK_RETURN: u32 = 0x0d;
 const VK_ESCAPE: u32 = 0x1b;
+const VK_PRIOR: u32 = 0x21;
+const VK_NEXT: u32 = 0x22;
+const VK_END: u32 = 0x23;
+const VK_HOME: u32 = 0x24;
+const VK_UP: u32 = 0x26;
+const VK_DOWN: u32 = 0x28;
 const VK_V: u32 = 0x56;
 const VK_LWIN: u32 = 0x5b;
 const VK_RWIN: u32 = 0x5c;
@@ -35,6 +42,48 @@ pub enum RuntimeHotkeyPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceNavigationKey {
+    ArrowUp,
+    ArrowDown,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+    Enter,
+}
+
+impl SurfaceNavigationKey {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ArrowUp => "arrow_up",
+            Self::ArrowDown => "arrow_down",
+            Self::PageUp => "page_up",
+            Self::PageDown => "page_down",
+            Self::Home => "home",
+            Self::End => "end",
+            Self::Enter => "enter",
+        }
+    }
+
+    const fn from_virtual_key(virtual_key: u32) -> Option<Self> {
+        match virtual_key {
+            VK_UP => Some(Self::ArrowUp),
+            VK_DOWN => Some(Self::ArrowDown),
+            VK_PRIOR => Some(Self::PageUp),
+            VK_NEXT => Some(Self::PageDown),
+            VK_HOME => Some(Self::Home),
+            VK_END => Some(Self::End),
+            VK_RETURN => Some(Self::Enter),
+            _ => None,
+        }
+    }
+
+    const fn repeats(self) -> bool {
+        !matches!(self, Self::Enter)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeHotkeyEvent {
     pub generation: u64,
     pub phase: RuntimeHotkeyPhase,
@@ -46,6 +95,7 @@ pub struct RuntimeHotkeyEvent {
 type RuntimeSink = Arc<dyn Fn(RuntimeHotkeyEvent) + Send + Sync + 'static>;
 type CaptureSink = Arc<dyn Fn(u64, String) + Send + Sync + 'static>;
 type SurfaceEscapeSink = Arc<dyn Fn(u64) + Send + Sync + 'static>;
+type SurfaceNavigationSink = Arc<dyn Fn(u64, SurfaceNavigationKey) + Send + Sync + 'static>;
 
 #[derive(Debug, Error)]
 pub enum KeyboardHookError {
@@ -85,10 +135,25 @@ struct SurfaceEscapeRegistration {
     sink: SurfaceEscapeSink,
 }
 
+#[derive(Clone)]
+struct SurfaceNavigationRegistration {
+    generation: u64,
+    sink: SurfaceNavigationSink,
+}
+
 enum BrokerEvent {
     Runtime(RuntimeHotkeyEvent),
-    Capture { session_id: u64, token: String },
-    SurfaceEscape { generation: u64 },
+    Capture {
+        session_id: u64,
+        token: String,
+    },
+    SurfaceEscape {
+        generation: u64,
+    },
+    SurfaceNavigation {
+        generation: u64,
+        key: SurfaceNavigationKey,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -295,14 +360,78 @@ impl SurfaceEscapeKeyState {
     }
 }
 
+#[derive(Debug, Default)]
+struct SurfaceNavigationKeyState {
+    pressed_modifiers: HashSet<u32>,
+    captured_keys: HashSet<u32>,
+}
+
+impl SurfaceNavigationKeyState {
+    fn clear(&mut self) {
+        self.pressed_modifiers.clear();
+        self.captured_keys.clear();
+    }
+
+    fn handle(
+        &mut self,
+        registration: &SurfaceNavigationRegistration,
+        virtual_key: u32,
+        transition: KeyTransition,
+        events: &SyncSender<BrokerEvent>,
+    ) -> bool {
+        if is_modifier(virtual_key) {
+            match transition {
+                KeyTransition::Down => {
+                    self.pressed_modifiers.insert(virtual_key);
+                }
+                KeyTransition::Up => {
+                    self.pressed_modifiers.remove(&virtual_key);
+                }
+            }
+            return false;
+        }
+        let Some(key) = SurfaceNavigationKey::from_virtual_key(virtual_key) else {
+            return false;
+        };
+        match transition {
+            KeyTransition::Down => {
+                if self.captured_keys.contains(&virtual_key) {
+                    if key.repeats() {
+                        let _ = events.try_send(BrokerEvent::SurfaceNavigation {
+                            generation: registration.generation,
+                            key,
+                        });
+                    }
+                    return true;
+                }
+                if !self.pressed_modifiers.is_empty()
+                    || events
+                        .try_send(BrokerEvent::SurfaceNavigation {
+                            generation: registration.generation,
+                            key,
+                        })
+                        .is_err()
+                {
+                    return false;
+                }
+                self.captured_keys.insert(virtual_key);
+                true
+            }
+            KeyTransition::Up => self.captured_keys.remove(&virtual_key),
+        }
+    }
+}
+
 #[derive(Default)]
 struct BrokerState {
     runtime: Option<RuntimeRegistration>,
     capture: Option<CaptureRegistration>,
     surface_escapes: Vec<SurfaceEscapeRegistration>,
+    surface_navigation: Option<SurfaceNavigationRegistration>,
     runtime_keys: RuntimeKeyState,
     capture_keys: CaptureKeyState,
     surface_escape_keys: SurfaceEscapeKeyState,
+    surface_navigation_keys: SurfaceNavigationKeyState,
 }
 
 impl std::fmt::Debug for BrokerState {
@@ -328,6 +457,14 @@ impl std::fmt::Debug for BrokerState {
                     .collect::<Vec<_>>(),
             )
             .field("surface_escape_keys", &self.surface_escape_keys)
+            .field(
+                "surface_navigation_generation",
+                &self
+                    .surface_navigation
+                    .as_ref()
+                    .map(|registration| registration.generation),
+            )
+            .field("surface_navigation_keys", &self.surface_navigation_keys)
             .finish()
     }
 }
@@ -347,6 +484,7 @@ struct BrokerInner {
     next_generation: AtomicU64,
     next_session: AtomicU64,
     next_surface_escape_generation: AtomicU64,
+    next_surface_navigation_generation: AtomicU64,
 }
 
 impl Default for BrokerInner {
@@ -357,6 +495,7 @@ impl Default for BrokerInner {
             next_generation: AtomicU64::new(0),
             next_session: AtomicU64::new(0),
             next_surface_escape_generation: AtomicU64::new(0),
+            next_surface_navigation_generation: AtomicU64::new(0),
         }
     }
 }
@@ -411,6 +550,51 @@ impl KeyboardHookBroker {
         Ok(true)
     }
 
+    pub fn register_surface_navigation<F>(&self, sink: F) -> Result<u64, KeyboardHookError>
+    where
+        F: Fn(u64, SurfaceNavigationKey) + Send + Sync + 'static,
+    {
+        self.ensure_started()?;
+        let generation = self
+            .inner
+            .next_surface_navigation_generation
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| KeyboardHookError::LockPoisoned)?;
+        state.surface_navigation_keys.clear();
+        state.surface_navigation = Some(SurfaceNavigationRegistration {
+            generation,
+            sink: Arc::new(sink),
+        });
+        Ok(generation)
+    }
+
+    pub fn unregister_surface_navigation(
+        &self,
+        generation: u64,
+    ) -> Result<bool, KeyboardHookError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| KeyboardHookError::LockPoisoned)?;
+        if state
+            .surface_navigation
+            .as_ref()
+            .map(|registration| registration.generation)
+            != Some(generation)
+        {
+            return Ok(false);
+        }
+        state.surface_navigation = None;
+        state.surface_navigation_keys.clear();
+        Ok(true)
+    }
+
     pub fn register_win_v<F>(&self, sink: F) -> Result<u64, KeyboardHookError>
     where
         F: Fn(RuntimeHotkeyEvent) + Send + Sync + 'static,
@@ -458,6 +642,7 @@ impl KeyboardHookBroker {
         state.capture_keys.clear();
         state.runtime_keys.clear();
         state.surface_escape_keys.clear();
+        state.surface_navigation_keys.clear();
         state.capture = Some(CaptureRegistration {
             session_id,
             target_window,
@@ -479,6 +664,7 @@ impl KeyboardHookBroker {
         state.capture_keys.clear();
         state.runtime_keys.clear();
         state.surface_escape_keys.clear();
+        state.surface_navigation_keys.clear();
         Ok(true)
     }
 
@@ -492,6 +678,7 @@ impl KeyboardHookBroker {
         state.capture_keys.clear();
         state.runtime_keys.clear();
         state.surface_escape_keys.clear();
+        state.surface_navigation_keys.clear();
         Ok(())
     }
 
@@ -505,9 +692,11 @@ impl KeyboardHookBroker {
             state.runtime = None;
             state.capture = None;
             state.surface_escapes.clear();
+            state.surface_navigation = None;
             state.runtime_keys.clear();
             state.capture_keys.clear();
             state.surface_escape_keys.clear();
+            state.surface_navigation_keys.clear();
         }
         let mut worker = self
             .inner
@@ -640,6 +829,18 @@ fn dispatch_event(inner: &BrokerInner, event: BrokerEvent) {
             });
             if let Some(sink) = sink {
                 sink(generation);
+            }
+        }
+        BrokerEvent::SurfaceNavigation { generation, key } => {
+            let sink = inner.state.lock().ok().and_then(|state| {
+                state
+                    .surface_navigation
+                    .as_ref()
+                    .filter(|registration| registration.generation == generation)
+                    .map(|registration| Arc::clone(&registration.sink))
+            });
+            if let Some(sink) = sink {
+                sink(generation, key);
             }
         }
     }
@@ -917,6 +1118,18 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
     } else {
         state.surface_escape_keys.clear();
     }
+    if let Some(surface_navigation) = state.surface_navigation.clone() {
+        if state.surface_navigation_keys.handle(
+            &surface_navigation,
+            keyboard.vkCode,
+            transition,
+            &context.events,
+        ) {
+            return 1;
+        }
+    } else {
+        state.surface_navigation_keys.clear();
+    }
     if let Some(runtime) = state.runtime.clone() {
         if state.runtime_keys.handle(
             &runtime,
@@ -949,6 +1162,13 @@ mod tests {
         SurfaceEscapeRegistration {
             generation,
             sink: Arc::new(|_| {}),
+        }
+    }
+
+    fn surface_navigation_registration(generation: u64) -> SurfaceNavigationRegistration {
+        SurfaceNavigationRegistration {
+            generation,
+            sink: Arc::new(|_, _| {}),
         }
     }
 
@@ -991,6 +1211,47 @@ mod tests {
             &tx,
         ));
         assert_eq!(state.latched_generation, None);
+    }
+
+    #[test]
+    fn surface_navigation_suppresses_bare_keys_and_emits_repeatable_movement() {
+        let (tx, rx) = mpsc::sync_channel(8);
+        let mut state = SurfaceNavigationKeyState::default();
+        let registration = surface_navigation_registration(12);
+
+        assert!(state.handle(&registration, VK_DOWN, KeyTransition::Down, &tx));
+        assert!(state.handle(&registration, VK_DOWN, KeyTransition::Down, &tx));
+        assert!(state.handle(&registration, VK_DOWN, KeyTransition::Up, &tx));
+
+        let events = rx.try_iter().collect::<Vec<_>>();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(
+            event,
+            BrokerEvent::SurfaceNavigation {
+                generation: 12,
+                key: SurfaceNavigationKey::ArrowDown
+            }
+        )));
+    }
+
+    #[test]
+    fn surface_navigation_latches_enter_once_and_passes_modified_or_unqueued_keys() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let mut state = SurfaceNavigationKeyState::default();
+        let registration = surface_navigation_registration(13);
+
+        assert!(state.handle(&registration, VK_RETURN, KeyTransition::Down, &tx));
+        assert!(state.handle(&registration, VK_RETURN, KeyTransition::Down, &tx));
+        assert!(state.handle(&registration, VK_RETURN, KeyTransition::Up, &tx));
+        assert_eq!(rx.try_iter().count(), 1);
+
+        assert!(!state.handle(&registration, VK_CONTROL, KeyTransition::Down, &tx));
+        assert!(!state.handle(&registration, VK_HOME, KeyTransition::Down, &tx));
+        assert!(!state.handle(&registration, VK_CONTROL, KeyTransition::Up, &tx));
+
+        let (full_tx, _full_rx) = mpsc::sync_channel(0);
+        assert!(!state.handle(&registration, VK_END, KeyTransition::Down, &full_tx));
+        assert!(!state.captured_keys.contains(&VK_END));
     }
 
     #[test]
@@ -1096,6 +1357,7 @@ mod tests {
                 sink: Arc::new(|_, _| {}),
             });
             state.surface_escapes.push(surface_escape_registration(6));
+            state.surface_navigation = Some(surface_navigation_registration(7));
         }
         assert!(!broker.unregister_win_v(2).unwrap());
         assert!(broker.inner.state.lock().unwrap().runtime.is_some());
@@ -1105,6 +1367,8 @@ mod tests {
         assert!(broker.stop_capture(4).unwrap());
         assert!(!broker.unregister_surface_escape(5).unwrap());
         assert!(broker.unregister_surface_escape(6).unwrap());
+        assert!(!broker.unregister_surface_navigation(6).unwrap());
+        assert!(broker.unregister_surface_navigation(7).unwrap());
     }
 
     #[test]

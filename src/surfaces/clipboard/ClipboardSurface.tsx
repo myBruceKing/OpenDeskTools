@@ -10,7 +10,8 @@ import {
 } from "react";
 import type {
   ClipboardPreviewDebugEvent,
-  ClipboardPreviewHoverChange
+  ClipboardPreviewHoverChange,
+  ClipboardSurfaceNavigationKey
 } from "../../app/clipboardClient";
 import type {
   ClipboardControllerState,
@@ -43,6 +44,9 @@ type ClipboardSurfaceProps = {
   onSubscribePreviewHover: (
     listener: (change: ClipboardPreviewHoverChange) => void
   ) => Promise<() => void>;
+  onSubscribeSurfaceNavigation: (
+    listener: (key: ClipboardSurfaceNavigationKey) => void
+  ) => Promise<() => void>;
   onTracePreviewDebug: (
     event: ClipboardPreviewDebugEvent,
     recordId?: string | null
@@ -74,6 +78,7 @@ export function ClipboardSurface({
   onOpenPreview,
   onClosePreview,
   onSubscribePreviewHover,
+  onSubscribeSurfaceNavigation,
   onTracePreviewDebug
 }: ClipboardSurfaceProps) {
   const [filter, setFilter] = useState<ClipboardFilter>("all");
@@ -87,7 +92,10 @@ export function ClipboardSurface({
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [visibleItemAction, setVisibleItemAction] = useState(state.surfaceActive ? state.itemAction : null);
+  const historyRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const selectedIdRef = useRef<string | null>(null);
+  const surfaceNavigationHandler = useRef<(key: ClipboardSurfaceNavigationKey) => void>(() => undefined);
   const previewCloseTimer = useRef<number | null>(null);
   const previewIdRef = useRef<string | null>(null);
   const previewCommandGeneration = useRef(0);
@@ -101,6 +109,7 @@ export function ClipboardSurface({
     return true;
   }), [filter, state.viewModel.items]);
   const selectedItem = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
+  selectedIdRef.current = selectedItem?.id ?? null;
   const menuItem = menu ? items.find((item) => item.id === menu.id) ?? null : null;
   const deleteItem = deleteId ? state.viewModel.items.find((item) => item.id === deleteId) ?? null : null;
 
@@ -261,15 +270,48 @@ export function ClipboardSurface({
   }, [previewId]);
 
   const focusItem = (id: string) => {
+    selectedIdRef.current = id;
     setSelectedId(id);
-    window.requestAnimationFrame(() => rowRefs.current.get(id)?.focus());
+    window.requestAnimationFrame(() => {
+      const row = rowRefs.current.get(id);
+      row?.scrollIntoView({ block: "nearest" });
+      row?.focus();
+    });
   };
 
-  const moveSelection = (direction: number) => {
-    if (!selectedItem) return;
-    const index = items.findIndex((item) => item.id === selectedItem.id);
+  const selectItemWithoutActivation = (id: string) => {
+    selectedIdRef.current = id;
+    setSelectedId(id);
+    window.requestAnimationFrame(() => {
+      rowRefs.current.get(id)?.scrollIntoView({ block: "nearest" });
+      openPreview(id);
+    });
+  };
+
+  const moveSelection = (direction: number, activateDomFocus = true) => {
+    const index = items.findIndex((item) => item.id === selectedIdRef.current);
+    if (index < 0) return;
     const next = items[Math.min(items.length - 1, Math.max(0, index + direction))];
-    if (next) focusItem(next.id);
+    if (!next) return;
+    if (activateDomFocus) focusItem(next.id);
+    else selectItemWithoutActivation(next.id);
+  };
+
+  const pageSelectionStep = () => {
+    const viewportHeight = historyRef.current?.clientHeight ?? 0;
+    const selectedRow = selectedIdRef.current
+      ? rowRefs.current.get(selectedIdRef.current)
+      : undefined;
+    const rowHeight = selectedRow?.getBoundingClientRect().height ?? 0;
+    if (viewportHeight <= 0 || rowHeight <= 0) return 1;
+    return Math.max(1, Math.floor(viewportHeight / rowHeight));
+  };
+
+  const selectBoundary = (boundary: "first" | "last", activateDomFocus = true) => {
+    const item = boundary === "first" ? items[0] : items[items.length - 1];
+    if (!item) return;
+    if (activateDomFocus) focusItem(item.id);
+    else selectItemWithoutActivation(item.id);
   };
 
   const requestDelete = (id: string) => {
@@ -301,6 +343,49 @@ export function ClipboardSurface({
     }
     void onClose();
   };
+
+  surfaceNavigationHandler.current = (key) => {
+    if (!state.surfaceActive || menu || deleteId || document.querySelector('[role="dialog"]')) {
+      return;
+    }
+    if (key === "arrow_down") {
+      moveSelection(1, false);
+    } else if (key === "arrow_up") {
+      moveSelection(-1, false);
+    } else if (key === "page_down") {
+      moveSelection(pageSelectionStep(), false);
+    } else if (key === "page_up") {
+      moveSelection(-pageSelectionStep(), false);
+    } else if (key === "home") {
+      selectBoundary("first", false);
+    } else if (key === "end") {
+      selectBoundary("last", false);
+    } else if (key === "enter") {
+      const item = items.find((candidate) => candidate.id === selectedIdRef.current);
+      const pending = item && (
+        state.pendingItemIds.includes(item.id)
+        || (state.itemAction?.status === "pending" && state.itemAction.itemId === item.id)
+      );
+      if (item && state.viewModel.actions.canTypeIntoTarget && !pending) onInput(item.id);
+    }
+  };
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onSubscribeSurfaceNavigation((key) => {
+      if (!disposed) surfaceNavigationHandler.current(key);
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    }).catch((error) => {
+      console.error("Failed to subscribe to clipboard surface navigation", error);
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [onSubscribeSurfaceNavigation]);
 
   useEffect(() => {
     const handleEscape = (event: globalThis.KeyboardEvent) => {
@@ -366,6 +451,7 @@ export function ClipboardSurface({
       </header>
 
       <div
+        ref={historyRef}
         className={styles.history}
         role="listbox"
         aria-label="剪贴板历史"
@@ -405,6 +491,7 @@ export function ClipboardSurface({
               tabIndex={selected ? 0 : -1}
               key={item.id}
               onFocus={(event) => {
+                selectedIdRef.current = item.id;
                 setSelectedId(item.id);
                 setMenu(null);
                 openPreview(item.id);
@@ -421,6 +508,7 @@ export function ClipboardSurface({
                 if (event.detail > 1) event.preventDefault();
               }}
               onClick={() => {
+                selectedIdRef.current = item.id;
                 setSelectedId(item.id);
                 setMenu(null);
               }}
@@ -436,12 +524,18 @@ export function ClipboardSurface({
                 } else if (event.key === "ArrowUp") {
                   event.preventDefault();
                   moveSelection(-1);
+                } else if (event.key === "PageDown") {
+                  event.preventDefault();
+                  moveSelection(pageSelectionStep());
+                } else if (event.key === "PageUp") {
+                  event.preventDefault();
+                  moveSelection(-pageSelectionStep());
                 } else if (event.key === "Home" && items[0]) {
                   event.preventDefault();
-                  focusItem(items[0].id);
+                  selectBoundary("first");
                 } else if (event.key === "End" && items[items.length - 1]) {
                   event.preventDefault();
-                  focusItem(items[items.length - 1].id);
+                  selectBoundary("last");
                 } else if (event.key === "Enter" && state.viewModel.actions.canTypeIntoTarget && !pending) {
                   event.preventDefault();
                   onInput(item.id);

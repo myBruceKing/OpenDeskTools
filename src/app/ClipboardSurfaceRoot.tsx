@@ -27,6 +27,7 @@ export function ClipboardSurfaceRoot() {
         onOpenPreview={clipboardClient.openPreviewSurface}
         onClosePreview={clipboardClient.closePreviewSurface}
         onSubscribePreviewHover={clipboardClient.subscribePreviewHover}
+        onSubscribeSurfaceNavigation={clipboardClient.subscribeSurfaceNavigation}
         onTracePreviewDebug={clipboardClient.tracePreviewDebug}
       />
     </div>

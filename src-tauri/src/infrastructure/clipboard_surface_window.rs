@@ -14,7 +14,7 @@ mod native_policy;
 use super::application::ApplicationRuntime;
 use super::clipboard_surface_foreground::{self, ForegroundMonitorError};
 use super::debug_qa;
-use super::keyboard_hook::KeyboardHookError;
+use super::keyboard_hook::{KeyboardHookError, SurfaceNavigationKey};
 use super::surface::{SurfaceError, SurfaceManager};
 use super::surface_pointer_monitor::{
     self, PointerMonitorError, PointerMonitorOwner, PointerObservation,
@@ -53,6 +53,7 @@ const DEFAULT_CLIPBOARD_SURFACE_UNDERLAY: ClipboardSurfaceUnderlayColor =
     ClipboardSurfaceUnderlayColor::new(0xe0, 0xde, 0xdc);
 const CLIPBOARD_SURFACE_STATE_EVENT: &str = "clipboard://history-changed";
 const CLIPBOARD_PREVIEW_STATE_EVENT: &str = "clipboard://preview-changed";
+const CLIPBOARD_SURFACE_NAVIGATION_EVENT: &str = "clipboard://surface-navigation";
 pub(crate) const CLIPBOARD_SURFACE_OPENED_CHANGE: &str = "surface_opened";
 pub(crate) const CLIPBOARD_SURFACE_CLOSED_CHANGE: &str = "surface_closed";
 
@@ -176,6 +177,12 @@ struct ClipboardPreviewStateEvent {
     visible: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardSurfaceNavigationEvent {
+    key: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardPreviewSurfaceState {
@@ -190,6 +197,7 @@ struct ClipboardPreviewSelection {
 
 static CLIPBOARD_PREVIEW_SELECTION: OnceLock<Mutex<ClipboardPreviewSelection>> = OnceLock::new();
 static CLIPBOARD_ESCAPE_GENERATION: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
+static CLIPBOARD_NAVIGATION_GENERATION: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
 
 fn preview_selection() -> &'static Mutex<ClipboardPreviewSelection> {
     CLIPBOARD_PREVIEW_SELECTION.get_or_init(|| Mutex::new(ClipboardPreviewSelection::default()))
@@ -197,6 +205,10 @@ fn preview_selection() -> &'static Mutex<ClipboardPreviewSelection> {
 
 fn escape_generation_slot() -> &'static Mutex<Option<u64>> {
     CLIPBOARD_ESCAPE_GENERATION.get_or_init(|| Mutex::new(None))
+}
+
+fn navigation_generation_slot() -> &'static Mutex<Option<u64>> {
+    CLIPBOARD_NAVIGATION_GENERATION.get_or_init(|| Mutex::new(None))
 }
 
 trait NativeVisibilityApi {
@@ -225,6 +237,8 @@ pub enum ClipboardSurfaceWindowError {
     PreviewStatePoisoned,
     #[error("clipboard Escape registration state lock is poisoned")]
     EscapeStatePoisoned,
+    #[error("clipboard navigation registration state lock is poisoned")]
+    NavigationStatePoisoned,
     #[error("clipboard preview surface remained hidden after the native show request")]
     PreviewStillHidden,
     #[error(transparent)]
@@ -561,6 +575,11 @@ pub fn close<R: Runtime>(
     }
     result?;
     if let Some(runtime) = app.try_state::<ApplicationRuntime>() {
+        if let Err(error) = stop_navigation_monitor(&runtime) {
+            eprintln!("failed to stop clipboard navigation capture after closing: {error}");
+        } else {
+            debug_qa::trace!("surface navigation capture stopped");
+        }
         if let Err(error) = stop_escape_monitor(&runtime) {
             eprintln!("failed to stop clipboard Escape capture after closing: {error}");
         } else {
@@ -593,6 +612,7 @@ fn start_surface_monitors<R: Runtime>(
     let runtime = app
         .try_state::<ApplicationRuntime>()
         .ok_or(ClipboardSurfaceWindowError::ApplicationRuntimeUnavailable)?;
+    stop_navigation_monitor(&runtime)?;
     stop_escape_monitor(&runtime)?;
     let escape_app = app.clone();
     let escape_generation = runtime
@@ -609,6 +629,38 @@ fn start_surface_monitors<R: Runtime>(
     debug_qa::trace!(format!(
         "surface Escape capture start generation={escape_generation}"
     ));
+    let navigation_app = app.clone();
+    let navigation_generation =
+        match runtime
+            .keyboard_hook()
+            .register_surface_navigation(move |generation, key| {
+                debug_qa::trace!(format!(
+                    "surface navigation captured generation={generation} key={}",
+                    key.as_str()
+                ));
+                emit_surface_navigation(&navigation_app, key);
+            }) {
+            Ok(generation) => generation,
+            Err(error) => {
+                let _ = stop_escape_monitor(&runtime);
+                return Err(error.into());
+            }
+        };
+    let mut navigation_slot = match navigation_generation_slot().lock() {
+        Ok(slot) => slot,
+        Err(_) => {
+            let _ = runtime
+                .keyboard_hook()
+                .unregister_surface_navigation(navigation_generation);
+            let _ = stop_escape_monitor(&runtime);
+            return Err(ClipboardSurfaceWindowError::NavigationStatePoisoned);
+        }
+    };
+    *navigation_slot = Some(navigation_generation);
+    drop(navigation_slot);
+    debug_qa::trace!(format!(
+        "surface navigation capture start generation={navigation_generation}"
+    ));
     if let Some(target_top_window) = target_top_window {
         let dispatch_app = app.clone();
         if let Err(error) = clipboard_surface_foreground::start(
@@ -624,6 +676,7 @@ fn start_surface_monitors<R: Runtime>(
                 );
             },
         ) {
+            let _ = stop_navigation_monitor(&runtime);
             let _ = stop_escape_monitor(&runtime);
             return Err(error.into());
         }
@@ -644,6 +697,7 @@ fn start_surface_monitors<R: Runtime>(
         },
     ) {
         let _ = clipboard_surface_foreground::stop();
+        let _ = stop_navigation_monitor(&runtime);
         let _ = stop_escape_monitor(&runtime);
         return Err(error.into());
     }
@@ -663,6 +717,36 @@ pub(crate) fn stop_escape_monitor(
             .unregister_surface_escape(generation)?;
     }
     Ok(())
+}
+
+pub(crate) fn stop_navigation_monitor(
+    runtime: &ApplicationRuntime,
+) -> Result<(), ClipboardSurfaceWindowError> {
+    let generation = navigation_generation_slot()
+        .lock()
+        .map_err(|_| ClipboardSurfaceWindowError::NavigationStatePoisoned)?
+        .take();
+    if let Some(generation) = generation {
+        let _ = runtime
+            .keyboard_hook()
+            .unregister_surface_navigation(generation)?;
+    }
+    Ok(())
+}
+
+fn emit_surface_navigation<R: Runtime>(app: &AppHandle<R>, key: SurfaceNavigationKey) {
+    let Some(window) = app.get_webview_window(CLIPBOARD_SURFACE_LABEL) else {
+        return;
+    };
+    if let Err(error) = window.emit(
+        CLIPBOARD_SURFACE_NAVIGATION_EVENT,
+        ClipboardSurfaceNavigationEvent { key: key.as_str() },
+    ) {
+        eprintln!(
+            "failed to emit clipboard surface navigation key {}: {error}",
+            key.as_str()
+        );
+    }
 }
 
 #[cfg(windows)]

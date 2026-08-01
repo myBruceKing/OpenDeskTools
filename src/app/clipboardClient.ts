@@ -52,6 +52,15 @@ export type ClipboardPreviewDebugEvent =
   | "window_blur_ignored"
   | "surface_metrics";
 
+export type ClipboardSurfaceNavigationKey =
+  | "arrow_up"
+  | "arrow_down"
+  | "page_up"
+  | "page_down"
+  | "home"
+  | "end"
+  | "enter";
+
 function parseClipboardPreviewSurfaceState(value: unknown): ClipboardPreviewSurfaceState {
   if (!value || typeof value !== "object") throw new Error("Invalid clipboard preview surface payload");
   const payload = value as Record<string, unknown>;
@@ -79,6 +88,25 @@ function parseClipboardPreviewHoverChange(value: unknown): ClipboardPreviewHover
   return { inside: payload.inside, recordId: payload.recordId as string | null };
 }
 
+function parseClipboardSurfaceNavigationKey(value: unknown): ClipboardSurfaceNavigationKey {
+  if (!value || typeof value !== "object") {
+    throw new Error("Invalid clipboard surface navigation payload");
+  }
+  const key = (value as Record<string, unknown>).key;
+  if (
+    key !== "arrow_up"
+    && key !== "arrow_down"
+    && key !== "page_up"
+    && key !== "page_down"
+    && key !== "home"
+    && key !== "end"
+    && key !== "enter"
+  ) {
+    throw new Error("Invalid clipboard surface navigation payload");
+  }
+  return key;
+}
+
 export type ClipboardClient = {
   getHistory: (query: ClipboardHistoryQuery) => Promise<ClipboardHistoryResult>;
   setMonitoring: (enabled: boolean) => Promise<ClipboardHistoryResult["monitoring"]>;
@@ -94,6 +122,9 @@ export type ClipboardClient = {
   subscribePreviewSurface: (listener: (change: ClipboardPreviewSurfaceChange) => void) => Promise<() => void>;
   publishPreviewHover: (change: ClipboardPreviewHoverChange) => Promise<void>;
   subscribePreviewHover: (listener: (change: ClipboardPreviewHoverChange) => void) => Promise<() => void>;
+  subscribeSurfaceNavigation: (
+    listener: (key: ClipboardSurfaceNavigationKey) => void
+  ) => Promise<() => void>;
   tracePreviewDebug: (
     event: ClipboardPreviewDebugEvent,
     recordId?: string | null,
@@ -211,6 +242,12 @@ export function createClipboardClient({
     async subscribePreviewHover(listener) {
       return listenFunction("clipboard://preview-hover-changed", (event) => {
         listener(parseClipboardPreviewHoverChange(event.payload));
+      });
+    },
+
+    async subscribeSurfaceNavigation(listener) {
+      return listenFunction("clipboard://surface-navigation", (event) => {
+        listener(parseClipboardSurfaceNavigationKey(event.payload));
       });
     },
 

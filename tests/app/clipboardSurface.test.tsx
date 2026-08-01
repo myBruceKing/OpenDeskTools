@@ -118,6 +118,13 @@ describe("ClipboardSurface", () => {
     previewHoverListener = listener;
     return () => undefined;
   });
+  let surfaceNavigationListener:
+    | ((key: "arrow_up" | "arrow_down" | "page_up" | "page_down" | "home" | "end" | "enter") => void)
+    | undefined;
+  const onSubscribeSurfaceNavigation = vi.fn(async (listener: typeof surfaceNavigationListener) => {
+    surfaceNavigationListener = listener;
+    return () => undefined;
+  });
 
   beforeEach(() => {
     host = document.createElement("div");
@@ -141,6 +148,7 @@ describe("ClipboardSurface", () => {
     document.body.replaceChildren();
     vi.clearAllMocks();
     previewHoverListener = undefined;
+    surfaceNavigationListener = undefined;
   });
 
   async function render(state = readyState()) {
@@ -156,6 +164,7 @@ describe("ClipboardSurface", () => {
         onOpenPreview={onOpenPreview}
         onClosePreview={onClosePreview}
         onSubscribePreviewHover={onSubscribePreviewHover}
+        onSubscribeSurfaceNavigation={onSubscribeSurfaceNavigation}
         onTracePreviewDebug={onTracePreviewDebug}
       />
     ));
@@ -441,6 +450,44 @@ describe("ClipboardSurface", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("navigates the no-activate surface globally without moving focus into the WebView", async () => {
+    const history = Array.from({ length: 12 }, (_, index): ClipboardHistoryItem => ({
+      ...items[0],
+      id: String(index + 1),
+      textContent: `剪贴板内容 ${index + 1}`,
+      capturedAtMs: items[0].capturedAtMs + index
+    }));
+    await render(readyState(history));
+    const listbox = document.querySelector<HTMLElement>("[role='listbox']")!;
+    Object.defineProperty(listbox, "clientHeight", { configurable: true, value: 280 });
+    const navigate = async (
+      key: "arrow_up" | "arrow_down" | "page_up" | "page_down" | "home" | "end" | "enter"
+    ) => {
+      await act(async () => surfaceNavigationListener?.(key));
+    };
+    const selectedText = () =>
+      document.querySelector("[role='option'][aria-selected='true']")?.textContent;
+
+    expect(document.activeElement).toBe(document.body);
+    await navigate("page_down");
+    expect(selectedText()).toContain("剪贴板内容 5");
+    await navigate("arrow_down");
+    expect(selectedText()).toContain("剪贴板内容 6");
+    await navigate("page_up");
+    expect(selectedText()).toContain("剪贴板内容 2");
+    await navigate("end");
+    expect(selectedText()).toContain("剪贴板内容 12");
+    await navigate("home");
+    expect(selectedText()).toContain("剪贴板内容 1");
+    await navigate("arrow_up");
+    expect(selectedText()).toContain("剪贴板内容 1");
+    await navigate("enter");
+
+    expect(onInput).toHaveBeenCalledWith("1");
+    expect(document.activeElement).toBe(document.body);
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
   });
 
   it("opens the same accessible actions from right-click and Shift+F10", async () => {

@@ -27,6 +27,7 @@ pub mod qr_toast_surface_window;
 pub mod quick_launch;
 #[allow(dead_code)]
 pub mod screenshot;
+pub mod single_instance;
 pub mod source_icon;
 #[allow(dead_code)]
 pub mod storage;

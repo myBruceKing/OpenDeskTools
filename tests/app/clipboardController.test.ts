@@ -56,6 +56,7 @@ function makeClient(overrides: Partial<ClipboardClient> = {}): ClipboardClient {
     subscribePreviewSurface: async () => () => undefined,
     publishPreviewHover: async () => undefined,
     subscribePreviewHover: async () => () => undefined,
+    subscribeSurfaceNavigation: async () => () => undefined,
     tracePreviewDebug: async () => undefined,
     setSurfaceUnderlayColor: async () => undefined,
     setFavorite: async (id, isFavorite) => ({

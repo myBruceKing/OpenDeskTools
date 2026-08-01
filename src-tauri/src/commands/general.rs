@@ -189,6 +189,7 @@ pub fn restart_as_administrator<R: Runtime>(app: AppHandle<R>) -> Result<(), Gen
         .name("administrator-restart-exit".to_owned())
         .spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(250));
+            crate::infrastructure::single_instance::stop_listener(&app);
             app.exit(0);
         })
         .map_err(|error| GeneralCommandError {
@@ -253,6 +254,7 @@ pub async fn select_and_migrate_data_directory<R: Runtime>(
     };
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(700));
+        crate::infrastructure::single_instance::stop_listener(&app);
         app.request_restart();
     });
     Ok(Some(result))

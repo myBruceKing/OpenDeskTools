@@ -298,6 +298,7 @@ pub(crate) fn exit_application<R: Runtime>(app: &AppHandle<R>) {
                         eprintln!("failed to clear clipboard surface during exit: {error}");
                     }
                 }
+                super::single_instance::stop_listener(app);
                 app.exit(0);
             }
         }

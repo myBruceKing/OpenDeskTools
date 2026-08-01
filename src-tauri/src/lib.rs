@@ -82,25 +82,20 @@ pub fn run() {
             eprintln!("failed to redirect launch through the elevated task: {error}");
         }
     }
-    let elevated_wake_requested = infrastructure::elevated_autostart::consume_wake_request();
     if let Err(error) = infrastructure::elevation::wait_for_restart_parent() {
         eprintln!("administrator restart handshake failed: {error}");
         return;
     }
-    let builder = tauri::Builder::default();
-    // The official plugin contract requires single-instance to be registered
-    // first because Tauri plugins currently execute in builder order. This
-    // prevents a second process from reaching tray/listener/hook setup.
-    #[cfg(windows)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-        debug_qa::trace!(format!(
-            "single instance activation args_count={} action=wake_main",
-            args.len()
-        ));
-        if let Err(error) = infrastructure::tray::open_main_window(app) {
-            eprintln!("failed to wake the existing main window from a second launch: {error}");
+    let elevated_wake_requested = infrastructure::elevated_autostart::consume_wake_request();
+    let primary_instance = match infrastructure::single_instance::claim() {
+        Ok(infrastructure::single_instance::InstanceClaim::Primary(primary)) => Some(primary),
+        Ok(infrastructure::single_instance::InstanceClaim::SecondaryNotified) => return,
+        Err(error) => {
+            eprintln!("single-instance coordination unavailable; continuing startup: {error}");
+            None
         }
-    }));
+    };
+    let builder = tauri::Builder::default();
 
     builder
         .plugin(
@@ -228,6 +223,10 @@ pub fn run() {
             }
             app.manage(TrayLifecycle::default());
             infrastructure::tray::install(app.handle(), runtime_state.tray_icon_visible())?;
+            if let Some(primary_instance) = primary_instance {
+                let single_instance = primary_instance.start_listener(app.handle())?;
+                app.manage(single_instance);
+            }
             #[cfg(debug_assertions)]
             schedule_debug_qa(app.handle(), qa_options);
             #[cfg(not(debug_assertions))]
@@ -471,6 +470,9 @@ fn handle_clipboard_surface_window_event<R: Runtime>(
             }
         }
         tauri::WindowEvent::Destroyed => {
+            if let Err(error) = clipboard_surface_window::stop_navigation_monitor(&runtime) {
+                eprintln!("failed to stop destroyed clipboard navigation capture: {error}");
+            }
             if let Err(error) = clipboard_surface_window::stop_escape_monitor(&runtime) {
                 eprintln!("failed to stop destroyed clipboard Escape capture: {error}");
             }

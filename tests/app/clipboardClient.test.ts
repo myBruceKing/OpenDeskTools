@@ -191,14 +191,19 @@ describe("clipboardClient", () => {
     const client = createClipboardClient({ listenFunction, emitFunction });
     const previewListener = vi.fn();
     const hoverListener = vi.fn();
+    const navigationListener = vi.fn();
 
     const stopPreview = await client.subscribePreviewSurface(previewListener);
     const stopHover = await client.subscribePreviewHover(hoverListener);
+    const stopNavigation = await client.subscribeSurfaceNavigation(navigationListener);
     handlers.get("clipboard://preview-changed")?.({
       payload: { change: "selection_changed", recordId: "7", visible: true }
     });
     handlers.get("clipboard://preview-hover-changed")?.({
       payload: { inside: true, recordId: "7" }
+    });
+    handlers.get("clipboard://surface-navigation")?.({
+      payload: { key: "page_down" }
     });
     await client.publishPreviewHover({ inside: false, recordId: "7" });
 
@@ -206,12 +211,27 @@ describe("clipboardClient", () => {
       change: "selection_changed", recordId: "7", visible: true
     });
     expect(hoverListener).toHaveBeenCalledWith({ inside: true, recordId: "7" });
+    expect(navigationListener).toHaveBeenCalledWith("page_down");
     expect(emitFunction).toHaveBeenCalledWith(
       "clipboard://preview-hover-changed",
       { inside: false, recordId: "7" }
     );
     stopPreview();
     stopHover();
-    expect(unlisten).toHaveBeenCalledTimes(2);
+    stopNavigation();
+    expect(unlisten).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects unknown clipboard surface navigation keys", async () => {
+    let handler: ((event: { payload: unknown }) => void) | undefined;
+    const client = createClipboardClient({
+      listenFunction: async (_event, eventHandler) => {
+        handler = eventHandler;
+        return () => undefined;
+      }
+    });
+    await client.subscribeSurfaceNavigation(() => undefined);
+    expect(() => handler?.({ payload: { key: "delete_everything" } }))
+      .toThrow("navigation payload");
   });
 });
