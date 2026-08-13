@@ -120,6 +120,15 @@ impl ElevatedAutostartManager {
         self.enabled.store(enabled, Ordering::Release);
         Ok(())
     }
+
+    /// Repairs task settings introduced by newer application versions without
+    /// asking for UAC again when the current process already runs elevated.
+    pub fn reconcile_current_task(&self) -> Result<(), ElevatedAutostartError> {
+        if self.is_enabled() && elevation::is_elevated() {
+            platform::reconcile_task()?;
+        }
+        Ok(())
+    }
 }
 
 /// Handles the short-lived, explicitly elevated configuration mode before
@@ -180,6 +189,9 @@ fn patch_exported_task_xml(xml: &str) -> Result<String, ElevatedAutostartError> 
     const POLICY_CLOSE: &str = "</MultipleInstancesPolicy>";
     const LIMIT_OPEN: &str = "<ExecutionTimeLimit>";
     const LIMIT_CLOSE: &str = "</ExecutionTimeLimit>";
+    const RESTART_OPEN: &str = "<RestartOnFailure>";
+    const RESTART_CLOSE: &str = "</RestartOnFailure>";
+    const POLICY_ELEMENT: &str = "</MultipleInstancesPolicy>";
     const SETTINGS_CLOSE: &str = "</Settings>";
 
     let xml = replace_element_value(
@@ -189,7 +201,7 @@ fn patch_exported_task_xml(xml: &str) -> Result<String, ElevatedAutostartError> 
         "Parallel",
         "MultipleInstancesPolicy",
     )?;
-    if xml.contains(LIMIT_OPEN) {
+    let xml = if xml.contains(LIMIT_OPEN) {
         replace_element_value(&xml, LIMIT_OPEN, LIMIT_CLOSE, "PT0S", "ExecutionTimeLimit")
     } else {
         let insertion = format!("    {LIMIT_OPEN}PT0S{LIMIT_CLOSE}\r\n  {SETTINGS_CLOSE}");
@@ -197,7 +209,60 @@ fn patch_exported_task_xml(xml: &str) -> Result<String, ElevatedAutostartError> 
             return Err(ElevatedAutostartError::InvalidTaskDefinition("Settings"));
         }
         Ok(xml.replacen(SETTINGS_CLOSE, &insertion, 1))
+    }?;
+    if xml.contains(RESTART_OPEN) {
+        let without_restart =
+            remove_element(&xml, RESTART_OPEN, RESTART_CLOSE, "RestartOnFailure")?;
+        insert_restart_policy(&without_restart, POLICY_ELEMENT)
+    } else {
+        insert_restart_policy(&xml, POLICY_ELEMENT)
     }
+}
+
+fn insert_restart_policy(
+    xml: &str,
+    policy_element: &'static str,
+) -> Result<String, ElevatedAutostartError> {
+    let Some(index) = xml
+        .find(policy_element)
+        .map(|index| index + policy_element.len())
+    else {
+        return Err(ElevatedAutostartError::InvalidTaskDefinition(
+            "MultipleInstancesPolicy",
+        ));
+    };
+    let restart =
+        "\r\n    <RestartOnFailure>\r\n      <Count>3</Count>\r\n      <Interval>PT1M</Interval>\r\n    </RestartOnFailure>";
+    let mut patched = String::with_capacity(xml.len() + restart.len());
+    patched.push_str(&xml[..index]);
+    patched.push_str(restart);
+    patched.push_str(&xml[index..]);
+    Ok(patched)
+}
+
+fn remove_element(
+    xml: &str,
+    open: &str,
+    close: &str,
+    element: &'static str,
+) -> Result<String, ElevatedAutostartError> {
+    let element_start = xml
+        .find(open)
+        .ok_or(ElevatedAutostartError::InvalidTaskDefinition(element))?;
+    let element_end = xml[element_start..]
+        .find(close)
+        .map(|index| element_start + index + close.len())
+        .ok_or(ElevatedAutostartError::InvalidTaskDefinition(element))?;
+    let start = xml[..element_start]
+        .rfind(|character: char| !character.is_whitespace())
+        .map_or(element_start, |index| index + 1);
+    let end = xml[element_end..]
+        .find(|character: char| !character.is_whitespace())
+        .map_or(element_end, |index| element_end + index);
+    let mut patched = String::with_capacity(xml.len());
+    patched.push_str(&xml[..start]);
+    patched.push_str(&xml[end..]);
+    Ok(patched)
 }
 
 fn replace_element_value(
@@ -305,6 +370,40 @@ mod platform {
             std::process::id()
         )));
         fs::write(xml_path.path(), encode_utf16le(&xml))
+            .map_err(ElevatedAutostartError::TaskDefinition)?;
+        let status = task_command()
+            .args([
+                OsString::from("/Create"),
+                OsString::from("/TN"),
+                OsString::from(TASK_NAME),
+                OsString::from("/XML"),
+                xml_path.path().as_os_str().to_owned(),
+                OsString::from("/F"),
+            ])
+            .status()
+            .map_err(ElevatedAutostartError::TaskSchedulerStart)?;
+        require_success(status)
+    }
+
+    pub fn reconcile_task() -> Result<(), ElevatedAutostartError> {
+        if !task_exists()? {
+            return Ok(());
+        }
+        let exported = task_command()
+            .args(["/Query", "/TN", TASK_NAME, "/XML"])
+            .output()
+            .map_err(ElevatedAutostartError::TaskDefinition)?;
+        require_output_success(&exported)?;
+        let original = decode_task_xml(&exported.stdout);
+        let patched = patch_exported_task_xml(&original)?;
+        if patched == original {
+            return Ok(());
+        }
+        let xml_path = TemporaryFile::new(std::env::temp_dir().join(format!(
+            "OpenDeskTools-elevated-autostart-reconcile-{}.xml",
+            std::process::id()
+        )));
+        fs::write(xml_path.path(), encode_utf16le(&patched))
             .map_err(ElevatedAutostartError::TaskDefinition)?;
         let status = task_command()
             .args([
@@ -464,6 +563,10 @@ mod platform {
         Err(ElevatedAutostartError::UnsupportedPlatform)
     }
 
+    pub fn reconcile_task() -> Result<(), ElevatedAutostartError> {
+        Err(ElevatedAutostartError::UnsupportedPlatform)
+    }
+
     pub fn delete_task() -> Result<(), ElevatedAutostartError> {
         Err(ElevatedAutostartError::UnsupportedPlatform)
     }
@@ -533,6 +636,9 @@ mod tests {
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(xml.contains("<MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>"));
         assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(xml.contains("<RestartOnFailure>"));
+        assert!(xml.contains("<Count>3</Count>"));
+        assert!(xml.contains("<Interval>PT1M</Interval>"));
         assert!(xml.contains("<Arguments>--autostart</Arguments>"));
     }
 
@@ -546,5 +652,21 @@ mod tests {
         assert!(xml.contains("<MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>"));
         assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
         assert!(!xml.contains("PT72H"));
+    }
+
+    #[test]
+    fn existing_restart_policy_is_replaced_idempotently() {
+        let input = "<Task><Settings><MultipleInstancesPolicy>Queue</MultipleInstancesPolicy>\
+                     <RestartOnFailure><Count>9</Count><Interval>PT9M</Interval></RestartOnFailure>\
+                     <ExecutionTimeLimit>PT72H</ExecutionTimeLimit></Settings></Task>";
+        let once = patch_exported_task_xml(input).expect("existing restart settings should patch");
+        let twice =
+            patch_exported_task_xml(&once).expect("patched settings should remain patchable");
+
+        assert_eq!(once, twice);
+        assert_eq!(once.matches("<RestartOnFailure>").count(), 1);
+        assert!(once.contains("<Count>3</Count>"));
+        assert!(once.contains("<Interval>PT1M</Interval>"));
+        assert!(!once.contains("PT9M"));
     }
 }

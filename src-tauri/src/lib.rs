@@ -95,6 +95,7 @@ pub fn run() {
             None
         }
     };
+    let startup_watchdog = infrastructure::startup_watchdog::StartupWatchdog::start();
     let builder = tauri::Builder::default();
 
     builder
@@ -104,10 +105,12 @@ pub fn run() {
                 .build(),
         )
         .setup(move |app| {
+            startup_watchdog.enter("application_runtime");
             let qa_options = debug_qa::parse(std::env::args_os())?;
             let runtime = ApplicationRuntime::initialize(app.handle())?;
             app.manage(runtime);
             let runtime_state = app.state::<ApplicationRuntime>();
+            startup_watchdog.enter("clipboard_listener");
             if runtime_state.clipboard_monitoring_enabled() {
                 if let Err(error) = runtime_state.start_clipboard_listener(clipboard_history_event_sink(app.handle())) {
                     eprintln!("clipboard listener unavailable during startup: {error}");
@@ -117,6 +120,7 @@ pub fn run() {
             // prepared failure changes the corresponding action to honestly
             // unavailable instead of leaving a registered shortcut that can
             // only log an error when pressed.
+            startup_watchdog.enter("clipboard_surface_group");
             let clipboard_surface_ready =
                 match clipboard_surface_window::prepare_group(app.handle()) {
                     Ok(()) => true,
@@ -127,6 +131,7 @@ pub fn run() {
                         false
                     }
                 };
+            startup_watchdog.enter("quick_launch_state");
             let quick_launch_ready = match runtime_state.quick_launch().snapshot() {
                 Ok(_) => true,
                 Err(error) => {
@@ -134,6 +139,7 @@ pub fn run() {
                     false
                 }
             };
+            startup_watchdog.enter("tool_menu_surface");
             let tool_menu_surface_ready = quick_launch_ready
                 && match tool_menu_surface_window::prepare(app.handle()) {
                     Ok(()) => true,
@@ -142,6 +148,7 @@ pub fn run() {
                         false
                     }
                 };
+            startup_watchdog.enter("qr_toast_surface");
             let qr_toast_surface_ready =
                 match qr_toast_surface_window::prepare(app.handle()) {
                     Ok(()) => true,
@@ -152,13 +159,15 @@ pub fn run() {
                 };
             let forced_app = app.handle().clone();
             let runtime_state = app.state::<ApplicationRuntime>();
-            let screenshot_ready = match runtime_state.screenshot().probe() {
+            startup_watchdog.enter("screenshot_capability");
+            let screenshot_ready = match runtime_state.screenshot().probe_startup() {
                 Ok(()) => true,
                 Err(error) => {
                     eprintln!("screenshot service unavailable: {error}");
                     false
                 }
             };
+            startup_watchdog.enter("pin_image_capability");
             let pin_image_ready = match runtime_state.pin_image().probe() {
                 Ok(()) => true,
                 Err(error) => {
@@ -166,6 +175,7 @@ pub fn run() {
                     false
                 }
             };
+            startup_watchdog.enter("hotkey_reconcile");
             runtime_state.hotkeys().set_initial_action_available(
                 HotkeyActionId::ScreenshotCapture,
                 screenshot_ready,
@@ -197,7 +207,14 @@ pub fn run() {
             // stale ordinary Run entry so the two mechanisms cannot race into
             // separate normal/elevated instances. Otherwise keep the ordinary
             // command aligned with the current executable path.
+            startup_watchdog.enter("autostart_reconcile");
             if runtime_state.elevated_autostart().is_enabled() {
+                if let Err(error) = runtime_state
+                    .elevated_autostart()
+                    .reconcile_current_task()
+                {
+                    eprintln!("failed to reconcile elevated autostart recovery settings: {error}");
+                }
                 if let Err(error) = runtime_state.autostart().set(false) {
                     eprintln!("failed to remove duplicate ordinary autostart: {error}");
                 }
@@ -209,20 +226,27 @@ pub fn run() {
                 infrastructure::autostart::is_autostart_launch(std::env::args_os())
                     && !elevated_wake_requested;
             let start_minimized = runtime_state.start_minimized();
-            if let Some(window) = app.get_webview_window("main") {
-                configure_main_window(&window)?;
-                // The main window ships hidden (`visible: false`) so a login
-                // autostart launch stays silent in the tray. A normal launch
-                // reveals it explicitly unless the user asked to start
-                // minimized, avoiding a startup flash either way.
-                if !autostart_launch && !start_minimized {
-                    if let Err(error) = window.show() {
-                        eprintln!("failed to reveal the main window on launch: {error}");
-                    }
+            startup_watchdog.enter("main_window");
+            let window = app.get_webview_window("main").ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "the configured main WebView window was not created",
+                )
+            })?;
+            configure_main_window(&window)?;
+            // The main window ships hidden (`visible: false`) so a login
+            // autostart launch stays silent in the tray. A normal launch
+            // reveals it explicitly unless the user asked to start
+            // minimized, avoiding a startup flash either way.
+            if !autostart_launch && !start_minimized {
+                if let Err(error) = window.show() {
+                    eprintln!("failed to reveal the main window on launch: {error}");
                 }
             }
+            startup_watchdog.enter("tray");
             app.manage(TrayLifecycle::default());
             infrastructure::tray::install(app.handle(), runtime_state.tray_icon_visible())?;
+            startup_watchdog.enter("single_instance_listener");
             if let Some(primary_instance) = primary_instance {
                 let single_instance = primary_instance.start_listener(app.handle())?;
                 app.manage(single_instance);
@@ -231,6 +255,7 @@ pub fn run() {
             schedule_debug_qa(app.handle(), qa_options);
             #[cfg(not(debug_assertions))]
             let _ = qa_options;
+            startup_watchdog.complete();
             Ok(())
         })
         .on_page_load(|webview, payload| {
@@ -395,6 +420,11 @@ fn handle_main_window_event<R: Runtime>(window: &tauri::Window<R>, event: &tauri
         .app_handle()
         .try_state::<TrayLifecycle>()
         .is_some_and(|lifecycle| lifecycle.is_exit_requested());
+    if matches!(event, tauri::WindowEvent::Destroyed) && !exit_requested {
+        eprintln!("main WebView was destroyed while the background runtime remained active");
+        infrastructure::tray::exit_unhealthy_runtime(window.app_handle());
+        return;
+    }
     let close_to_tray = window
         .app_handle()
         .try_state::<ApplicationRuntime>()

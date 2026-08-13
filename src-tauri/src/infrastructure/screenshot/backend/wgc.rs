@@ -31,24 +31,6 @@ impl WgcCaptureBackend {
             runtime: None,
         }
     }
-
-    pub fn prepare(&mut self, topology: &MonitorTopology) -> Result<(), ScreenshotError> {
-        #[cfg(windows)]
-        {
-            if self.runtime.is_none() {
-                self.runtime = Some(windows_impl::WgcRuntime::new()?);
-            }
-            self.runtime
-                .as_mut()
-                .expect("WGC runtime was initialized")
-                .prepare(topology)
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = topology;
-            Err(ScreenshotError::UnsupportedPlatform)
-        }
-    }
 }
 
 impl CaptureBackend for WgcCaptureBackend {
@@ -141,16 +123,6 @@ mod windows_impl {
                 resources,
                 items: HashMap::new(),
             })
-        }
-
-        pub(super) fn prepare(
-            &mut self,
-            topology: &MonitorTopology,
-        ) -> Result<(), ScreenshotError> {
-            for monitor in &topology.monitors {
-                let _ = self.capture_item(monitor)?;
-            }
-            Ok(())
         }
 
         pub(super) fn capture_monitor(

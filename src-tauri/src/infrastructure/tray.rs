@@ -194,6 +194,7 @@ fn execute_action<R: Runtime>(app: &AppHandle<R>, action: TrayAction) {
         TrayAction::OpenMain => {
             if let Err(error) = open_main_window(app) {
                 eprintln!("failed to open the main window from the tray: {error}");
+                exit_unhealthy_runtime(app);
             }
         }
         TrayAction::ExitApplication => exit_application(app),
@@ -234,6 +235,14 @@ pub(crate) fn open_main_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<
 }
 
 pub(crate) fn exit_application<R: Runtime>(app: &AppHandle<R>) {
+    exit_application_with_code(app, 0);
+}
+
+pub(crate) fn exit_unhealthy_runtime<R: Runtime>(app: &AppHandle<R>) {
+    exit_application_with_code(app, super::startup_watchdog::UNHEALTHY_RUNTIME_EXIT_CODE);
+}
+
+fn exit_application_with_code<R: Runtime>(app: &AppHandle<R>, exit_code: i32) {
     let Some(lifecycle) = app.try_state::<TrayLifecycle>() else {
         eprintln!("tray exit ignored because TrayLifecycle state is unavailable");
         return;
@@ -299,7 +308,7 @@ pub(crate) fn exit_application<R: Runtime>(app: &AppHandle<R>) {
                     }
                 }
                 super::single_instance::stop_listener(app);
-                app.exit(0);
+                app.exit(exit_code);
             }
         }
     }

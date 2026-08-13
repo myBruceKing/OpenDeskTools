@@ -29,6 +29,7 @@ pub mod quick_launch;
 pub mod screenshot;
 pub mod single_instance;
 pub mod source_icon;
+pub mod startup_watchdog;
 #[allow(dead_code)]
 pub mod storage;
 pub mod surface;

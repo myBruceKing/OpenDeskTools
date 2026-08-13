@@ -58,7 +58,14 @@ impl ScreenshotService {
         }
     }
 
-    pub fn probe(&self) -> Result<(), ScreenshotError> {
+    /// Checks whether screenshot entry points can be offered during startup.
+    ///
+    /// Keep this probe side-effect free with respect to capture runtimes. In
+    /// particular, creating a WGC item here starts Windows CaptureService while
+    /// the interactive desktop is still settling during login. Capture runtime
+    /// creation belongs to the first real screenshot request, where the normal
+    /// WGC -> DXGI -> GDI fallback chain can handle a transient failure.
+    pub fn probe_startup(&self) -> Result<(), ScreenshotError> {
         let topology = MonitorTopology::query()?;
         let wgc_capability = WgcCaptureBackend::new().probe(&topology);
         let dxgi_capability = super::backend::dxgi::DxgiCaptureBackend::new().probe(&topology);
@@ -69,20 +76,10 @@ impl ScreenshotService {
                 wgc_capability.detail, dxgi_capability.detail, gdi_capability.detail
             )));
         }
-        if wgc_capability.available {
-            let mut backends = self.capture_backends.lock().map_err(|_| {
-                ScreenshotError::BackendUnavailable(
-                    "screenshot backend state is unavailable".to_owned(),
-                )
-            })?;
-            if let Err(error) = backends.prepare(&topology) {
-                debug_qa::trace!(format!(
-                    "screenshot backend warmup result=fallback error={error}"
-                ));
-            } else {
-                debug_qa::trace!("screenshot backend warmup result=success backend=wgc");
-            }
-        }
+        debug_qa::trace!(format!(
+            "screenshot startup probe result=available wgc={} dxgi={} gdi={} runtime_initialization=deferred",
+            wgc_capability.available, dxgi_capability.available, gdi_capability.available
+        ));
         overlay::probe()
     }
 

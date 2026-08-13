@@ -64,10 +64,6 @@ impl PreferredCaptureBackends {
             dxgi: dxgi::DxgiCaptureBackend::new(),
         }
     }
-
-    pub fn prepare(&mut self, topology: &MonitorTopology) -> Result<(), ScreenshotError> {
-        self.wgc.prepare(topology)
-    }
 }
 
 pub fn capture_snapshot(

@@ -72,6 +72,7 @@ impl PrimaryInstance {
                                     eprintln!(
                                         "failed to wake the main window from a repeated launch: {error}"
                                     );
+                                    super::tray::exit_unhealthy_runtime(&main_thread_app);
                                 }
                             })
                             .is_err()
