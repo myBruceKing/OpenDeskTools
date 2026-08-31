@@ -6,12 +6,16 @@
 
 use std::sync::Arc;
 
+use ::image::{imageops, GrayImage};
 use thiserror::Error;
 
 use super::clipboard::{ClipboardError, ClipboardService, ClipboardWriteContent};
 use super::clipboard_writer::ClipboardWriter;
 
 const QR_RENDER_SIZE: u32 = 300;
+const QR_MIN_DECODE_SIDE: u32 = 480;
+const QR_MAX_UPSCALE: u32 = 4;
+const QR_MAX_PREPROCESS_PIXELS: u64 = 4_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QrConversionKind {
@@ -218,34 +222,316 @@ fn render_qr_rgba(text: &str) -> Result<(u32, u32, Vec<u8>), QrError> {
 }
 
 fn decode_qr_text(width: u32, height: u32, rgba: &[u8]) -> Result<String, QrError> {
-    let expected = usize::try_from(u64::from(width) * u64::from(height) * 4)
-        .map_err(|_| QrError::UnreadableImage)?;
+    let expected = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .and_then(|bytes| usize::try_from(bytes).ok())
+        .ok_or(QrError::UnreadableImage)?;
     if width == 0 || height == 0 || rgba.len() != expected {
         return Err(QrError::UnreadableImage);
     }
-    for contrast in [100_i32, 150, 50] {
-        let grayscale = rgba
-            .chunks_exact(4)
-            .map(|pixel| {
-                let luminance = (i32::from(pixel[0]) * 299
-                    + i32::from(pixel[1]) * 587
-                    + i32::from(pixel[2]) * 114)
-                    / 1_000;
-                ((luminance - 128) * contrast / 100 + 128).clamp(0, 255) as u8
-            })
-            .collect::<Vec<_>>();
-        let mut decoder = quircs::Quirc::default();
-        for code in decoder.identify(width as usize, height as usize, &grayscale) {
-            let code = code.map_err(|_| QrError::UnreadableImage)?;
-            let decoded = code.decode().map_err(|_| QrError::UnreadableImage)?;
-            let text = String::from_utf8(decoded.payload).map_err(|_| QrError::NonTextPayload)?;
-            let text = text.trim();
-            if !text.is_empty() {
-                return Ok(text.to_owned());
-            }
+
+    let grayscale = rgba_to_grayscale(rgba);
+    let mut saw_non_text_payload = false;
+    if let Some(text) = decode_gray_qr(width, height, &grayscale, &mut saw_non_text_payload) {
+        return Ok(text);
+    }
+
+    let normalized = normalize_grayscale(&grayscale);
+    if normalized != grayscale {
+        if let Some(text) = decode_gray_qr(width, height, &normalized, &mut saw_non_text_payload) {
+            return Ok(text);
         }
     }
-    Err(QrError::UnreadableImage)
+
+    let threshold = otsu_threshold(&normalized);
+    for offset in [0_i8, -12, 12] {
+        let binary = threshold_grayscale(&normalized, threshold.saturating_add_signed(offset));
+        if let Some(text) = decode_gray_qr(width, height, &binary, &mut saw_non_text_payload) {
+            return Ok(text);
+        }
+    }
+
+    let sharpened = sharpen_grayscale(width, height, &normalized);
+    if let Some(text) = decode_gray_qr(width, height, &sharpened, &mut saw_non_text_payload) {
+        return Ok(text);
+    }
+    let sharpened_binary = threshold_grayscale(&sharpened, otsu_threshold(&sharpened));
+    if let Some(text) = decode_gray_qr(width, height, &sharpened_binary, &mut saw_non_text_payload)
+    {
+        return Ok(text);
+    }
+
+    if let Some((scaled_width, scaled_height, nearest, smooth)) =
+        upscale_low_resolution_grayscale(width, height, &normalized)
+    {
+        for scaled in [&nearest, &smooth] {
+            if let Some(text) = decode_gray_qr(
+                scaled_width,
+                scaled_height,
+                scaled,
+                &mut saw_non_text_payload,
+            ) {
+                return Ok(text);
+            }
+            let binary = threshold_grayscale(scaled, otsu_threshold(scaled));
+            if let Some(text) = decode_gray_qr(
+                scaled_width,
+                scaled_height,
+                &binary,
+                &mut saw_non_text_payload,
+            ) {
+                return Ok(text);
+            }
+        }
+
+        let scaled_sharp = sharpen_grayscale(scaled_width, scaled_height, &smooth);
+        if let Some(text) = decode_gray_qr(
+            scaled_width,
+            scaled_height,
+            &scaled_sharp,
+            &mut saw_non_text_payload,
+        ) {
+            return Ok(text);
+        }
+        let adaptive = adaptive_threshold_grayscale(scaled_width, scaled_height, &scaled_sharp);
+        if let Some(text) = decode_gray_qr(
+            scaled_width,
+            scaled_height,
+            &adaptive,
+            &mut saw_non_text_payload,
+        ) {
+            return Ok(text);
+        }
+    }
+
+    if saw_non_text_payload {
+        Err(QrError::NonTextPayload)
+    } else {
+        Err(QrError::UnreadableImage)
+    }
+}
+
+fn rgba_to_grayscale(rgba: &[u8]) -> Vec<u8> {
+    rgba.chunks_exact(4)
+        .map(|pixel| {
+            let luminance =
+                (u32::from(pixel[0]) * 299 + u32::from(pixel[1]) * 587 + u32::from(pixel[2]) * 114)
+                    / 1_000;
+            let alpha = u32::from(pixel[3]);
+            ((luminance * alpha + 255 * (255 - alpha)) / 255) as u8
+        })
+        .collect()
+}
+
+fn decode_gray_qr(
+    width: u32,
+    height: u32,
+    grayscale: &[u8],
+    saw_non_text_payload: &mut bool,
+) -> Option<String> {
+    let mut decoder = quircs::Quirc::default();
+    for candidate in decoder.identify(width as usize, height as usize, grayscale) {
+        let Ok(code) = candidate else {
+            continue;
+        };
+        let Ok(decoded) = code.decode() else {
+            continue;
+        };
+        let Ok(text) = String::from_utf8(decoded.payload) else {
+            *saw_non_text_payload = true;
+            continue;
+        };
+        let text = text.trim();
+        if !text.is_empty() {
+            return Some(text.to_owned());
+        }
+    }
+    None
+}
+
+fn normalize_grayscale(grayscale: &[u8]) -> Vec<u8> {
+    if grayscale.is_empty() {
+        return Vec::new();
+    }
+    let mut histogram = [0_usize; 256];
+    for value in grayscale {
+        histogram[usize::from(*value)] += 1;
+    }
+    let tail = (grayscale.len() / 100).max(1);
+    let mut cumulative = 0_usize;
+    let mut low = 0_u8;
+    for (value, count) in histogram.iter().enumerate() {
+        cumulative += count;
+        if cumulative >= tail {
+            low = value as u8;
+            break;
+        }
+    }
+    cumulative = 0;
+    let mut high = 255_u8;
+    for (value, count) in histogram.iter().enumerate().rev() {
+        cumulative += count;
+        if cumulative >= tail {
+            high = value as u8;
+            break;
+        }
+    }
+    if high <= low.saturating_add(8) {
+        return grayscale.to_vec();
+    }
+    let range = u32::from(high - low);
+    grayscale
+        .iter()
+        .map(|value| {
+            if *value <= low {
+                0
+            } else if *value >= high {
+                255
+            } else {
+                ((u32::from(*value - low) * 255) / range) as u8
+            }
+        })
+        .collect()
+}
+
+fn otsu_threshold(grayscale: &[u8]) -> u8 {
+    let mut histogram = [0_u64; 256];
+    for value in grayscale {
+        histogram[usize::from(*value)] += 1;
+    }
+    let total = grayscale.len() as u64;
+    let sum = histogram
+        .iter()
+        .enumerate()
+        .map(|(value, count)| value as u64 * count)
+        .sum::<u64>();
+    let mut background_count = 0_u64;
+    let mut background_sum = 0_u64;
+    let mut best_threshold = 127_u8;
+    let mut best_variance = 0_f64;
+    for (threshold, count) in histogram.iter().enumerate() {
+        background_count += count;
+        if background_count == 0 {
+            continue;
+        }
+        let foreground_count = total.saturating_sub(background_count);
+        if foreground_count == 0 {
+            break;
+        }
+        background_sum += threshold as u64 * count;
+        let background_mean = background_sum as f64 / background_count as f64;
+        let foreground_mean = (sum - background_sum) as f64 / foreground_count as f64;
+        let difference = background_mean - foreground_mean;
+        let variance = background_count as f64 * foreground_count as f64 * difference * difference;
+        if variance > best_variance {
+            best_variance = variance;
+            best_threshold = threshold as u8;
+        }
+    }
+    best_threshold
+}
+
+fn threshold_grayscale(grayscale: &[u8], threshold: u8) -> Vec<u8> {
+    grayscale
+        .iter()
+        .map(|value| if *value <= threshold { 0 } else { 255 })
+        .collect()
+}
+
+fn sharpen_grayscale(width: u32, height: u32, grayscale: &[u8]) -> Vec<u8> {
+    if width < 3 || height < 3 {
+        return grayscale.to_vec();
+    }
+    let width = width as usize;
+    let height = height as usize;
+    let mut sharpened = grayscale.to_vec();
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let offset = y * width + x;
+            let value = i32::from(grayscale[offset]) * 5
+                - i32::from(grayscale[offset - 1])
+                - i32::from(grayscale[offset + 1])
+                - i32::from(grayscale[offset - width])
+                - i32::from(grayscale[offset + width]);
+            sharpened[offset] = value.clamp(0, 255) as u8;
+        }
+    }
+    sharpened
+}
+
+fn upscale_low_resolution_grayscale(
+    width: u32,
+    height: u32,
+    grayscale: &[u8],
+) -> Option<(u32, u32, Vec<u8>, Vec<u8>)> {
+    let shortest = width.min(height);
+    if shortest == 0 || shortest >= QR_MIN_DECODE_SIDE {
+        return None;
+    }
+    let scale = QR_MIN_DECODE_SIDE
+        .saturating_add(shortest - 1)
+        .checked_div(shortest)?
+        .clamp(2, QR_MAX_UPSCALE);
+    let scaled_width = width.checked_mul(scale)?;
+    let scaled_height = height.checked_mul(scale)?;
+    if u64::from(scaled_width) * u64::from(scaled_height) > QR_MAX_PREPROCESS_PIXELS {
+        return None;
+    }
+    let image = GrayImage::from_raw(width, height, grayscale.to_vec())?;
+    let nearest = imageops::resize(
+        &image,
+        scaled_width,
+        scaled_height,
+        imageops::FilterType::Nearest,
+    )
+    .into_raw();
+    let smooth = imageops::resize(
+        &image,
+        scaled_width,
+        scaled_height,
+        imageops::FilterType::CatmullRom,
+    )
+    .into_raw();
+    Some((scaled_width, scaled_height, nearest, smooth))
+}
+
+fn adaptive_threshold_grayscale(width: u32, height: u32, grayscale: &[u8]) -> Vec<u8> {
+    let width = width as usize;
+    let height = height as usize;
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    let stride = width + 1;
+    let mut integral = vec![0_u64; stride * (height + 1)];
+    for y in 0..height {
+        let mut row_sum = 0_u64;
+        for x in 0..width {
+            row_sum += u64::from(grayscale[y * width + x]);
+            integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + row_sum;
+        }
+    }
+    let radius = (width.min(height) / 40).clamp(4, 24);
+    let mut output = vec![255_u8; grayscale.len()];
+    for y in 0..height {
+        let top = y.saturating_sub(radius);
+        let bottom = (y + radius + 1).min(height);
+        for x in 0..width {
+            let left = x.saturating_sub(radius);
+            let right = (x + radius + 1).min(width);
+            let sum = integral[bottom * stride + right] + integral[top * stride + left]
+                - integral[top * stride + right]
+                - integral[bottom * stride + left];
+            let count = (bottom - top) * (right - left);
+            let mean = (sum / count as u64) as u8;
+            output[y * width + x] = if grayscale[y * width + x].saturating_add(7) < mean {
+                0
+            } else {
+                255
+            };
+        }
+    }
+    output
 }
 
 #[cfg(test)]
@@ -267,6 +553,23 @@ mod tests {
         assert_eq!(
             decode_qr_text(width, height, &rgba).unwrap(),
             "https://example.com/中文?ok=1"
+        );
+    }
+
+    #[test]
+    fn low_resolution_blurred_qr_is_recovered_by_preprocessing() {
+        let payload = "https://example.com/pay?id=202608310001&source=OpenDeskTools";
+        let (width, height, rgba) = render_qr_rgba(payload).unwrap();
+        let image = ::image::RgbaImage::from_raw(width, height, rgba).unwrap();
+        let reduced = imageops::resize(&image, 116, 116, imageops::FilterType::Triangle);
+        let blurred = imageops::blur(&reduced, 0.65);
+        let mut canvas =
+            ::image::RgbaImage::from_pixel(170, 145, ::image::Rgba([232, 230, 224, 255]));
+        imageops::overlay(&mut canvas, &blurred, 24, 14);
+
+        assert_eq!(
+            decode_qr_text(canvas.width(), canvas.height(), canvas.as_raw()).unwrap(),
+            payload
         );
     }
 

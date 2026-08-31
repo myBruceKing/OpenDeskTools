@@ -605,6 +605,10 @@ export function normalizeClipboardCommandError(value: unknown): ClipboardCommand
       message: "无法写入系统剪贴板，请重试。",
       retryable: true
     },
+    clipboard_busy: {
+      message: "系统剪贴板仍被其他程序占用，请重试。",
+      retryable: true
+    },
     clipboard_write_failed: {
       message: "Windows 未完成剪贴板写入，请重试该记录。",
       retryable: true

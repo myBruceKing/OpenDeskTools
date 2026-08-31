@@ -585,6 +585,11 @@ fn map_input_error(error: ClipboardInputError) -> ClipboardCommandErrorDto {
     match error {
         ClipboardInputError::Clipboard(error) => map_error(error),
         ClipboardInputError::Surface(error) => map_surface_error(error),
+        ClipboardInputError::Writer(ClipboardWriterError::Busy) => ClipboardCommandErrorDto {
+            code: "clipboard_busy",
+            message: "The system clipboard remained busy after bounded retries.",
+            retryable: true,
+        },
         ClipboardInputError::Writer(ClipboardWriterError::WindowsApi("SetClipboardData")) => {
             ClipboardCommandErrorDto {
                 code: "clipboard_write_failed",
@@ -1257,6 +1262,10 @@ mod tests {
         ));
         assert_eq!(write.code, "clipboard_write_failed");
         assert!(write.retryable);
+
+        let busy = map_input_error(ClipboardInputError::Writer(ClipboardWriterError::Busy));
+        assert_eq!(busy.code, "clipboard_busy");
+        assert!(busy.retryable);
         assert!(write.message.contains("replacement began"));
 
         let cleanup = map_input_error(ClipboardInputError::InputCleanupDenied);

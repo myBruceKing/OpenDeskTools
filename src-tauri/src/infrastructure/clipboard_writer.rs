@@ -1,15 +1,19 @@
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
-use super::clipboard::ClipboardWriteContent;
+use super::{clipboard::ClipboardWriteContent, debug_qa};
 
 const CF_UNICODETEXT_FORMAT: u32 = 13;
 const CF_HDROP_FORMAT: u32 = 15;
 const CF_DIBV5_FORMAT: u32 = 17;
-const OPEN_ATTEMPTS: usize = 20;
-const OPEN_RETRY_DELAY: Duration = Duration::from_millis(15);
+// Clipboard owners such as Chromium, WeChat and WeCom can keep the clipboard
+// open briefly while rendering delayed formats. Keep early retries frequent,
+// but cover the user's immediate Win+V -> input path for a little over one
+// second before reporting a real contention failure.
+const OPEN_ATTEMPTS: usize = 61;
+const OPEN_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ClipboardWriterError {
@@ -254,14 +258,34 @@ impl<O: ClipboardOps> Drop for OpenGuard<'_, O> {
 fn open_with_retries<O: ClipboardOps>(
     ops: &mut O,
 ) -> Result<OpenGuard<'_, O>, ClipboardWriterError> {
-    for attempt in 0..OPEN_ATTEMPTS {
+    open_with_retry_policy(ops, OPEN_ATTEMPTS, OPEN_RETRY_DELAY)
+}
+
+fn open_with_retry_policy<O: ClipboardOps>(
+    ops: &mut O,
+    attempts: usize,
+    retry_delay: Duration,
+) -> Result<OpenGuard<'_, O>, ClipboardWriterError> {
+    let started = Instant::now();
+    let attempts = attempts.max(1);
+    for attempt in 0..attempts {
         if ops.open() {
+            if attempt > 0 {
+                debug_qa::trace!(format!(
+                    "clipboard writer stage=open result=success retries={attempt} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                ));
+            }
             return Ok(OpenGuard(ops));
         }
-        if attempt + 1 < OPEN_ATTEMPTS {
-            std::thread::sleep(OPEN_RETRY_DELAY);
+        if attempt + 1 < attempts {
+            std::thread::sleep(retry_delay);
         }
     }
+    debug_qa::trace!(format!(
+        "clipboard writer stage=open result=busy attempts={attempts} elapsed_ms={}",
+        started.elapsed().as_millis()
+    ));
     Err(ClipboardWriterError::Busy)
 }
 
@@ -288,9 +312,11 @@ fn write_prepared<O: ClipboardOps>(
 ) -> Result<Option<u32>, WriteFailure> {
     let clipboard = open_with_retries(ops).map_err(|error| WriteFailure { error })?;
     if expected_sequence.is_some_and(|expected| clipboard.0.sequence() != expected) {
+        debug_qa::trace!("clipboard writer stage=sequence_guard result=changed");
         return Ok(None);
     }
     if !clipboard.0.empty() {
+        debug_qa::trace!("clipboard writer stage=empty result=failed");
         return Err(WriteFailure {
             error: ClipboardWriterError::WindowsApi("EmptyClipboard"),
         });
@@ -301,6 +327,10 @@ fn write_prepared<O: ClipboardOps>(
             if sequence != 0 {
                 suppress(sequence);
             }
+            debug_qa::trace!(format!(
+                "clipboard writer stage=set_data result=failed sequence_available={}",
+                sequence != 0
+            ));
             return Err(WriteFailure {
                 error: ClipboardWriterError::WindowsApi("SetClipboardData"),
             });
@@ -648,6 +678,39 @@ mod tests {
         assert_eq!(ops.emptied, 1);
         assert_eq!(ops.formats, replacement);
         assert!(suppressed.is_empty());
+    }
+
+    #[test]
+    fn open_retry_policy_recovers_from_transient_clipboard_contention() {
+        let mut ops = FakeOps {
+            opens: VecDeque::from([false, false, true]),
+            ..Default::default()
+        };
+
+        {
+            let clipboard = open_with_retry_policy(&mut ops, 5, Duration::ZERO).unwrap();
+            drop(clipboard);
+        }
+
+        assert_eq!(ops.closes, 1);
+        assert!(ops.opens.is_empty());
+    }
+
+    #[test]
+    fn open_retry_policy_reports_busy_without_mutating_after_exhaustion() {
+        let mut ops = FakeOps {
+            opens: VecDeque::from([false, false, false]),
+            formats: vec![format(0xc001, 1)],
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            open_with_retry_policy(&mut ops, 3, Duration::ZERO),
+            Err(ClipboardWriterError::Busy)
+        ));
+        assert_eq!(ops.closes, 0);
+        assert_eq!(ops.emptied, 0);
+        assert_eq!(ops.formats, vec![format(0xc001, 1)]);
     }
 
     #[test]

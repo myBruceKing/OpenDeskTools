@@ -397,11 +397,24 @@ fn process_clipboard_notification<R: ClipboardReader, T: ClipboardRecordTarget>(
     }
 
     let files = reader.read_files().unwrap_or(None);
-    let image = reader.read_image().unwrap_or(None);
-    let text = match (files.is_some() || image.is_some(), reader.read_text()) {
-        (_, Ok(text)) => text,
-        (true, Err(())) => None,
-        (false, Err(())) => return,
+    // A normal file drop is already the most specific payload. Probing bitmap
+    // and text formats afterwards can force a delayed-rendering clipboard owner
+    // to do unnecessary work while the clipboard remains open, racing the
+    // user's first paste. The only file payload that still needs a bitmap probe
+    // is a single common image: chat clients publish that dual payload and the
+    // durable bitmap must continue to win over their temporary file.
+    let probe_image = files.as_ref().is_none_or(clipboard_files_are_single_image);
+    let image = probe_image
+        .then(|| reader.read_image().unwrap_or(None))
+        .flatten();
+    let text = if files.is_some() {
+        None
+    } else {
+        match reader.read_text() {
+            Ok(text) => text,
+            Err(()) if image.is_some() => None,
+            Err(()) => return,
+        }
     };
     let source = reader.source_metadata();
     let final_sequence = reader.sequence_number();
@@ -537,9 +550,9 @@ fn decode_null_terminated_utf16(units: &[u16]) -> Result<Option<String>, ()> {
 mod platform {
     use std::mem;
     use std::ptr::{null, null_mut};
-    use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+    use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use windows_sys::Win32::Foundation::{
         CloseHandle, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM,
@@ -580,6 +593,12 @@ mod platform {
     const STOP_MESSAGE: u32 = WM_APP + 0x31;
     const OPEN_ATTEMPTS: usize = 5;
     const OPEN_RETRY_DELAY: Duration = Duration::from_millis(12);
+    // Clipboard owners such as chat clients and WebView applications may
+    // publish several formats using delayed rendering. Let the producer finish
+    // and give an immediate user paste priority before the history listener
+    // requests those formats. Subsequent notifications restart this quiet
+    // window, so only the latest stable clipboard state is captured.
+    const CAPTURE_SETTLE_DELAY: Duration = Duration::from_millis(350);
     const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
     const PROCESS_PATH_CAPACITY: usize = 32_768;
     const CF_DIB_FORMAT: u32 = 8;
@@ -756,6 +775,11 @@ mod platform {
         };
         let mut last_sequence = None;
         while signals.recv().is_ok() {
+            let Some(coalesced_updates) = wait_for_quiet_period(&signals, CAPTURE_SETTLE_DELAY)
+            else {
+                break;
+            };
+            let capture_started = Instant::now();
             process_clipboard_notification(
                 &mut reader,
                 &mut last_sequence,
@@ -763,6 +787,21 @@ mod platform {
                 &sink,
                 current_timestamp_ms(),
             );
+            crate::infrastructure::debug_qa::trace!(format!(
+                "clipboard listener capture coalesced_updates={coalesced_updates} elapsed_ms={}",
+                capture_started.elapsed().as_millis()
+            ));
+        }
+    }
+
+    fn wait_for_quiet_period(signals: &Receiver<()>, quiet_period: Duration) -> Option<usize> {
+        let mut coalesced_updates = 0;
+        loop {
+            match signals.recv_timeout(quiet_period) {
+                Ok(()) => coalesced_updates += 1,
+                Err(RecvTimeoutError::Timeout) => return Some(coalesced_updates),
+                Err(RecvTimeoutError::Disconnected) => return None,
+            }
         }
     }
 
@@ -1834,6 +1873,29 @@ mod platform {
         use super::*;
 
         #[test]
+        fn quiet_period_coalesces_pending_updates_before_capture() {
+            let (sender, receiver) = mpsc::sync_channel(4);
+            sender.send(()).unwrap();
+            sender.send(()).unwrap();
+
+            assert_eq!(
+                wait_for_quiet_period(&receiver, Duration::from_millis(5)),
+                Some(2)
+            );
+        }
+
+        #[test]
+        fn quiet_period_stops_when_listener_disconnects() {
+            let (sender, receiver) = mpsc::sync_channel::<()>(1);
+            drop(sender);
+
+            assert_eq!(
+                wait_for_quiet_period(&receiver, Duration::from_millis(5)),
+                None
+            );
+        }
+
+        #[test]
         fn listener_control_health_requires_running_status_and_live_threads() {
             let (message_sender, message_receiver) = mpsc::channel::<()>();
             let (worker_sender, worker_receiver) = mpsc::channel::<()>();
@@ -2758,6 +2820,8 @@ mod tests {
         files: Option<ClipboardFiles>,
         image: Option<ClipboardImage>,
         text: Option<String>,
+        image_reads: usize,
+        text_reads: usize,
     }
 
     impl ClipboardReader for FileReader {
@@ -2770,10 +2834,12 @@ mod tests {
         }
 
         fn read_image(&mut self) -> Result<Option<ClipboardImage>, ()> {
+            self.image_reads += 1;
             Ok(self.image.clone())
         }
 
         fn read_text(&mut self) -> Result<Option<String>, ()> {
+            self.text_reads += 1;
             Ok(self.text.clone())
         }
     }
@@ -3002,12 +3068,16 @@ mod tests {
             files: Some(files.clone()),
             image: Some(image.clone()),
             text: Some("bitmap fallback".to_owned()),
+            image_reads: 0,
+            text_reads: 0,
         };
         let mut sequence = None;
         process_clipboard_notification(&mut reader, &mut sequence, &target, &sink, 1);
         assert_eq!(target.files.load(Ordering::SeqCst), 0);
         assert_eq!(target.images.load(Ordering::SeqCst), 1);
         assert_eq!(target.texts.load(Ordering::SeqCst), 0);
+        assert_eq!(reader.image_reads, 1);
+        assert_eq!(reader.text_reads, 0);
         assert_eq!(sequence, Some(11));
 
         let fallback = FileTarget {
@@ -3022,11 +3092,15 @@ mod tests {
             files: Some(files),
             image: Some(image),
             text: Some("text fallback".to_owned()),
+            image_reads: 0,
+            text_reads: 0,
         };
         process_clipboard_notification(&mut reader, &mut None, &fallback, &sink, 1);
         assert_eq!(fallback.files.load(Ordering::SeqCst), 1);
         assert_eq!(fallback.images.load(Ordering::SeqCst), 1);
         assert_eq!(fallback.texts.load(Ordering::SeqCst), 0);
+        assert_eq!(reader.image_reads, 1);
+        assert_eq!(reader.text_reads, 0);
     }
 
     #[test]
@@ -3046,6 +3120,8 @@ mod tests {
             }),
             image: None,
             text: Some("photo.jpg".to_owned()),
+            image_reads: 0,
+            text_reads: 0,
         };
         let mut sequence = None;
 
@@ -3054,7 +3130,45 @@ mod tests {
         assert_eq!(target.files.load(Ordering::SeqCst), 1);
         assert_eq!(target.images.load(Ordering::SeqCst), 0);
         assert_eq!(target.texts.load(Ordering::SeqCst), 0);
+        assert_eq!(reader.image_reads, 1);
+        assert_eq!(reader.text_reads, 0);
         assert_eq!(sequence, Some(13));
+    }
+
+    #[test]
+    fn ordinary_file_drop_does_not_probe_delayed_bitmap_or_text_formats() {
+        let sink: ClipboardHistoryEventSink = Arc::new(|| {});
+        let target = FileTarget {
+            files: AtomicUsize::new(0),
+            images: AtomicUsize::new(0),
+            texts: AtomicUsize::new(0),
+            file_outcome: ListenerRecordOutcome::Recorded { retained: true },
+            image_outcome: ListenerRecordOutcome::Recorded { retained: true },
+        };
+        let mut reader = FileReader {
+            sequences: VecDeque::from([14, 14]),
+            files: Some(ClipboardFiles {
+                paths: vec![r"C:\report.docx".encode_utf16().collect()],
+            }),
+            image: Some(ClipboardImage {
+                width: 1,
+                height: 1,
+                rgba: vec![1, 2, 3, 255],
+            }),
+            text: Some("report.docx".to_owned()),
+            image_reads: 0,
+            text_reads: 0,
+        };
+        let mut sequence = None;
+
+        process_clipboard_notification(&mut reader, &mut sequence, &target, &sink, 1);
+
+        assert_eq!(target.files.load(Ordering::SeqCst), 1);
+        assert_eq!(target.images.load(Ordering::SeqCst), 0);
+        assert_eq!(target.texts.load(Ordering::SeqCst), 0);
+        assert_eq!(reader.image_reads, 0);
+        assert_eq!(reader.text_reads, 0);
+        assert_eq!(sequence, Some(14));
     }
 
     #[test]
