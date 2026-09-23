@@ -101,8 +101,15 @@ impl StorageService {
     /// sibling staging directory and then renaming prevents a partial
     /// destination from ever being selected as the next startup root.
     pub fn copy_to_new_data_root(&self, target: impl AsRef<Path>) -> Result<PathBuf, StorageError> {
-        let target = target.as_ref();
-        if !target.is_absolute() || target.file_name().is_none() {
+        let requested_target = target.as_ref();
+        let resolved_target = resolve_migration_target(requested_target)?;
+        let target = resolved_target.as_path();
+        if target.starts_with(&self.data_root) {
+            return Err(StorageError::MigrationTargetInsideSource(
+                requested_target.to_path_buf(),
+            ));
+        }
+        if target.file_name().is_none() {
             return Err(StorageError::InvalidMigrationTarget(target.to_path_buf()));
         }
         let target_was_empty = if target.exists() {
@@ -121,17 +128,14 @@ impl StorageService {
                 })?
                 .is_some()
             {
-                return Err(StorageError::MigrationTargetExists(target.to_path_buf()));
+                return Err(StorageError::MigrationTargetExists(
+                    requested_target.to_path_buf(),
+                ));
             }
             true
         } else {
             false
         };
-        if target.starts_with(&self.data_root) {
-            return Err(StorageError::MigrationTargetInsideSource(
-                target.to_path_buf(),
-            ));
-        }
         let parent = target
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -146,6 +150,12 @@ impl StorageService {
             path: parent.to_path_buf(),
             source,
         })?;
+        // Recheck the actual parent after creation before placing staging there.
+        if parent.starts_with(&self.data_root) {
+            return Err(StorageError::MigrationTargetInsideSource(
+                requested_target.to_path_buf(),
+            ));
+        }
         let target_name = target
             .file_name()
             .expect("validated target directory name")
@@ -310,6 +320,57 @@ impl StorageService {
         self.connection
             .lock()
             .map_err(|_| StorageError::LockPoisoned)
+    }
+}
+
+/// Resolve existing junctions/symlinks and Windows verbatim prefixes before any
+/// directory creation. Only normal missing components may extend the resolved
+/// ancestor; parent traversal is rejected rather than given ambiguous semantics
+/// across an existing link or a not-yet-existing directory.
+fn resolve_migration_target(target: &Path) -> Result<PathBuf, StorageError> {
+    if !target.is_absolute()
+        || target.file_name().is_none()
+        || target
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(StorageError::InvalidMigrationTarget(target.to_path_buf()));
+    }
+    let mut ancestor = target;
+    let mut missing = Vec::new();
+    loop {
+        match fs::canonicalize(ancestor) {
+            Ok(mut resolved) => {
+                for name in missing.iter().rev() {
+                    resolved.push(name);
+                }
+                return Ok(resolved);
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                // A dangling link is not a missing directory we may create.
+                if fs::symlink_metadata(ancestor).is_ok() {
+                    return Err(StorageError::Io {
+                        operation: "resolve data migration target",
+                        path: ancestor.to_path_buf(),
+                        source,
+                    });
+                }
+                let name = ancestor
+                    .file_name()
+                    .ok_or_else(|| StorageError::InvalidMigrationTarget(target.to_path_buf()))?;
+                missing.push(name.to_os_string());
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| StorageError::InvalidMigrationTarget(target.to_path_buf()))?;
+            }
+            Err(source) => {
+                return Err(StorageError::Io {
+                    operation: "resolve data migration target",
+                    path: ancestor.to_path_buf(),
+                    source,
+                });
+            }
+        }
     }
 }
 
@@ -667,6 +728,100 @@ mod tests {
             source.copy_to_new_data_root(&destination),
             Err(StorageError::MigrationTargetExists(path)) if path == destination
         ));
+    }
+
+    #[test]
+    fn migration_rejects_source_descendants_before_creating_missing_parents() {
+        let temp = tempdir().unwrap();
+        let ordinary_source = temp.path().join("source");
+        let source = StorageService::initialize(&ordinary_source).unwrap();
+        let initial_entries = fs::read_dir(source.data_root()).unwrap().count();
+        for target in [
+            ordinary_source.clone(),
+            ordinary_source.join("new-data"),
+            ordinary_source.join("missing/nested/new-data"),
+            source.data_root().join("canonical-child"),
+            source.files_dir().to_path_buf(),
+        ] {
+            assert!(matches!(
+                source.copy_to_new_data_root(&target),
+                Err(StorageError::MigrationTargetInsideSource(_))
+            ));
+        }
+        assert_eq!(
+            fs::read_dir(source.data_root()).unwrap().count(),
+            initial_entries
+        );
+        assert!(!ordinary_source.join("missing").exists());
+        assert_eq!(fs::read_dir(source.files_dir()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn migration_rejects_parent_traversal_without_creating_directories() {
+        let temp = tempdir().unwrap();
+        let source = StorageService::initialize(temp.path().join("source")).unwrap();
+        for target in [
+            temp.path().join("missing/../source/new-data"),
+            temp.path().join("source/../outside"),
+        ] {
+            assert!(matches!(
+                source.copy_to_new_data_root(target),
+                Err(StorageError::InvalidMigrationTarget(_))
+            ));
+        }
+        assert!(!temp.path().join("missing").exists());
+        assert!(!temp.path().join("outside").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn migration_resolves_case_and_verbatim_aliases_before_boundary_checks() {
+        let temp = tempdir().unwrap();
+        let ordinary_source = temp.path().join("MixedCaseSource");
+        let source = StorageService::initialize(&ordinary_source).unwrap();
+        let alias = PathBuf::from(ordinary_source.to_string_lossy().to_uppercase());
+        let target = alias.join("missing/nested/new-data");
+        assert!(matches!(
+            source.copy_to_new_data_root(&target),
+            Err(StorageError::MigrationTargetInsideSource(_))
+        ));
+        assert!(!ordinary_source.join("missing").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migration_resolves_symlink_ancestors_before_boundary_checks() {
+        let temp = tempdir().unwrap();
+        let source = StorageService::initialize(temp.path().join("source")).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(source.data_root(), &alias).unwrap();
+        assert!(matches!(
+            source.copy_to_new_data_root(alias.join("missing/nested/new-data")),
+            Err(StorageError::MigrationTargetInsideSource(_))
+        ));
+        assert!(!source.data_root().join("missing").exists());
+    }
+
+    #[test]
+    fn migration_creates_nested_external_destination_and_preserves_settings() {
+        let temp = tempdir().unwrap();
+        let source = StorageService::initialize(temp.path().join("source")).unwrap();
+        source
+            .write_settings(&[("test.setting", "preserved")])
+            .unwrap();
+        // A sibling with a common string prefix must remain a valid target.
+        let destination = temp.path().join("source-copy/nested/data");
+        let copied = source.copy_to_new_data_root(&destination).unwrap();
+        let reopened = StorageService::initialize(&copied).unwrap();
+        assert_eq!(
+            reopened.read_setting("test.setting").unwrap().as_deref(),
+            Some("preserved")
+        );
+        assert!(source.database_path().is_file());
+        assert_eq!(
+            fs::read_dir(destination.parent().unwrap()).unwrap().count(),
+            1
+        );
     }
 
     #[test]

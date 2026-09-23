@@ -208,9 +208,11 @@ impl ClipboardService {
     }
 
     pub fn try_initialize(storage: Arc<StorageService>) -> Result<Self, ClipboardError> {
+        // Missing keys have defaults in load(); corrupt or unreadable settings
+        // must stop initialization before reconciliation can delete user data.
+        let settings = clipboard_settings::load(&storage)?;
         let images = ImageService::initialize(&storage)?;
         let source_icons = SourceIconService::initialize(Arc::clone(&storage))?;
-        let settings = clipboard_settings::load(&storage).unwrap_or_default();
         let service = Self {
             storage,
             settings: Mutex::new(settings),

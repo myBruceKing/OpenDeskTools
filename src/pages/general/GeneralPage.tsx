@@ -1,6 +1,7 @@
 import { Settings24Regular } from "@fluentui/react-icons";
 import { PageScaffold } from "../../components/layout/PageScaffold";
 import { SettingsCard } from "../../components/layout/SettingsCard";
+import { ToolbarRow } from "../../components/layout/ToolbarRow";
 import { SectionTitle } from "../../components/patterns/Section";
 import { Button } from "../../components/primitives/Button";
 import { TextField } from "../../components/primitives/Field";
@@ -14,11 +15,12 @@ export function GeneralPage() {
     state,
     setToggle,
     selectAndMigrateDataDirectory,
-    restartAsAdministrator
+    restartAsAdministrator,
+    refresh
   } = useGeneralSettings();
-  const { viewModel, pending, error, dataDirectoryMigration } = state;
+  const { viewModel, pending, error, dataDirectoryMigration, loadStatus, loadError } = state;
   const unavailableValue = "—";
-  const busy = pending !== null;
+  const busy = pending !== null || loadStatus !== "ready";
 
   return (
     <PageScaffold title="常规" description="应用启动、数据目录、更新和基础行为设置。">
@@ -28,6 +30,19 @@ export function GeneralPage() {
             <Settings24Regular className={styles.featureTitleIcon} aria-hidden="true" />
             <SectionTitle>应用行为</SectionTitle>
           </div>
+          {loadStatus === "loading" ? (
+            <InlineNotice variant="pending">正在读取常规设置…</InlineNotice>
+          ) : null}
+          {loadError ? (
+            <>
+              <InlineNotice variant="error">常规设置读取失败：{loadError}</InlineNotice>
+              <ToolbarRow>
+                <Button size="inline" disabled={loadStatus === "loading"} onClick={() => void refresh()}>
+                  {loadStatus === "loading" ? "正在重试…" : "重试"}
+                </Button>
+              </ToolbarRow>
+            </>
+          ) : null}
           {error ? <InlineNotice variant="error">{error}</InlineNotice> : null}
           <SwitchRow
             title="开机自启动"
@@ -72,13 +87,13 @@ export function GeneralPage() {
             disabled={busy || viewModel.trayIconVisible === null}
             onChange={(checked) => void setToggle("trayIconVisible", checked)}
           />
-          <InlineNotice
+          {loadStatus === "ready" ? <InlineNotice
             variant={viewModel.administratorMode ? "success" : "info"}
           >
             {viewModel.administratorMode
               ? "当前以管理员身份运行，F1、F3 和其他快捷键可以在管理员窗口前台响应。"
               : "普通权限是默认模式；需要在管理员窗口前使用裸键快捷键时，可临时以管理员身份重新启动。"}
-          </InlineNotice>
+          </InlineNotice> : null}
           {viewModel.administratorMode === false ? (
             <Button
               onClick={() => void restartAsAdministrator()}

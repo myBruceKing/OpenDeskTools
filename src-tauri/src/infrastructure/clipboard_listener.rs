@@ -386,14 +386,14 @@ fn process_clipboard_notification<R: ClipboardReader, T: ClipboardRecordTarget>(
     target: &T,
     sink: &ClipboardHistoryEventSink,
     captured_at_ms: u64,
-) {
+) -> bool {
     let sequence = reader.sequence_number();
     if is_duplicate_sequence(*last_sequence, sequence) {
-        return;
+        return false;
     }
     if sequence != 0 && reader.consume_suppressed_sequence(sequence) {
         commit_sequence(last_sequence, sequence);
-        return;
+        return false;
     }
 
     let files = reader.read_files().unwrap_or(None);
@@ -413,13 +413,13 @@ fn process_clipboard_notification<R: ClipboardReader, T: ClipboardRecordTarget>(
         match reader.read_text() {
             Ok(text) => text,
             Err(()) if image.is_some() => None,
-            Err(()) => return,
+            Err(()) => return true,
         }
     };
     let source = reader.source_metadata();
     let final_sequence = reader.sequence_number();
     let Some(sequence) = stable_sequence(sequence, final_sequence) else {
-        return;
+        return true;
     };
     // Chat clients can publish the same copied image as both a synthetic file
     // drop and a rendered bitmap. Preserve pure file-copy semantics, but prefer
@@ -469,7 +469,7 @@ fn process_clipboard_notification<R: ClipboardReader, T: ClipboardRecordTarget>(
         target.record_listener_text(text, captured_at_ms, source)
     } else {
         commit_sequence(last_sequence, sequence);
-        return;
+        return false;
     };
     match outcome {
         ListenerRecordOutcome::Recorded { retained } => {
@@ -479,8 +479,9 @@ fn process_clipboard_notification<R: ClipboardReader, T: ClipboardRecordTarget>(
             }
         }
         ListenerRecordOutcome::PermanentReject => commit_sequence(last_sequence, sequence),
-        ListenerRecordOutcome::RetryableFailure => {}
+        ListenerRecordOutcome::RetryableFailure => return true,
     }
+    false
 }
 
 fn clipboard_files_are_single_image(files: &ClipboardFiles) -> bool {
@@ -599,6 +600,8 @@ mod platform {
     // requests those formats. Subsequent notifications restart this quiet
     // window, so only the latest stable clipboard state is captured.
     const CAPTURE_SETTLE_DELAY: Duration = Duration::from_millis(350);
+    const CAPTURE_RETRY_DELAY: Duration = Duration::from_millis(250);
+    const MAX_CAPTURE_RETRIES: usize = 3;
     const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
     const PROCESS_PATH_CAPACITY: usize = 32_768;
     const CF_DIB_FORMAT: u32 = 8;
@@ -774,18 +777,65 @@ mod platform {
             suppressed_sequences,
         };
         let mut last_sequence = None;
-        while signals.recv().is_ok() {
+        'worker: while signals.recv().is_ok() {
             let Some(coalesced_updates) = wait_for_quiet_period(&signals, CAPTURE_SETTLE_DELAY)
             else {
                 break;
             };
             let capture_started = Instant::now();
-            process_clipboard_notification(
-                &mut reader,
-                &mut last_sequence,
-                service.as_ref(),
-                &sink,
-                current_timestamp_ms(),
+            crate::infrastructure::diagnostics::clipboard_event(
+                "listener_capture",
+                "begin",
+                coalesced_updates + 1,
+                0,
+                0,
+            );
+            let mut retries = 0;
+            loop {
+                let retry = process_clipboard_notification(
+                    &mut reader,
+                    &mut last_sequence,
+                    service.as_ref(),
+                    &sink,
+                    current_timestamp_ms(),
+                );
+                if !retry || retries >= MAX_CAPTURE_RETRIES {
+                    if retry {
+                        crate::infrastructure::diagnostics::clipboard_event(
+                            "listener_capture",
+                            "retry_exhausted",
+                            retries + 1,
+                            capture_started.elapsed().as_millis(),
+                            0,
+                        );
+                    } else if retries > 0 {
+                        crate::infrastructure::diagnostics::clipboard_event(
+                            "listener_capture",
+                            "retry_completed",
+                            retries + 1,
+                            capture_started.elapsed().as_millis(),
+                            0,
+                        );
+                    }
+                    break;
+                }
+                match signals.recv_timeout(CAPTURE_RETRY_DELAY) {
+                    Ok(()) => {
+                        if wait_for_quiet_period(&signals, CAPTURE_SETTLE_DELAY).is_none() {
+                            break 'worker;
+                        }
+                        retries = 0;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break 'worker,
+                    Err(RecvTimeoutError::Timeout) => retries += 1,
+                }
+            }
+            crate::infrastructure::diagnostics::clipboard_event(
+                "listener_capture",
+                "finished",
+                coalesced_updates + 1,
+                capture_started.elapsed().as_millis(),
+                0,
             );
             crate::infrastructure::debug_qa::trace!(format!(
                 "clipboard listener capture coalesced_updates={coalesced_updates} elapsed_ms={}",
@@ -982,6 +1032,7 @@ mod platform {
         fn global_size(&mut self, handle: usize) -> usize;
         fn global_lock(&mut self, handle: usize) -> Option<*const u16>;
         fn global_unlock(&mut self, handle: usize);
+        fn invalid_text(&mut self, _stage: &'static str) {}
         fn is_format_available(&mut self, _format: u32) -> bool {
             false
         }
@@ -1001,13 +1052,41 @@ mod platform {
 
     struct SystemClipboardApi;
 
+    fn log_read_failure(stage: &'static str, error: u32) {
+        use windows_sys::Win32::System::DataExchange::{GetClipboardOwner, GetOpenClipboardWindow};
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+        // Capture the error before querying HWNDs: these calls may change last-error.
+        let mut holder_pid = 0;
+        let mut owner_pid = 0;
+        unsafe {
+            let holder = GetOpenClipboardWindow();
+            if !holder.is_null() {
+                GetWindowThreadProcessId(holder, &mut holder_pid);
+            }
+            let owner = GetClipboardOwner();
+            if !owner.is_null() {
+                GetWindowThreadProcessId(owner, &mut owner_pid);
+            }
+        }
+        crate::infrastructure::diagnostics::clipboard_read_failure(
+            stage, error, holder_pid, owner_pid,
+        );
+    }
+
     impl ClipboardApi for SystemClipboardApi {
         fn is_unicode_text_available(&mut self) -> bool {
             (unsafe { IsClipboardFormatAvailable(u32::from(CF_UNICODETEXT)) }) != 0
         }
 
         fn open(&mut self) -> bool {
-            (unsafe { OpenClipboard(null_mut()) }) != 0
+            unsafe { windows_sys::Win32::Foundation::SetLastError(0) };
+            let opened = (unsafe { OpenClipboard(null_mut()) }) != 0;
+            if !opened {
+                log_read_failure("read_open", unsafe {
+                    windows_sys::Win32::Foundation::GetLastError()
+                });
+            }
+            opened
         }
 
         fn close(&mut self) {
@@ -1017,17 +1096,40 @@ mod platform {
         }
 
         fn get_unicode_text_data(&mut self) -> Option<usize> {
+            unsafe { windows_sys::Win32::Foundation::SetLastError(0) };
             let handle = unsafe { GetClipboardData(u32::from(CF_UNICODETEXT)) };
+            if handle.is_null() {
+                log_read_failure("read_text_get_data", unsafe {
+                    windows_sys::Win32::Foundation::GetLastError()
+                });
+            }
             (!handle.is_null()).then_some(handle as usize)
         }
 
         fn global_size(&mut self, handle: usize) -> usize {
-            unsafe { GlobalSize(handle as HGLOBAL) }
+            unsafe { windows_sys::Win32::Foundation::SetLastError(0) };
+            let size = unsafe { GlobalSize(handle as HGLOBAL) };
+            if size == 0 {
+                log_read_failure("read_global_size", unsafe {
+                    windows_sys::Win32::Foundation::GetLastError()
+                });
+            }
+            size
         }
 
         fn global_lock(&mut self, handle: usize) -> Option<*const u16> {
+            unsafe { windows_sys::Win32::Foundation::SetLastError(0) };
             let data = unsafe { GlobalLock(handle as HGLOBAL) } as *const u16;
+            if data.is_null() {
+                log_read_failure("read_text_lock", unsafe {
+                    windows_sys::Win32::Foundation::GetLastError()
+                });
+            }
             (!data.is_null()).then_some(data)
+        }
+
+        fn invalid_text(&mut self, stage: &'static str) {
+            log_read_failure(stage, 0);
         }
 
         fn global_unlock(&mut self, handle: usize) {
@@ -1162,19 +1264,76 @@ mod platform {
 
         fn read_files(&mut self) -> Result<Option<ClipboardFiles>, ()> {
             self.source = resolve_clipboard_source(&mut SystemProcessSourceApi);
-            read_files_with_retries(&mut SystemClipboardApi, || thread::sleep(OPEN_RETRY_DELAY))
+            let started = Instant::now();
+            crate::infrastructure::diagnostics::clipboard_event("read_files", "begin", 0, 0, 0);
+            let mut attempts = 1;
+            let result = read_files_with_retries(&mut SystemClipboardApi, || {
+                attempts += 1;
+                thread::sleep(OPEN_RETRY_DELAY);
+            });
+            let status = match &result {
+                Ok(Some(_)) => "data",
+                Ok(None) => "no_data",
+                Err(()) => "failed",
+            };
+            crate::infrastructure::diagnostics::clipboard_event(
+                "read_files",
+                status,
+                attempts,
+                started.elapsed().as_millis(),
+                0,
+            );
+            result
         }
 
         fn read_image(&mut self) -> Result<Option<ClipboardImage>, ()> {
             self.source = resolve_clipboard_source(&mut SystemProcessSourceApi);
-            read_image_with_retries(&mut SystemClipboardApi, || thread::sleep(OPEN_RETRY_DELAY))
+            let started = Instant::now();
+            crate::infrastructure::diagnostics::clipboard_event("read_image", "begin", 0, 0, 0);
+            let mut attempts = 1;
+            let result = read_image_with_retries(&mut SystemClipboardApi, || {
+                attempts += 1;
+                thread::sleep(OPEN_RETRY_DELAY);
+            });
+            let status = match &result {
+                Ok(Some(_)) => "data",
+                Ok(None) => "no_data",
+                Err(()) => "failed",
+            };
+            crate::infrastructure::diagnostics::clipboard_event(
+                "read_image",
+                status,
+                attempts,
+                started.elapsed().as_millis(),
+                0,
+            );
+            result
         }
 
         fn read_text(&mut self) -> Result<Option<String>, ()> {
             if self.source == ClipboardSourceMetadata::default() {
                 self.source = resolve_clipboard_source(&mut SystemProcessSourceApi);
             }
-            read_text_with_retries(&mut SystemClipboardApi, || thread::sleep(OPEN_RETRY_DELAY))
+            let started = Instant::now();
+            crate::infrastructure::diagnostics::clipboard_event("read_text", "begin", 0, 0, 0);
+            let mut attempts = 1;
+            let result = read_text_with_retries(&mut SystemClipboardApi, || {
+                attempts += 1;
+                thread::sleep(OPEN_RETRY_DELAY);
+            });
+            let status = match &result {
+                Ok(Some(_)) => "data",
+                Ok(None) => "no_data",
+                Err(()) => "failed",
+            };
+            crate::infrastructure::diagnostics::clipboard_event(
+                "read_text",
+                status,
+                attempts,
+                started.elapsed().as_millis(),
+                0,
+            );
+            result
         }
 
         fn source_metadata(&mut self) -> ClipboardSourceMetadata {
@@ -1857,13 +2016,19 @@ mod platform {
         let handle = clipboard.get_unicode_text_data().ok_or(())?;
         let allocation_bytes = clipboard.global_size(handle);
         if allocation_bytes < mem::size_of::<u16>() {
+            clipboard.invalid_text("read_text_invalid_size");
             return Err(());
         }
         let available_units = allocation_bytes / mem::size_of::<u16>();
         let bounded_units = available_units.min(MAX_TEXT_BYTES.saturating_add(1));
         let locked = GlobalLockGuard::try_lock(&mut *clipboard, handle)?;
         let units = unsafe { locked.units(bounded_units) };
-        decode_null_terminated_utf16(units)
+        let result = decode_null_terminated_utf16(units);
+        drop(locked);
+        if result.is_err() {
+            clipboard.invalid_text("read_text_decode");
+        }
+        result
     }
 
     #[cfg(test)]
@@ -3348,6 +3513,43 @@ mod tests {
         assert_eq!(last_sequence, Some(44));
         assert_eq!(target.calls.load(Ordering::SeqCst), 2);
         assert_eq!(emitted.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn occupied_clipboard_can_be_captured_after_release_without_another_notification() {
+        let target = FakeRecordTarget {
+            outcomes: Mutex::new(VecDeque::from([ListenerRecordOutcome::Recorded {
+                retained: true,
+            }])),
+            calls: AtomicUsize::new(0),
+        };
+        let sink: ClipboardHistoryEventSink = Arc::new(|| {});
+        let mut reader = FakeReader {
+            sequences: VecDeque::from([44, 44, 44]),
+            values: VecDeque::from([Err(()), Ok(Some("released".to_owned()))]),
+            source: ClipboardSourceMetadata::default(),
+            reads: 0,
+            suppressed: VecDeque::new(),
+        };
+        let mut last_sequence = None;
+
+        assert!(process_clipboard_notification(
+            &mut reader,
+            &mut last_sequence,
+            &target,
+            &sink,
+            1,
+        ));
+        assert_eq!(last_sequence, None);
+        assert!(!process_clipboard_notification(
+            &mut reader,
+            &mut last_sequence,
+            &target,
+            &sink,
+            2,
+        ));
+        assert_eq!(last_sequence, Some(44));
+        assert_eq!(target.calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

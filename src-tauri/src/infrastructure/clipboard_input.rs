@@ -4,8 +4,8 @@ use thiserror::Error;
 
 use super::clipboard::{ClipboardError, ClipboardService, ClipboardWriteContent};
 use super::clipboard_writer::{ClipboardWriter, ClipboardWriterError};
-use super::debug_qa;
 use super::surface::{SurfaceError, SurfaceInputTargetRequirement, SurfaceManager};
+use super::{debug_qa, diagnostics};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardActionKind {
@@ -90,13 +90,39 @@ impl ClipboardInputCoordinator {
             content_kind(&content),
             requirement.as_str()
         ));
-        let handoff = self.surface.begin_input_handoff_for(requirement)?;
+        let started = std::time::Instant::now();
+        diagnostics::clipboard_event("input", "begin", 0, 0, 0);
+        let handoff = self
+            .surface
+            .begin_input_handoff_for(requirement)
+            .inspect_err(|_| {
+                diagnostics::clipboard_event(
+                    "target_capture",
+                    "failed",
+                    1,
+                    started.elapsed().as_millis(),
+                    0,
+                );
+            })?;
         let restored_target = self.surface.restore_and_run(&handoff, || {
             self.writer.transaction(owner_window, |transaction| {
                 transaction
                     .replace_current(&content, &mut suppress)?
                     .ok_or(ClipboardInputError::ClipboardChanged)?;
                 let input_result = send_ctrl_v(&mut SystemInputApi);
+                let status = match &input_result {
+                    Ok(()) => "keys_sent",
+                    Err(ClipboardInputError::ModifierPressed) => "modifier_pressed",
+                    Err(ClipboardInputError::InputCleanupDenied) => "key_cleanup_failed",
+                    Err(_) => "keys_denied",
+                };
+                diagnostics::clipboard_event(
+                    "paste_keys",
+                    status,
+                    1,
+                    started.elapsed().as_millis(),
+                    0,
+                );
                 debug_qa::trace!(format!(
                     "clipboard input keys_injected id={id} result={}",
                     if input_result.is_ok() { "ok" } else { "error" }
@@ -115,7 +141,16 @@ impl ClipboardInputCoordinator {
                     clipboard_updated: true,
                 })
             }
-            Err(error) => Err(ClipboardInputError::Surface(error)),
+            Err(error) => {
+                diagnostics::clipboard_event(
+                    "target_restore",
+                    "failed",
+                    1,
+                    started.elapsed().as_millis(),
+                    0,
+                );
+                Err(ClipboardInputError::Surface(error))
+            }
         };
         drop(handoff);
         result

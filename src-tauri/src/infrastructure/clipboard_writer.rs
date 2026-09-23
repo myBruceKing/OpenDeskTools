@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 
-use super::{clipboard::ClipboardWriteContent, debug_qa};
+use super::{clipboard::ClipboardWriteContent, debug_qa, diagnostics};
 
 const CF_UNICODETEXT_FORMAT: u32 = 13;
 const CF_HDROP_FORMAT: u32 = 15;
@@ -237,6 +237,9 @@ fn rgba_to_dib_v5(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Clipb
 trait ClipboardOps {
     type Prepared;
     fn open(&mut self) -> bool;
+    fn holder_pid(&self) -> u32 {
+        0
+    }
     fn close(&mut self);
     fn sequence(&mut self) -> u32;
     fn empty(&mut self) -> bool;
@@ -276,7 +279,23 @@ fn open_with_retry_policy<O: ClipboardOps>(
                     started.elapsed().as_millis()
                 ));
             }
+            diagnostics::clipboard_event(
+                "open",
+                "ok",
+                attempt + 1,
+                started.elapsed().as_millis(),
+                0,
+            );
             return Ok(OpenGuard(ops));
+        }
+        if attempt == 0 || attempt + 1 == attempts {
+            diagnostics::clipboard_event(
+                "open",
+                "busy",
+                attempt + 1,
+                started.elapsed().as_millis(),
+                ops.holder_pid(),
+            );
         }
         if attempt + 1 < attempts {
             std::thread::sleep(retry_delay);
@@ -313,16 +332,19 @@ fn write_prepared<O: ClipboardOps>(
     let clipboard = open_with_retries(ops).map_err(|error| WriteFailure { error })?;
     if expected_sequence.is_some_and(|expected| clipboard.0.sequence() != expected) {
         debug_qa::trace!("clipboard writer stage=sequence_guard result=changed");
+        diagnostics::clipboard_event("sequence_guard", "changed", 1, 0, 0);
         return Ok(None);
     }
     if !clipboard.0.empty() {
         debug_qa::trace!("clipboard writer stage=empty result=failed");
+        diagnostics::clipboard_event("empty", "failed", 1, 0, 0);
         return Err(WriteFailure {
             error: ClipboardWriterError::WindowsApi("EmptyClipboard"),
         });
     }
     for prepared in prepared {
         if !clipboard.0.set_prepared(prepared) {
+            diagnostics::clipboard_event("set_data", "failed", 1, 0, 0);
             let sequence = clipboard.0.sequence();
             if sequence != 0 {
                 suppress(sequence);
@@ -340,6 +362,7 @@ fn write_prepared<O: ClipboardOps>(
     if sequence != 0 {
         suppress(sequence);
     }
+    diagnostics::clipboard_event("write", "ok", 1, 0, 0);
     Ok(Some(sequence))
 }
 
@@ -390,6 +413,18 @@ impl ClipboardOps for SystemClipboardOps {
     fn open(&mut self) -> bool {
         unsafe {
             windows_sys::Win32::System::DataExchange::OpenClipboard(self.owner_window as _) != 0
+        }
+    }
+    fn holder_pid(&self) -> u32 {
+        unsafe {
+            let hwnd = windows_sys::Win32::System::DataExchange::GetOpenClipboardWindow();
+            let mut pid = 0;
+            if !hwnd.is_null() {
+                windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+                    hwnd, &mut pid,
+                );
+            }
+            pid
         }
     }
     fn close(&mut self) {

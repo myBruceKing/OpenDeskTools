@@ -418,7 +418,15 @@ mod tests {
         let directory_name = format!("{}.png", "c".repeat(64));
         fs::create_dir(service.root.join(directory_name)).unwrap();
         let result = service.reconcile(&[]);
-        assert_eq!(result.cleanup_failures, 1);
+        assert_eq!(
+            result.cleanup_failures,
+            1,
+            "unexpected cleanup failures; remaining isolated test entries: {:?}",
+            fs::read_dir(&service.root)
+                .unwrap()
+                .map(|entry| entry.map(|entry| (entry.file_name(), entry.file_type())))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[cfg(windows)]

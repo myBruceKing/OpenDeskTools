@@ -658,6 +658,58 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_clipboard_settings_abort_startup_without_pruning_history() {
+        let temp = tempdir().unwrap();
+        let app_data_dir = temp.path().join("application-data");
+        let storage = Arc::new(StorageService::initialize(&app_data_dir).unwrap());
+        let clipboard = ClipboardService::initialize(Arc::clone(&storage));
+        clipboard
+            .update_settings(ClipboardSettings {
+                retention_days: None,
+                max_items: 1_000,
+                ..ClipboardSettings::default()
+            })
+            .unwrap();
+        for index in 0..101 {
+            clipboard
+                .record_text(
+                    format!("retained-{index}"),
+                    ClipboardCaptureMetadata {
+                        captured_at_ms: 1,
+                        source_application: None,
+                        source_process: None,
+                    },
+                )
+                .unwrap();
+        }
+        storage
+            .write_settings(&[("clipboard.sensitive_rules", "[")])
+            .unwrap();
+        drop(clipboard);
+        drop(storage);
+
+        let error = ApplicationRuntime::from_app_data_dir(app_data_dir.clone()).unwrap_err();
+        assert!(matches!(
+            error,
+            ApplicationRuntimeError::Clipboard(ClipboardError::Settings(_))
+        ));
+        let storage = StorageService::initialize(app_data_dir).unwrap();
+        assert_eq!(
+            storage
+                .query_i64("SELECT COUNT(*) FROM clipboard_history", &[])
+                .unwrap(),
+            101
+        );
+        assert_eq!(
+            storage
+                .read_setting("clipboard.sensitive_rules")
+                .unwrap()
+                .as_deref(),
+            Some("[")
+        );
+    }
+
+    #[test]
     fn runtime_enforces_elapsed_clipboard_retention_on_startup() {
         let temp = tempdir().unwrap();
         let app_data_dir = temp.path().join("application-data");

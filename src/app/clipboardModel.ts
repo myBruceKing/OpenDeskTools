@@ -598,7 +598,7 @@ export function normalizeClipboardCommandError(value: unknown): ClipboardCommand
       retryable: true
     },
     clipboard_operation_not_applied: {
-      message: "剪贴板操作未完成，请刷新后重试。",
+      message: "剪贴板已被其他操作更新，本次未覆盖，请重试。",
       retryable: true
     },
     clipboard_write_unavailable: {

@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
@@ -49,7 +51,7 @@ async function renderPage() {
 }
 
 function autostartToggle(): HTMLButtonElement {
-  const toggle = container.querySelector<HTMLButtonElement>('[aria-label="开机自启动"]');
+  const toggle = container.querySelector<HTMLButtonElement>('[aria-label^="开机自启动"]');
   if (!toggle) {
     throw new Error("autostart toggle should be rendered once settings load");
   }
@@ -72,6 +74,84 @@ afterEach(() => {
 });
 
 describe("GeneralPage autostart", () => {
+  it("shows loading and disables every settings action until the initial snapshot arrives", async () => {
+    let resolveLoad!: (value: ReturnType<typeof snapshot>) => void;
+    mocks.load.mockImplementation(() => new Promise((resolve) => { resolveLoad = resolve; }));
+    await renderPage();
+
+    expect(container.textContent).toContain("正在读取常规设置");
+    expect(container.textContent).not.toContain("普通权限是默认模式");
+    expect(Array.from(container.querySelectorAll("button")).every((button) => button.disabled)).toBe(true);
+    await act(async () => autostartToggle().click());
+    expect(mocks.setToggle).not.toHaveBeenCalled();
+
+    await act(async () => resolveLoad(snapshot({ autostartEnabled: true })));
+    expect(container.textContent).not.toContain("正在读取常规设置");
+    expect(autostartToggle().disabled).toBe(false);
+    expect(autostartToggle().getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("reports initial read failures and retries without allowing settings mutations", async () => {
+    mocks.load.mockRejectedValueOnce({ message: "拒绝读取设置" });
+    await renderPage();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("拒绝读取设置");
+    expect(autostartToggle().disabled).toBe(true);
+    const retry = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "重试");
+    if (!retry) throw new Error("read failure should offer retry");
+
+    let resolveLoad!: (value: ReturnType<typeof snapshot>) => void;
+    mocks.load.mockImplementationOnce(() => new Promise((resolve) => { resolveLoad = resolve; }));
+    await act(async () => retry.click());
+    expect(retry.disabled).toBe(true);
+    expect(retry.textContent).toBe("正在重试…");
+    expect(Array.from(container.querySelectorAll("button")).every((button) => button.disabled)).toBe(true);
+    await act(async () => { retry.click(); autostartToggle().click(); });
+    expect(mocks.load).toHaveBeenCalledTimes(2);
+    expect(mocks.setToggle).not.toHaveBeenCalled();
+
+    await act(async () => resolveLoad(snapshot({ trayIconVisible: false })));
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.textContent).not.toContain("正在重试");
+    expect(autostartToggle().disabled).toBe(false);
+    expect(container.querySelector('[aria-label="显示托盘图标"]')?.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("keeps retry available after repeated unknown read failures", async () => {
+    mocks.load.mockRejectedValue("backend unavailable");
+    await renderPage();
+    const retry = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "重试");
+    if (!retry) throw new Error("read failure should offer retry");
+    await act(async () => retry.click());
+    expect(container.textContent).toContain("暂时无法读取常规设置，请重试。");
+    expect(retry.disabled).toBe(false);
+    expect(mocks.load).toHaveBeenCalledTimes(2);
+    expect(autostartToggle().disabled).toBe(true);
+  });
+
+  it("ignores an obsolete initial response after the page is left and reopened", async () => {
+    let resolveOld!: (value: ReturnType<typeof snapshot>) => void;
+    mocks.load.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    await renderPage();
+    await act(async () => root.render(null));
+    mocks.load.mockResolvedValueOnce(snapshot({ autostartEnabled: true }));
+    await renderPage();
+    await act(async () => resolveOld(snapshot({ autostartEnabled: false })));
+    expect(autostartToggle().getAttribute("aria-checked")).toBe("true");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("does not let a late response from a cleaned-up effect replace the current snapshot", async () => {
+    let resolveOld!: (value: ReturnType<typeof snapshot>) => void;
+    mocks.load
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(snapshot({ autostartEnabled: true }));
+    await act(async () => root.render(<StrictMode><GeneralPage /></StrictMode>));
+    expect(mocks.load).toHaveBeenCalledTimes(2);
+    expect(autostartToggle().getAttribute("aria-checked")).toBe("true");
+    await act(async () => resolveOld(snapshot({ autostartEnabled: false })));
+    expect(autostartToggle().getAttribute("aria-checked")).toBe("true");
+  });
+
   it("reflects the loaded autostart state and data directory", async () => {
     mocks.load.mockResolvedValue(snapshot({ autostartEnabled: true }));
 
